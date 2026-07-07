@@ -1,0 +1,42 @@
+# Target companies to monitor. This file is only the INITIAL seed:
+# it loads into the database once (when the companies table is empty).
+# After that, add / rename / remove companies live in the dashboard UI — those
+# edits live in the database and are NOT overwritten by this file.
+# Use the "Re-seed from file" button in the UI if you ever want to reset to this list.
+#
+# resolution_status: pending | confirmed | ambiguous | no_ads_found
+#   - pending: not fetched yet. On the first "Fetch latest ads" run, the app searches
+#     the Meta Ad Library by this exact name, matches the best page, and auto-confirms.
+#   - confirmed: page_id is locked in; future runs fetch that page directly.
+#   - ambiguous / no_ads_found: check the dashboard — may need a manual look at the
+#     exact company name or the Facebook page.
+
+companies:
+  - name: "Linara Kaufbeuren GmbH"
+    country: DE
+    resolution_status: pending
+  - name: "Linara Münsterland"
+    country: DE
+    resolution_status: pending
+  - name: "Villatrium Schmidt GmbH Fenster-Türen-Tore-Wintergärten"
+    country: DE
+    resolution_status: pending
+  - name: "Wild & Kienle"
+    country: DE
+    resolution_status: pending
+    notes: "Original test case — expected to have zero active ads."
+  - name: "Fortuna Wintergarten Vertriebs GmbH"
+    country: DE
+    resolution_status: pending
+  - name: "MADEROS GmbH Wintergärten"
+    country: DE
+    resolution_status: pending
+  - name: "glaswohnen.de Driemel & Schöttler OHG"
+    country: DE
+    resolution_status: pending
+  - name: "Linara Ahaus GmbH"
+    country: DE
+    resolution_status: pending
+  - name: "Nagelschmidt Fenster und Rollladen GmbH"
+    country: DE
+    resolution_status: pending

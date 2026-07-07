@@ -1,0 +1,21 @@
+# Ad-spend is NOT published by Meta for ordinary commercial ads. Everything the
+# tool reports is a MODELLED ESTIMATE expressed as a LOW–HIGH interval. Tune the
+# assumptions here; bump model_version whenever you change them so historical
+# rows stay comparable and you can see which assumptions produced which number.
+
+model_version: "v0.1-intervals"
+
+# Window the estimate covers (a single weekly snapshot).
+window_days: 7
+
+# --- Method A: reach-based (used when an ad carries EU reach/impression data) ---
+# spend = reach * CPM / 1000, computed at both ends of the CPM band.
+# CPM band for DACH B2B / building-products advertisers. These are deliberately
+# wide, honest guesses — adjust to your own judgement.
+cpm_low_eur: 4.0
+cpm_high_eur: 12.0
+
+# --- Method B: count-based fallback (used when no reach data is available) ---
+# spend = active_ad_count * daily_cost_per_ad * window_days, at both ends.
+daily_cost_per_ad_low_eur: 8.0
+daily_cost_per_ad_high_eur: 30.0
