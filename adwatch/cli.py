@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
-import sys
 
 from . import config
 
@@ -15,8 +13,9 @@ def main() -> None:
     sub.add_parser("run", help="Run one collection cycle (collect -> classify -> store)")
     sub.add_parser("report", help="Generate the PDF report from stored data")
     sub.add_parser("reseed", help="Reset the company list from config/companies.yaml")
-    serve = sub.add_parser("serve", help="Start the Streamlit dashboard")
-    serve.add_argument("--port", type=int, default=8501)
+    serve = sub.add_parser("serve", help="Start the dashboard")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
 
     args = p.parse_args()
 
@@ -42,11 +41,9 @@ def main() -> None:
         print("Re-seeded companies:", reseed_from_file())
 
     elif args.cmd == "serve":
-        print(f"Dashboard: http://localhost:{args.port}   (mode={config.MODE})")
-        subprocess.run([sys.executable, "-m", "streamlit", "run", "streamlit_app.py",
-                        "--server.port", str(args.port),
-                        "--browser.gatherUsageStats", "false"],
-                       cwd=str(config.ROOT), check=False)
+        import uvicorn
+        print(f"Dashboard: http://{args.host}:{args.port}   (mode={config.MODE})")
+        uvicorn.run("adwatch.web:app", host=args.host, port=args.port, reload=False)
 
 
 if __name__ == "__main__":

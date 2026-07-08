@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AdWatch — Ad Activity Monitor</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="brand-block">
+      <span class="brand">AdWatch</span>
+      <span class="tagline">Ad-activity monitor · Meta Ad Library</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="mode-switch" id="modeSwitch">
+      <button class="mode-btn" data-mode="live">Live</button>
+      <button class="mode-btn" data-mode="mock">Mock</button>
+    </div>
+    <button id="fetchBtn" class="btn btn-primary">Fetch latest ads</button>
+  </header>
+
+  <div class="subbar">
+    <span id="subbarTags" class="tags"></span>
+    <span class="spacer"></span>
+    <button id="resetBtn" class="link-btn">Reset company list</button>
+  </div>
+
+  <div id="fetchPanel" class="fetch-panel hidden">
+    <div class="fetch-panel-head">
+      <span id="fetchStatus">Starting…</span>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="fetch-log" id="fetchLog"></div>
+  </div>
+
+  <main>
+    <div class="page-head">
+      <h1>Ad Activity Monitor</h1>
+      <p class="page-sub" id="pageSub">Loading…</p>
+    </div>
+
+    <div id="noDataNotice" class="notice hidden">
+      No data yet — click <b>Fetch latest ads</b> above to populate the dashboard.
+    </div>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="companies">Companies &amp; Pages</button>
+      <button class="tab" data-tab="help">How it works</button>
+    </nav>
+
+    <!-- ================= TAB: Dashboard ================= -->
+    <section id="tab-dashboard" class="tab-panel active">
+      <div id="signals" class="signals"></div>
+
+      <div id="kpis" class="kpi-row"></div>
+
+      <div class="actions-row">
+        <button id="pdfBtn" class="btn">Generate Top-5 PDF</button>
+        <a id="pdfLink" class="btn btn-ghost hidden" href="/api/report/top5" target="_blank">Download Top-5 PDF</a>
+      </div>
+
+      <div class="card">
+        <h2>Companies this week</h2>
+        <div class="table-wrap">
+          <table id="companyTable">
+            <thead>
+              <tr>
+                <th class="col-dot"></th>
+                <th>Company</th>
+                <th>Score</th>
+                <th class="num">Active ads</th>
+                <th class="num">Δ wk</th>
+                <th class="num">New</th>
+                <th class="num">Hiring</th>
+                <th class="num">Selling</th>
+                <th>Products</th>
+                <th>Est. spend / wk</th>
+                <th>Note</th>
+              </tr>
+            </thead>
+            <tbody id="companyTableBody"></tbody>
+          </table>
+        </div>
+        <p class="hint">Click a row for full detail. Spend is a modelled low–high estimate — Meta publishes no real spend for commercial ads.</p>
+      </div>
+
+      <div id="detailPanel" class="card hidden"></div>
+    </section>
+
+    <!-- ================= TAB: Companies & Pages ================= -->
+    <section id="tab-companies" class="tab-panel">
+      <div class="card">
+        <h2>Add a company</h2>
+        <form id="addCompanyForm" class="inline-form">
+          <input id="newCompanyName" placeholder="e.g. Villatrium Schmidt GmbH" autocomplete="off">
+          <button class="btn btn-primary" type="submit">Add</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Companies and their linked pages</h2>
+        <p class="hint">Every linked page is fetched weekly and rolled into the company's numbers.
+          Partner pages are discovered automatically from solarlux.com landing-URL evidence (editable here).
+          Renaming a company resets all its links.</p>
+        <div id="companiesList"></div>
+      </div>
+    </section>
+
+    <!-- ================= TAB: How it works ================= -->
+    <section id="tab-help" class="tab-panel">
+      <div class="card">
+        <h2>The three parts</h2>
+        <table class="info-table">
+          <tr><th>Part</th><th>What it does</th><th>Where</th></tr>
+          <tr>
+            <td><b>1 · Identity</b></td>
+            <td>Link each company to its Facebook page(s) — main page by name search, partner accounts by landing-URL evidence. Once linked, fetching is deterministic.</td>
+            <td>Companies &amp; Pages tab · <code>adwatch/identity/</code></td>
+          </tr>
+          <tr>
+            <td><b>2 · Collect</b></td>
+            <td>Weekly fetch of every linked page via the Ad Library (Apify), raw data stored per run.</td>
+            <td>Fetch button · <code>adwatch/collect/</code></td>
+          </tr>
+          <tr>
+            <td><b>3 · Insights</b></td>
+            <td>Classify each ad, estimate spend, score companies, raise weekly flags.</td>
+            <td>Dashboard tab · <code>adwatch/insights/</code></td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Resolution status — is "0 ads" real, or a wrong name?</h2>
+        <table class="info-table">
+          <tr><th></th><th>Status</th><th>Meaning</th></tr>
+          <tr><td><span class="dot dot-confirmed"></span></td><td><b>confirmed</b></td>
+              <td>Page locked in. Future fetches hit that exact page — <code>0 active ads</code> is a real fact.</td></tr>
+          <tr><td><span class="dot dot-ambiguous"></span></td><td><b>ambiguous</b></td>
+              <td>Several pages matched about equally; best guess used, flagged for review.</td></tr>
+          <tr><td><span class="dot dot-no_ads_found"></span></td><td><b>no ads found</b></td>
+              <td>Name search returned nothing — wrong name or genuinely no ads. Verify manually.</td></tr>
+          <tr><td><span class="dot dot-pending"></span></td><td><b>pending</b></td>
+              <td>Not fetched yet.</td></tr>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Partner pages</h2>
+        <p>Some companies also run ads from dedicated partner accounts (e.g. <i>Solarlux Quality
+          Partner …</i>). Those ads link to landing pages like
+          <code>solarlux.com/…/wintergarten-nagelschmidt/?utm_campaign=DE Nagelschmidt …</code> — the
+          company name in the URL is the fingerprint. A weekly sweep finds such pages and links them
+          automatically (status <i>auto-linked</i>); every link is editable in Companies &amp; Pages.
+          Settings: <code>config/partner_discovery.yaml</code>.</p>
+      </div>
+
+      <div class="card">
+        <h2>Score</h2>
+        <p>0–100 per company per week: <b>volume</b> (how many active ads, 40%) + <b>momentum</b>
+          (growing vs shrinking, 25%) + <b>freshness</b> (share of ads launched in the last 7 days, 20%)
+          + <b>diversity</b> (breadth across hiring/selling/brand/event, 15%).
+          Weights: <code>config/score_config.yaml</code>.</p>
+      </div>
+
+      <div class="card">
+        <h2>Classification &amp; spend</h2>
+        <p>Each ad is classified as <b>Hiring / Selling / Brand / Event / Other</b>. With an
+          <code>ANTHROPIC_API_KEY</code> in <code>.env</code>, Claude does the classification
+          (recommended); otherwise a word-boundary keyword model. Evidence for every decision is
+          stored with the ad.</p>
+        <p>Spend is a <b>modelled low–high interval</b> — Meta publishes no real spend for commercial
+          ads. With EU reach data: <code>reach × CPM</code>; otherwise a per-ad daily-cost fallback.
+          Assumptions: <code>config/spend_assumptions.yaml</code>.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -19,6 +19,10 @@ python run.py serve      # → http://127.0.0.1:8000
 Open the dashboard and click **"Fetch latest ads."** That's it — one command,
 one button. No need to run anything on the command line first.
 
+The dashboard is a plain FastAPI backend (`adwatch/web.py`) serving a small
+hand-built HTML/CSS/JS frontend (`templates/`, `static/`) — no Node.js, no
+build step, nothing to install beyond `requirements.txt`.
+
 `.env` already has your Apify token and actor ID (`curious_coder/facebook-ads-library-scraper`)
 wired in, in `ADWATCH_MODE=live`. **Treat that file as a secret — it's git-ignored,
 but don't paste it anywhere else, and rotate the token if it's ever exposed again.**
@@ -97,8 +101,10 @@ adwatch/
     aggregate.py                 ads -> weekly metric values
     score.py                     0-100 company activity score
     flags.py                     weekly BD signals (new campaigns, movers, ...)
+  web.py                        FastAPI backend for the dashboard (JSON + SSE progress)
   config.py / models.py / db.py / services.py / report.py / cli.py
-streamlit_app.py               the dashboard (streamlit run streamlit_app.py)
+templates/index.html           dashboard page shell
+static/app.css, app.js         dashboard styling + all client-side logic (no build step)
 config/
   companies.yaml               initial seed (edits after that live in the DB)
   partner_discovery.yaml       hub domain + sweep terms for partner linking

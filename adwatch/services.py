@@ -176,7 +176,9 @@ def latest_week_detail(company_id: int) -> dict:
         if not latest_run:
             return {"has_run": False, "pages": [], "ads": []}
         week = latest_run.week_start
-        # only the LATEST run per page within that week (a page may be re-fetched)
+        has_linked_page = s.scalar(select(CompanyPage.id).where(
+            CompanyPage.company_id == company_id, CompanyPage.active).limit(1)) is not None
+
         runs = s.scalars(
             select(CollectionRun)
             .where(CollectionRun.company_id == company_id,
@@ -185,9 +187,21 @@ def latest_week_detail(company_id: int) -> dict:
         ).all()
         newest_per_page: dict[str, CollectionRun] = {}
         for r in runs:
+            # A page_id=NULL run only ever means "identity not resolved yet" (an
+            # early ambiguous_match attempt). Once the company has a real linked
+            # page, that placeholder is stale and superseded — without dropping
+            # it, its ads would double up alongside the real page's ads. Runs
+            # with a REAL page_id (main, partner, or a per-ad hub attribution)
+            # are never filtered here — each contributes its own ads.
+            if r.page_id is None and has_linked_page:
+                continue
             key = r.page_id or "?"
             if key not in newest_per_page:
                 newest_per_page[key] = r
+        # No confirmed pages yet (still ambiguous/pending) -> fall back to
+        # whatever was last fetched, so the user still sees something.
+        if not newest_per_page and runs:
+            newest_per_page["?"] = runs[0]
 
         pages, ads = [], []
         for r in newest_per_page.values():
