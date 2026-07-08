@@ -1,13 +1,14 @@
-"""Thin data-access layer for the dashboard: company CRUD + metric queries."""
-from __future__ import annotations
+"""Thin data-access layer for the dashboard: company CRUD + metric queries.
 
-import datetime as dt
+Identity mutations (linking/unlinking pages) live in adwatch.identity.resolver;
+this module only reads/aggregates for display, plus basic company CRUD."""
+from __future__ import annotations
 
 from sqlalchemy import select
 
 from . import config
 from .db import SessionLocal
-from .models import Ad, CollectionRun, Company, WeeklyCompanyMetric
+from .models import Ad, CollectionRun, Company, CompanyPage, WeeklyCompanyMetric
 
 STATUS_LABELS = {
     "pending": "Not fetched yet",
@@ -16,18 +17,32 @@ STATUS_LABELS = {
     "no_ads_found": "No ads found under this name — check spelling or verify manually",
 }
 
+PAGE_STATUS_LABELS = {"confirmed": "confirmed", "auto": "auto-linked", "manual": "manually set"}
+
 
 def list_companies() -> list[dict]:
     with SessionLocal() as s:
         rows = s.scalars(select(Company).order_by(Company.name)).all()
-        return [{
-            "id": c.id, "name": c.name,
-            "resolution_status": c.resolution_status,
-            "status_label": STATUS_LABELS.get(c.resolution_status, c.resolution_status),
-            "page_name": c.page_name,
-            "page_id": c.page_id,
-            "candidates": c.candidates,
-        } for c in rows]
+        out = []
+        for c in rows:
+            pages = s.scalars(select(CompanyPage)
+                              .where(CompanyPage.company_id == c.id, CompanyPage.active)
+                              .order_by(CompanyPage.role, CompanyPage.linked_at)).all()
+            out.append({
+                "id": c.id, "name": c.name,
+                "resolution_status": c.resolution_status,
+                "status_label": STATUS_LABELS.get(c.resolution_status, c.resolution_status),
+                "page_name": c.page_name,
+                "page_id": c.page_id,
+                "candidates": c.candidates,
+                "pages": [{
+                    "id": p.id, "page_id": p.page_id, "page_name": p.page_name,
+                    "role": p.role, "status": p.status,
+                    "status_label": PAGE_STATUS_LABELS.get(p.status, p.status),
+                    "evidence": p.evidence,
+                } for p in pages],
+            })
+        return out
 
 
 def add_company(name: str) -> dict:
@@ -55,56 +70,15 @@ def update_company(cid: int, name: str) -> None:
         if dupe:
             raise ValueError("A company with that name already exists")
         if name != c.name:
-            # Renaming invalidates any prior page match — re-resolve next run.
+            # Renaming invalidates every prior page match — re-resolve next run.
             c.name = name
             c.resolution_status = "pending"
             c.page_id = None
             c.page_name = None
             c.candidates = None
+            for p in s.scalars(select(CompanyPage).where(CompanyPage.company_id == cid)):
+                s.delete(p)
         s.commit()
-
-
-def set_company_page(cid: int, page_id: str, page_name: str | None = None,
-                     page_category: str | None = None) -> None:
-    """Manually lock a company to a specific Facebook page id (the human-confirm path
-    for the identity problem). Marks it confirmed so future fetches hit this exact page."""
-    page_id = (page_id or "").strip()
-    if not page_id:
-        raise ValueError("A page ID is required")
-    with SessionLocal() as s:
-        c = s.get(Company, cid)
-        if not c:
-            raise ValueError("Not found")
-        c.page_id = page_id
-        c.page_name = (page_name or "").strip() or None
-        c.page_category = page_category
-        c.resolution_status = "confirmed"
-        c.confirmed_at = dt.datetime.utcnow()
-        c.candidates = None
-        s.commit()
-
-
-def clear_resolution(cid: int) -> None:
-    """Reset a company back to pending (forget the matched page)."""
-    with SessionLocal() as s:
-        c = s.get(Company, cid)
-        if not c:
-            return
-        c.page_id = None
-        c.page_name = None
-        c.resolution_status = "pending"
-        c.candidates = None
-        s.commit()
-
-
-def find_candidates(term: str, country: str | None = None) -> dict:
-    """Live keyword search that returns candidate pages WITHOUT storing anything —
-    powers the manual 'find the right page' step. Costs one Apify call."""
-    from .sources.meta import MetaAdSource
-    src = MetaAdSource()
-    res = src.search_and_resolve(term, country=country or config.DEFAULT_COUNTRY, max_ads=60)
-    return {"status": res["status"], "search_term": res.get("search_term", term),
-            "candidates": res.get("candidates", [])}
 
 
 def delete_company(cid: int) -> None:
@@ -117,12 +91,13 @@ def delete_company(cid: int) -> None:
             s.query(Ad).filter(Ad.run_id.in_(run_ids)).delete(synchronize_session=False)
         s.query(CollectionRun).filter(CollectionRun.company_id == cid).delete(synchronize_session=False)
         s.query(WeeklyCompanyMetric).filter(WeeklyCompanyMetric.company_id == cid).delete(synchronize_session=False)
+        s.query(CompanyPage).filter(CompanyPage.company_id == cid).delete(synchronize_session=False)
         s.delete(c)
         s.commit()
 
 
 def latest_metrics() -> list[dict]:
-    """Latest weekly metric per company + previous week delta on ad count."""
+    """Latest weekly metric per company + previous-week context, score, freshness."""
     with SessionLocal() as s:
         companies = s.scalars(select(Company).order_by(Company.name)).all()
         out = []
@@ -134,17 +109,24 @@ def latest_metrics() -> list[dict]:
             ).all()
             latest = metrics[0] if metrics else None
             prev = metrics[1] if len(metrics) > 1 else None
+            n_pages = s.scalar(select(CompanyPage.id)
+                               .where(CompanyPage.company_id == c.id, CompanyPage.active)
+                               .limit(1))
             out.append({
                 "company_id": c.id,
                 "company": c.name,
                 "resolution_status": c.resolution_status,
                 "status_label": STATUS_LABELS.get(c.resolution_status, c.resolution_status),
                 "page_name": c.page_name,
+                "has_pages": n_pages is not None,
                 "has_data": latest is not None,
                 "week_start": latest.week_start.isoformat() if latest else None,
                 "total_active_ads": latest.total_active_ads if latest else None,
+                "prev_total": prev.total_active_ads if prev else None,
                 "delta_ads": (latest.total_active_ads - prev.total_active_ads)
                              if (latest and prev) else None,
+                "new_ads": latest.new_ads if latest else None,
+                "score": latest.score if latest else None,
                 "ads_by_category": latest.ads_by_category if latest else {},
                 "products": latest.products if latest else [],
                 "spend_low": latest.estimated_spend_low if latest else None,
@@ -173,38 +155,55 @@ def company_history(company_id: int) -> list[dict]:
                 "product_sale": cats.get("product_sale", 0),
                 "brand_awareness": cats.get("brand_awareness", 0),
                 "event_promo": cats.get("event_promo", 0),
+                "new_ads": m.new_ads,
+                "score": m.score,
                 "spend_low": m.estimated_spend_low,
                 "spend_high": m.estimated_spend_high,
             })
         return out
 
 
-def latest_run_ads(company_id: int) -> dict:
-    """The individual ads from a company's most recent collection run (drill-down)."""
+def latest_week_detail(company_id: int) -> dict:
+    """Everything collected for a company in its most recent week, grouped by
+    the page each ad came from — the drill-down view."""
     with SessionLocal() as s:
-        run = s.scalar(
+        latest_run = s.scalar(
             select(CollectionRun)
             .where(CollectionRun.company_id == company_id)
             .order_by(CollectionRun.run_date.desc())
             .limit(1)
         )
-        if not run:
-            return {"has_run": False, "ads": []}
-        ads = s.scalars(select(Ad).where(Ad.run_id == run.id).order_by(Ad.category)).all()
-        return {
-            "has_run": True,
-            "run_date": run.run_date.isoformat(timespec="minutes"),
-            "week_start": run.week_start.isoformat(),
-            "status": run.status,
-            "ads_scraped": run.ads_scraped,
-            "ads": [{
-                "category": a.category,
-                "product": a.product,
-                "cta": a.cta,
-                "media_type": a.media_type,
-                "reach": a.reach,
-                "start_date": a.start_date.isoformat() if a.start_date else None,
-                "ad_text": (a.ad_text or "")[:400],
-                "classifier": a.classifier,
-            } for a in ads],
-        }
+        if not latest_run:
+            return {"has_run": False, "pages": [], "ads": []}
+        week = latest_run.week_start
+        # only the LATEST run per page within that week (a page may be re-fetched)
+        runs = s.scalars(
+            select(CollectionRun)
+            .where(CollectionRun.company_id == company_id,
+                   CollectionRun.week_start == week)
+            .order_by(CollectionRun.run_date.desc())
+        ).all()
+        newest_per_page: dict[str, CollectionRun] = {}
+        for r in runs:
+            key = r.page_id or "?"
+            if key not in newest_per_page:
+                newest_per_page[key] = r
+
+        pages, ads = [], []
+        for r in newest_per_page.values():
+            r_ads = s.scalars(select(Ad).where(Ad.run_id == r.id).order_by(Ad.category)).all()
+            pages.append({
+                "page_id": r.page_id, "page_name": r.page_name, "role": r.page_role,
+                "status": r.status, "ads": len(r_ads),
+                "run_date": r.run_date.isoformat(timespec="minutes"),
+            })
+            for a in r_ads:
+                ads.append({
+                    "page_name": r.page_name, "page_role": r.page_role,
+                    "category": a.category, "product": a.product, "cta": a.cta,
+                    "media_type": a.media_type, "reach": a.reach,
+                    "start_date": a.start_date.isoformat() if a.start_date else None,
+                    "ad_text": (a.ad_text or "")[:400],
+                    "classifier": a.classifier,
+                })
+        return {"has_run": True, "week_start": week.isoformat(), "pages": pages, "ads": ads}

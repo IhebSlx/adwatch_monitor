@@ -1,0 +1,53 @@
+# PART 1b — automatic partner-page discovery.
+#
+# Some companies run ads not only from their own Facebook page but also from
+# dedicated partner accounts (e.g. "Solarlux Quality Partner ..."). Those ads
+# link to landing pages on the hub domain whose URL/utm_campaign contains the
+# partner's name, e.g.:
+#   https://solarlux.com/de-de/landing/wintergarten-nagelschmidt/?utm_campaign=DE%20Nagelschmidt%20...
+#
+# Once a week the pipeline runs ONE extra keyword search per term below,
+# groups the returned ads by page, and matches landing-URL evidence against
+# the monitored company list. Dedicated partner pages are linked
+# automatically (status "auto" — editable in the Companies tab); pages that
+# advertise for SEVERAL companies are treated as shared hubs and their ads
+# are attributed per-ad instead.
+
+enabled: true
+
+# Landing-page domain that identifies partner campaigns.
+hub_domain: solarlux.com
+
+# Ad Library keyword searches used to find partner accounts (one Apify call each).
+search_terms:
+  - Solarlux
+
+# Cap per sweep search (cost control: ~$0.75 per 1000 ads).
+max_ads: 300
+
+# Company-name tokens must be at least this long to count as identifying.
+min_token_len: 5
+
+# Tokens too generic to identify a partner on their own (products, legal forms,
+# geography words). Compared after normalization (lowercase, umlauts folded).
+stop_tokens:
+  - fenster
+  - tueren
+  - wintergarten
+  - wintergaerten
+  - terrassendach
+  - terrassendaecher
+  - glasfaltwand
+  - rollladen
+  - rolladen
+  - markise
+  - markisen
+  - solarlux
+  - partner
+  - online
+  - kampagne
+  - kampagnen
+  - landing
+  - vertrieb
+  - vertriebs
+  - bauelemente

@@ -1,11 +1,11 @@
-"""Modelled ad-spend as a LOW–HIGH interval. Meta does not publish real spend for
+﻿"""Modelled ad-spend as a LOW–HIGH interval. Meta does not publish real spend for
 ordinary commercial ads, so this is an educated estimate — see spend_assumptions.yaml.
 Two methods, chosen per ad depending on whether reach data is present."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .config import load_spend_assumptions
+from ..config import load_spend_assumptions
 
 
 @dataclass

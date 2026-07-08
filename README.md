@@ -79,28 +79,41 @@ started, polled, and its results retrieved before moving to the next company.
 - Switch to `ADWATCH_MODE=mock` in `.env` to run fully offline on generated
   sample data (useful for demos or UI work without spending Apify credits).
 
-## Layout
+## Layout — three parts
+
 ```
 adwatch/
-  config.py        env + yaml loading, mode flag
-  models.py        SQLAlchemy schema (source-agnostic; raw ads kept per run)
-  db.py            engine/session
-  sources/
-    base.py        AdSource interface (Google/LinkedIn slot in here later)
-    meta.py         Meta adapter: live Apify calls, resolve+fetch, mock fallback
-  mockdata.py      deterministic offline sample-ad generator (mock mode only)
-  classify.py      deterministic + Claude Haiku ad classifier
-  spend.py         low–high interval spend model
-  aggregate.py     ads -> weekly metric
-  pipeline.py      seed + run_once orchestration (resolve-then-fetch logic)
-  services.py      company CRUD + dashboard queries
-  report.py        PDF generation
-  web.py           FastAPI dashboard
-  cli.py           command entrypoints
+  identity/                    PART 1 — which page(s) belong to which company
+    resolver.py                  name search -> candidates -> confirm main page
+    partner_linker.py            auto-link partner accounts via landing-URL evidence
+  collect/                     PART 2 — fetch + store weekly ad data
+    base.py                      AdSource interface (Google/LinkedIn slot in later)
+    meta_source.py               Meta adapter: live Apify calls, mock fallback
+    mockdata.py                  deterministic offline sample data (mock mode)
+    pipeline.py                  weekly cycle: all linked pages + partner sweep
+  insights/                    PART 3 — what does the data mean?
+    classify.py                  ad intent (word-boundary keywords / Claude)
+    spend.py                     low–high interval spend model
+    aggregate.py                 ads -> weekly metric values
+    score.py                     0-100 company activity score
+    flags.py                     weekly BD signals (new campaigns, movers, ...)
+  config.py / models.py / db.py / services.py / report.py / cli.py
+streamlit_app.py               the dashboard (streamlit run streamlit_app.py)
 config/
-  companies.yaml         initial seed (edits after that live in the DB)
-  spend_assumptions.yaml
+  companies.yaml               initial seed (edits after that live in the DB)
+  partner_discovery.yaml       hub domain + sweep terms for partner linking
+  score_config.yaml            score weights
+  spend_assumptions.yaml       CPM bands / per-ad cost assumptions
 ```
+
+## Partner pages
+
+Companies may run ads from dedicated partner accounts (e.g. "Solarlux Quality
+Partner …") or appear in shared hub campaigns. A weekly sweep searches the hub
+term, reads each ad's landing URL (`solarlux.com/…/wintergarten-nagelschmidt/`
++ `utm_campaign`), and attributes ads to the matching monitored company —
+dedicated pages get auto-linked (editable in the UI), shared hubs are
+attributed per ad. Settings: `config/partner_discovery.yaml`.
 
 ## Not yet built
 - Scheduling — this runs on demand via the button. Add a weekly cron later.

@@ -1,4 +1,4 @@
-"""Meta Ad Library adapter — live via Apify (curious_coder/facebook-ads-library-scraper,
+﻿"""Meta Ad Library adapter — live via Apify (curious_coder/facebook-ads-library-scraper,
 actor id XtaWFhbtfxyzqrFmd), with SearchAPI.io as an optional alternate backend, and an
 offline mock generator for testing without burning credits.
 
@@ -218,7 +218,7 @@ class MetaAdSource(AdSource):
         """One Apify run: search by company name, group ads by page, pick the best
         name match. Returns dict(status, page_id, page_name, ads, candidates)."""
         if self.backend == "mock":
-            from ..mockdata import generate_ads
+            from .mockdata import generate_ads
             ads = [a for a in generate_ads(name, country) if a.is_active]
             if not ads:
                 return {"status": "no_ads_found", "page_id": None, "page_name": None, "ads": [], "candidates": []}
@@ -316,7 +316,7 @@ class MetaAdSource(AdSource):
 
     def fetch_ads(self, page_id: str, country: str = "DE", active_only: bool = True) -> list[RawAd]:
         if self.backend == "mock":
-            from ..mockdata import generate_ads
+            from .mockdata import generate_ads
             name = page_id.split("::", 1)[1] if page_id.startswith("MOCK::") else page_id
             ads = generate_ads(name, country)
             return [a for a in ads if a.is_active] if active_only else ads
@@ -326,3 +326,14 @@ class MetaAdSource(AdSource):
         items = self._run_items(url, max_ads=500, active_status=active_status, country=country)
         ads = [self._map_ad(it) for it in items]
         return [a for a in ads if a.is_active] if active_only else ads
+
+    def sweep_hub(self, term: str, country: str = "DE", max_ads: int = 300) -> list[dict]:
+        """One keyword search over ACTIVE ads for the partner-hub term (e.g. 'Solarlux').
+
+        Returns RAW items (dicts) — the partner linker needs the untouched
+        link_url / utm evidence, and groups by page itself."""
+        if self.backend == "mock":
+            from .mockdata import generate_hub_items
+            return generate_hub_items()
+        url = build_ads_library_url(name=term, country=country, active_status="active")
+        return self._run_items(url, max_ads, active_status="active", country=country)

@@ -1,0 +1,25 @@
+# PART 3b — company activity score (0-100).
+#
+# score = 100 * (w_volume * volume + w_momentum * momentum
+#                + w_freshness * freshness + w_diversity * diversity)
+#
+#   volume    = min(active_ads / volume_norm_ads, 1)        how much they run
+#   momentum  = 0.5 + clamp(Δads / max(prev_ads,1), -1, 1)/2  growing or shrinking
+#   freshness = new_ads / active_ads                        share started last 7 days
+#   diversity = categories_active / 4                        breadth of intent
+#
+# Weights must sum to 1. Tune freely; bump model_version so historical scores
+# stay attributable to the assumptions that produced them.
+# NOTE: more inputs will be added later (e.g. external firm data) — keep this
+# file the single place where the formula's knobs live.
+
+model_version: "score-v1"
+
+weights:
+  volume: 0.40
+  momentum: 0.25
+  freshness: 0.20
+  diversity: 0.15
+
+# An ad count at/above this scores full marks on the volume component.
+volume_norm_ads: 15

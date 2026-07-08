@@ -47,6 +47,29 @@ class Company(Base):
 
     runs: Mapped[list["CollectionRun"]] = relationship(back_populates="company")
     metrics: Mapped[list["WeeklyCompanyMetric"]] = relationship(back_populates="company")
+    pages: Mapped[list["CompanyPage"]] = relationship(back_populates="company")
+
+
+class CompanyPage(Base):
+    """A Facebook page that belongs to a company. One company can own several:
+    its main page plus dedicated partner accounts (e.g. a 'Solarlux Partner'
+    page running ads for them). `evidence` records WHY the link was made so a
+    human can audit and undo it."""
+    __tablename__ = "company_pages"
+    __table_args__ = (UniqueConstraint("source", "page_id", name="uq_source_page"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
+    source: Mapped[str] = mapped_column(String(20), default="meta")
+    page_id: Mapped[str] = mapped_column(String(120))
+    page_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    role: Mapped[str] = mapped_column(String(20), default="main")      # main | partner
+    status: Mapped[str] = mapped_column(String(20), default="auto")    # confirmed | auto | manual
+    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # {method, url, utm, token, similarity}
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    linked_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+    company: Mapped["Company"] = relationship(back_populates="pages")
 
 
 class CollectionRun(Base):
@@ -57,6 +80,9 @@ class CollectionRun(Base):
     source: Mapped[str] = mapped_column(String(20), default="meta")
     run_date: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
     week_start: Mapped[dt.date] = mapped_column(Date)
+    page_id: Mapped[str | None] = mapped_column(String(120), nullable=True)   # which page this run fetched
+    page_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    page_role: Mapped[str | None] = mapped_column(String(20), nullable=True)  # main | partner | hub
     status: Mapped[str] = mapped_column(String(30), default="ok")  # ok | no_active_ads | error
     ads_scraped: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -104,6 +130,8 @@ class WeeklyCompanyMetric(Base):
     total_active_ads: Mapped[int] = mapped_column(Integer, default=0)
     ads_by_category: Mapped[dict] = mapped_column(JSON, default=dict)   # {category: count}
     products: Mapped[list] = mapped_column(JSON, default=list)          # distinct product strings
+    new_ads: Mapped[int] = mapped_column(Integer, default=0)            # ads whose start_date is within the last 7 days
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)   # 0-100 activity score (see insights/score.py)
 
     estimated_spend_low: Mapped[float] = mapped_column(Float, default=0.0)
     estimated_spend_high: Mapped[float] = mapped_column(Float, default=0.0)

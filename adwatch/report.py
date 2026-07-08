@@ -146,7 +146,8 @@ def build_top5_report(path: str | None = None) -> str:
         path = str(config.OUTPUT_DIR / f"adwatch_top5_{stamp}.pdf")
 
     data = [d for d in latest_metrics() if d["has_data"] and (d["total_active_ads"] or 0) > 0]
-    data.sort(key=lambda d: d["total_active_ads"], reverse=True)
+    # rank by activity score (falls back to ad count for rows without one)
+    data.sort(key=lambda d: (d.get("score") or 0, d["total_active_ads"]), reverse=True)
     top = data[:5]
 
     styles = getSampleStyleSheet()
@@ -177,7 +178,8 @@ def build_top5_report(path: str | None = None) -> str:
     for i, d in enumerate(top, start=1):
         cats = d.get("ads_by_category") or {}
         products = d.get("products") or []
-        story.append(Paragraph(f"{i}. {d['company']}", rank))
+        score_tag = f" &nbsp;·&nbsp; score {d['score']:.0f}/100" if d.get("score") is not None else ""
+        story.append(Paragraph(f"{i}. {d['company']}{score_tag}", rank))
         matched = f" &nbsp;·&nbsp; page: {d['page_name']}" if d.get("page_name") else ""
         story.append(Paragraph(
             f"<b>{d['total_active_ads']} active ads</b>"
