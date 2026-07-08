@@ -82,7 +82,8 @@ def _store_ads(s, run, raw_ads, llm_cache) -> list[dict]:
             run_id=run.id, source="meta", external_ad_id=ad.external_ad_id,
             ad_text=ad.ad_text, cta=ad.cta, start_date=ad.start_date, end_date=ad.end_date,
             is_active=ad.is_active, media_type=ad.media_type, reach=ad.reach,
-            real_spend=ad.real_spend, category=result["category"], product=result.get("product"),
+            real_spend=ad.real_spend, ad_library_url=ad.ad_library_url, landing_url=ad.landing_url,
+            category=result["category"], product=result.get("product"),
             classifier=result["classifier"], classifier_raw=result, source_raw=ad.source_raw,
         ))
         classified.append({"raw": ad, "category": result["category"], "product": result.get("product")})

@@ -188,19 +188,27 @@ class MetaAdSource(AdSource):
         # card instead.
         cards = snapshot.get("cards")
         first_card = cards[0] if isinstance(cards, list) and cards and isinstance(cards[0], dict) else None
+        landing_url = snapshot.get("link_url")
         if first_card:
             if not ad_text or "{{" in str(ad_text):
                 ad_text = first_card.get("body") or first_card.get("title") or ad_text
             if not cta or "{{" in str(cta):
                 cta = first_card.get("cta_text") or cta
+            if not landing_url:
+                landing_url = first_card.get("link_url")
+
         start = item.get("start_date") or item.get("ad_delivery_start_time") or snapshot.get("start_date")
         end = item.get("end_date") or item.get("ad_delivery_stop_time") or snapshot.get("end_date")
         media_type = snapshot.get("display_format") or item.get("display_format") or item.get("media_type")
         reach = _num_or_bound(item.get("reach_estimate") or item.get("eu_total_reach") or item.get("impressions_with_index"))
         spend = _num_or_bound(item.get("spend"))
+        ad_archive_id = item.get("ad_archive_id") or item.get("id") or item.get("ad_id")
+        ad_library_url = (item.get("ad_library_url")
+                          or (f"https://www.facebook.com/ads/library/?id={ad_archive_id}"
+                              if ad_archive_id else None))
 
         return RawAd(
-            external_ad_id=item.get("ad_archive_id") or item.get("id") or item.get("ad_id"),
+            external_ad_id=ad_archive_id,
             ad_text=ad_text,
             cta=cta,
             start_date=_parse_date(start),
@@ -210,6 +218,8 @@ class MetaAdSource(AdSource):
             reach=int(reach) if reach is not None else None,
             real_spend=spend,
             country=item.get("country", config.DEFAULT_COUNTRY),
+            ad_library_url=ad_library_url,
+            landing_url=landing_url,
             source_raw=item,
         )
 

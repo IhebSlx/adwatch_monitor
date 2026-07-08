@@ -205,5 +205,7 @@ def latest_week_detail(company_id: int) -> dict:
                     "start_date": a.start_date.isoformat() if a.start_date else None,
                     "ad_text": (a.ad_text or "")[:400],
                     "classifier": a.classifier,
+                    "ad_library_url": a.ad_library_url,
+                    "landing_url": a.landing_url,
                 })
         return {"has_run": True, "week_start": week.isoformat(), "pages": pages, "ads": ads}

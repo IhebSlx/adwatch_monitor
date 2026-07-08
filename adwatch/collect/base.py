@@ -20,6 +20,8 @@ class RawAd:
     reach: int | None = None
     real_spend: float | None = None
     country: str = "DE"
+    ad_library_url: str | None = None   # link to view this exact ad in Meta's Ad Library
+    landing_url: str | None = None      # where the ad's CTA button sends the viewer
     source_raw: dict | None = None
 
 

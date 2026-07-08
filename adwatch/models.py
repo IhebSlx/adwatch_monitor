@@ -108,6 +108,8 @@ class Ad(Base):
 
     reach: Mapped[int | None] = mapped_column(Integer, nullable=True)          # EU DSA reach if present
     real_spend: Mapped[float | None] = mapped_column(Float, nullable=True)      # only for regulated ads
+    ad_library_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # view this ad on Meta
+    landing_url: Mapped[str | None] = mapped_column(String(500), nullable=True)     # where its CTA points
 
     category: Mapped[str | None] = mapped_column(String(30), nullable=True)
     product: Mapped[str | None] = mapped_column(String(300), nullable=True)

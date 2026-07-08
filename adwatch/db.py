@@ -64,6 +64,12 @@ def _migrate(engine) -> None:
                 conn.execute(text("ALTER TABLE weekly_company_metrics ADD COLUMN new_ads INTEGER DEFAULT 0"))
             if "score" not in cols:
                 conn.execute(text("ALTER TABLE weekly_company_metrics ADD COLUMN score FLOAT"))
+        # ads: link to view the ad itself + where its CTA points
+        cols = _existing_columns(conn, "ads")
+        if cols:
+            for name in ("ad_library_url", "landing_url"):
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE ads ADD COLUMN {name} VARCHAR(500)"))
         # backfill: every company with a legacy page_id gets a main CompanyPage row
         have_companies = _existing_columns(conn, "companies")
         have_pages = _existing_columns(conn, "company_pages")

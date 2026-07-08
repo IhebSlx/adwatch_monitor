@@ -322,12 +322,14 @@ with tab_dash:
             adf["category"] = adf["category"].map(lambda c: CATEGORY_LABELS.get(c, c))
             st.dataframe(
                 adf[["category", "product", "page_name", "cta", "media_type",
-                     "reach", "start_date", "ad_text"]],
+                     "reach", "start_date", "ad_text", "ad_library_url", "landing_url"]],
                 use_container_width=True, hide_index=True,
                 column_config={
                     "ad_text": st.column_config.TextColumn("Ad text", width="large"),
                     "page_name": st.column_config.TextColumn("From page"),
                     "reach": st.column_config.NumberColumn("EU reach"),
+                    "ad_library_url": st.column_config.LinkColumn("View ad", display_text="Open ↗"),
+                    "landing_url": st.column_config.LinkColumn("Landing page", display_text="Open ↗"),
                 },
             )
 

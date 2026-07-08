@@ -27,8 +27,9 @@ def _seeded_rng(name: str) -> random.Random:
 def _mk(rng: random.Random, idx: int, text: str, cta: str, media: str) -> RawAd:
     has_reach = rng.random() < 0.6  # ~60% carry EU reach data -> exercises both spend methods
     start = dt.date.today() - dt.timedelta(days=rng.randint(3, 40))
+    ad_id = f"MOCK-{idx:04d}"
     return RawAd(
-        external_ad_id=f"MOCK-{idx:04d}",
+        external_ad_id=ad_id,
         ad_text=text,
         cta=cta,
         start_date=start,
@@ -36,6 +37,8 @@ def _mk(rng: random.Random, idx: int, text: str, cta: str, media: str) -> RawAd:
         media_type=media,
         reach=rng.randint(5000, 120000) if has_reach else None,
         country="DE",
+        ad_library_url=f"https://www.facebook.com/ads/library/?id={ad_id}",
+        landing_url="https://example.com/mock-landing-page",
     )
 
 
