@@ -43,6 +43,10 @@
 
   const eur = (v) => v == null ? "—" : "€" + Math.round(v).toLocaleString("de-DE");
 
+  // facebook.com/<page_id> is a stable permalink for any real Facebook page —
+  // no need to store a separate profile URL per page.
+  const fbPageUrl = (pageId) => `https://www.facebook.com/${encodeURIComponent(pageId)}`;
+
   function spendCell(m) {
     if (!m.has_data) return "—";
     if (m.total_active_ads === 0) return "€0";
@@ -191,6 +195,7 @@
           <span class="dot dot-${p.status === "ok" ? "confirmed" : (p.status === "error" ? "no_ads_found" : "pending")}"></span>
           <b>${esc(p.page_name || p.page_id)}</b><span class="role-badge">${esc(p.role || "main")}</span>
           — ${p.ads} ads · fetched ${esc(p.run_date)}
+          ${p.page_id ? ` · <a class="link" href="${esc(fbPageUrl(p.page_id))}" target="_blank">Open Facebook page ↗</a>` : ""}
         </div>`).join("");
     }
 
@@ -352,7 +357,8 @@
             <span class="role-badge">${esc(p.role)}</span>
             <span class="role-badge">${esc(p.status_label)}</span>
             <div class="page-meta">${evLine}</div>
-            <div class="page-meta">page id ${esc(p.page_id)}</div>
+            <div class="page-meta">page id ${esc(p.page_id)}
+              · <a class="link" href="${esc(fbPageUrl(p.page_id))}" target="_blank">Open Facebook page ↗</a></div>
           </div>
           <button class="btn btn-sm unlink-btn" data-pid="${p.id}">Unlink</button>
         </div>`;
