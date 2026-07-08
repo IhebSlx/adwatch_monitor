@@ -180,6 +180,19 @@ class MetaAdSource(AdSource):
             or snapshot.get("title") or item.get("title")
         )
         cta = item.get("cta_text") or snapshot.get("cta_text") or item.get("cta")
+
+        # Dynamic catalog ads (media_type "DCO") store an unresolved merge-tag
+        # template at the top level, e.g. "{{product.brand}}" — Meta fills that in
+        # per-viewer from a product feed, so the archive never resolves it. The
+        # actual human-written copy shown to viewers lives in the first carousel
+        # card instead.
+        cards = snapshot.get("cards")
+        first_card = cards[0] if isinstance(cards, list) and cards and isinstance(cards[0], dict) else None
+        if first_card:
+            if not ad_text or "{{" in str(ad_text):
+                ad_text = first_card.get("body") or first_card.get("title") or ad_text
+            if not cta or "{{" in str(cta):
+                cta = first_card.get("cta_text") or cta
         start = item.get("start_date") or item.get("ad_delivery_start_time") or snapshot.get("start_date")
         end = item.get("end_date") or item.get("ad_delivery_stop_time") or snapshot.get("end_date")
         media_type = snapshot.get("display_format") or item.get("display_format") or item.get("media_type")

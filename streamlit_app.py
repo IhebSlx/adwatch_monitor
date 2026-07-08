@@ -260,12 +260,6 @@ with tab_insights:
         elif run["has_run"]:
             st.caption(f"Latest run ({run['run_date']}): status **{run['status']}**, no individual ads stored.")
 
-    def open_company_dialog(cid: int, name: str) -> None:
-        @st.dialog(f"📊 {name}", width="large")
-        def _dialog():
-            render_company_detail(cid, name)
-        _dialog()
-
     df = pd.DataFrame(rows)
     table_event = st.dataframe(
         df, use_container_width=True, hide_index=True,
@@ -276,18 +270,19 @@ with tab_insights:
             "Note": st.column_config.TextColumn(width="medium"),
         },
     )
-    st.caption("💡 Click a row to open full detail for that company. "
+    st.caption("💡 Click a row to see full detail for that company below. "
                "Spend is a **modelled low–high estimate**, not published by Meta — "
                "tune assumptions in `config/spend_assumptions.yaml`.")
 
     clicked_rows = list(table_event.selection.rows) if table_event and table_event.selection else []
     if clicked_rows:
-        clicked_company = df.iloc[clicked_rows[0]]["Company"]
-        if st.session_state.get("_last_table_click") != clicked_company:
-            st.session_state["_last_table_click"] = clicked_company
-            cid = name_to_id.get(clicked_company)
-            if cid:
-                open_company_dialog(cid, clicked_company)
+        st.session_state["selected_company"] = df.iloc[clicked_rows[0]]["Company"]
+
+    selected = st.session_state.get("selected_company")
+    if selected and selected in name_to_id:
+        st.divider()
+        st.subheader(f"📊 {selected}")
+        render_company_detail(name_to_id[selected], selected)
 
 # ============================================================================
 # Tab: Companies
