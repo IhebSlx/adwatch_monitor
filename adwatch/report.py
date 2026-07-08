@@ -121,3 +121,84 @@ def build_report(path: str | None = None) -> str:
 
     doc.build(story)
     return path
+
+
+def _signal(cats: dict, products: list) -> str:
+    """A one-line read on what a company is mainly doing with its ads."""
+    hire = cats.get("recruitment", 0)
+    sell = cats.get("product_sale", 0)
+    event = cats.get("event_promo", 0)
+    bits = []
+    if hire and hire >= sell:
+        bits.append(f"hiring push ({hire} ads)")
+    if sell:
+        bits.append(f"selling{' — ' + ', '.join(products[:3]) if products else ''} ({sell} ads)")
+    if event:
+        bits.append(f"events ({event} ads)")
+    return "; ".join(bits) or "brand / general presence"
+
+
+def build_top5_report(path: str | None = None) -> str:
+    """A focused PDF: the 5 most active advertisers this week, with insights."""
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if path is None:
+        stamp = dt.date.today().isoformat()
+        path = str(config.OUTPUT_DIR / f"adwatch_top5_{stamp}.pdf")
+
+    data = [d for d in latest_metrics() if d["has_data"] and (d["total_active_ads"] or 0) > 0]
+    data.sort(key=lambda d: d["total_active_ads"], reverse=True)
+    top = data[:5]
+
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=20, spaceAfter=2)
+    sub = ParagraphStyle("sub", parent=styles["Normal"], textColor=MUTED, fontSize=9)
+    rank = ParagraphStyle("rank", parent=styles["Heading2"], textColor=ACCENT, fontSize=14, spaceBefore=12, spaceAfter=2)
+    body = ParagraphStyle("body", parent=styles["Normal"], textColor=INK, fontSize=10, leading=14)
+    note = ParagraphStyle("note", parent=styles["Normal"], textColor=MUTED, fontSize=8, leading=11)
+
+    doc = SimpleDocTemplate(path, pagesize=A4,
+                            leftMargin=18 * mm, rightMargin=18 * mm,
+                            topMargin=18 * mm, bottomMargin=18 * mm)
+    story = []
+    mode_tag = "SAMPLE DATA (mock mode)" if config.MODE != "live" else f"live · {config.LIVE_SOURCE}"
+    week = next((d["week_start"] for d in top if d.get("week_start")), None)
+    story.append(Paragraph("Top 5 Advertisers — Ad-Activity Report", h1))
+    story.append(Paragraph(
+        f"Generated {dt.datetime.now():%d %b %Y, %H:%M}"
+        + (f" &nbsp;·&nbsp; week of {week}" if week else "")
+        + f" &nbsp;·&nbsp; {mode_tag} &nbsp;·&nbsp; Meta Ad Library", sub))
+    story.append(Spacer(1, 8))
+
+    if not top:
+        story.append(Paragraph("No companies with active ads in the latest data.", body))
+        doc.build(story)
+        return path
+
+    for i, d in enumerate(top, start=1):
+        cats = d.get("ads_by_category") or {}
+        products = d.get("products") or []
+        story.append(Paragraph(f"{i}. {d['company']}", rank))
+        matched = f" &nbsp;·&nbsp; page: {d['page_name']}" if d.get("page_name") else ""
+        story.append(Paragraph(
+            f"<b>{d['total_active_ads']} active ads</b>"
+            + (f" &nbsp;({'+' if (d.get('delta_ads') or 0) > 0 else ''}{d['delta_ads']} vs last week)"
+               if d.get("delta_ads") not in (None, 0) else "")
+            + matched, body))
+        story.append(Paragraph(f"<b>Signal:</b> {_signal(cats, products)}", body))
+        story.append(Paragraph(
+            f"<b>Breakdown:</b> hiring {cats.get('recruitment', 0)} · "
+            f"selling {cats.get('product_sale', 0)} · brand {cats.get('brand_awareness', 0)} · "
+            f"events {cats.get('event_promo', 0)}", body))
+        if products:
+            story.append(Paragraph(f"<b>Products advertised:</b> {', '.join(products)}", body))
+        story.append(Paragraph(
+            f"<b>Est. spend/week:</b> {_eur(d['spend_low'])}–{_eur(d['spend_high'])} "
+            f"(modelled, {d.get('spend_method')})", body))
+        story.append(Spacer(1, 2))
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        "Spend is a <b>modelled estimate</b> (low–high interval), not published by Meta. "
+        "Ranked by number of active ads in the latest weekly collection.", note))
+    doc.build(story)
+    return path

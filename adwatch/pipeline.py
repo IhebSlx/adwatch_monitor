@@ -81,8 +81,22 @@ def _store_metrics(s, company, week_start, classified, status) -> None:
         s.add(target)
 
 
-def run_once() -> dict:
-    """Collect + resolve + classify + aggregate + store for all companies."""
+def run_once(progress=None) -> dict:
+    """Collect + resolve + classify + aggregate + store for all companies.
+
+    `progress`, if given, is called with dict events so a UI can show live status:
+      {"phase":"begin","total":N,"backend":...}
+      {"phase":"company_start","i":k,"total":N,"company":name}
+      {"phase":"company_done","i":k,"total":N,"company":name,"status":...,"ads":n}
+      {"phase":"end","summary":{...}}
+    """
+    def emit(evt):
+        if progress:
+            try:
+                progress(evt)
+            except Exception:  # noqa: BLE001 — never let UI callback break a run
+                pass
+
     init_db()
     seed_companies_if_empty()
     source = MetaAdSource()
@@ -93,8 +107,11 @@ def run_once() -> dict:
     with SessionLocal() as s:
         companies = list(s.scalars(select(Company)))
         summary["companies"] = len(companies)
+        total = len(companies)
+        emit({"phase": "begin", "total": total, "backend": source.backend})
 
-        for company in companies:
+        for idx, company in enumerate(companies, start=1):
+            emit({"phase": "company_start", "i": idx, "total": total, "company": company.name})
             run = CollectionRun(company_id=company.id, source="meta", week_start=week_start)
             s.add(run)
             s.flush()
@@ -111,6 +128,11 @@ def run_once() -> dict:
                         company.page_id = result["page_id"]
                         company.page_name = result["page_name"]
                         company.resolution_status = "confirmed"
+                        # Authoritative count: re-fetch the confirmed page directly.
+                        # The keyword-search subset can undercount a page's ads, which
+                        # made first-run counts disagree with later weekly page fetches.
+                        raw_ads = source.fetch_ads(result["page_id"], country=company.country,
+                                                   active_only=True)
                         run.status = "ok" if raw_ads else "no_active_ads"
                     elif result["status"] == "ambiguous":
                         company.resolution_status = "ambiguous"
@@ -125,6 +147,9 @@ def run_once() -> dict:
                 run.error = str(exc)[:1000]
                 summary["errors"] += 1
                 s.commit()
+                emit({"phase": "company_done", "i": idx, "total": total,
+                      "company": company.name, "status": "error", "ads": 0,
+                      "error": str(exc)[:200]})
                 continue
 
             run.ads_scraped = len(raw_ads)
@@ -133,5 +158,9 @@ def run_once() -> dict:
 
             summary["collected"] += 1
             s.commit()
+            emit({"phase": "company_done", "i": idx, "total": total,
+                  "company": company.name, "status": run.status,
+                  "ads": len(raw_ads), "page_name": company.page_name})
 
+    emit({"phase": "end", "summary": summary})
     return summary

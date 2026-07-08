@@ -7,6 +7,8 @@ what you see here is exactly what a scheduled `python run.py run` would store.
 """
 from __future__ import annotations
 
+import os
+
 import pandas as pd
 import streamlit as st
 
@@ -15,7 +17,8 @@ from adwatch.db import init_db
 from adwatch.pipeline import reseed_from_file, run_once, seed_companies_if_empty
 from adwatch.sources.meta import search_term
 
-st.set_page_config(page_title="AdWatch — Ad Activity Monitor", page_icon="📡", layout="wide")
+st.set_page_config(page_title="AdWatch — Ad Activity Monitor", page_icon="📡",
+                   layout="wide", initial_sidebar_state="expanded")
 
 STATUS_EMOJI = {
     "confirmed": "🟢",
@@ -30,10 +33,10 @@ CATEGORY_LABELS = {
     "event_promo": "Event",
     "other": "Other",
 }
-
-# --- one-time DB setup (idempotent, cheap on rerun) -------------------------
-init_db()
-seed_companies_if_empty()
+RUN_STATUS_ICON = {
+    "ok": "🟢", "no_active_ads": "⚪", "no_ads_found": "🔴",
+    "ambiguous_match": "🟡", "error": "❌",
+}
 
 
 def _eur(v) -> str:
@@ -68,8 +71,16 @@ with st.sidebar:
         help="Live spends Apify credits. Mock generates deterministic fake data to exercise the UI for free.",
     )
     st.session_state.mode = mode
-    # pipeline/classifier read config.MODE at call time, so this override is enough
+    # pipeline/classifier/DB read config.MODE at call time, so this override drives
+    # everything — including which database file (live vs mock) is used.
     config.MODE = mode
+
+    # Ensure THIS mode's database exists and is seeded before anything reads it.
+    init_db()
+    seed_companies_if_empty()
+
+    st.caption("🔒 Mock and live data are stored in **separate databases** — switching "
+               "modes shows that mode's own dataset; they never mix.")
 
     if mode == "live" and not config.APIFY_API_TOKEN:
         st.error("Live mode selected but APIFY_API_TOKEN is empty in `.env`.")
@@ -80,37 +91,58 @@ with st.sidebar:
                       disabled=(mode == "live" and not config.APIFY_API_TOKEN))
     st.caption(
         "Live runs one Apify call per company (identity check + data pull in one). "
-        "Expect 1–3 min for the full list."
+        "Expect 1–3 min for the full list. Progress shows on the right."
     )
-
-    if fetch:
-        with st.spinner("Fetching… resolving pages and pulling ads. This can take a few minutes."):
-            try:
-                summary = run_once()
-                st.session_state.last_summary = summary
-            except Exception as exc:  # noqa: BLE001
-                st.session_state.last_summary = {"error": str(exc)}
-
-    if "last_summary" in st.session_state:
-        s = st.session_state.last_summary
-        if "error" in s:
-            st.error(f"Run failed: {s['error']}")
-        else:
-            st.success(
-                f"Week of {s['week_start']} · {s['collected']}/{s['companies']} collected"
-                + (f" · {s['errors']} error(s)" if s['errors'] else "")
-            )
 
     st.divider()
     backend = config.LIVE_SOURCE if mode == "live" else "mock"
     st.caption(f"Backend: `{backend}`  ·  Country: `{config.DEFAULT_COUNTRY}`")
     with st.expander("⚠️ Reset company list"):
-        st.caption("Wipes all companies **and their collected data**, reloads from `config/companies.yaml`.")
+        st.caption("Wipes all companies **and their collected data** for the current mode, "
+                   "reloads from `config/companies.yaml`.")
         if st.button("Reset from file", use_container_width=True):
             n = reseed_from_file()
             st.success(f"Re-seeded {n} companies.")
             st.rerun()
 
+
+# ============================================================================
+# Fetch execution + live progress (runs BEFORE reading metrics so the dashboard
+# below reflects the fresh data immediately, with the progress log kept on top)
+# ============================================================================
+if fetch:
+    st.subheader("⏳ Fetching latest ads")
+    bar = st.progress(0.0, text="Starting…")
+    box = st.status(f"Running in {st.session_state.mode.upper()} mode…", expanded=True)
+
+    def _cb(evt):
+        phase = evt.get("phase")
+        if phase == "begin":
+            box.update(label=f"Fetching {evt['total']} companies via {evt['backend']}…")
+        elif phase == "company_start":
+            bar.progress((evt["i"] - 1) / max(evt["total"], 1),
+                         text=f"[{evt['i']}/{evt['total']}] {evt['company']}")
+            box.write(f"🔎 **{evt['company']}** — resolving / fetching…")
+        elif phase == "company_done":
+            bar.progress(evt["i"] / max(evt["total"], 1),
+                         text=f"[{evt['i']}/{evt['total']}] done")
+            icon = RUN_STATUS_ICON.get(evt["status"], "•")
+            extra = f" → {evt['page_name']}" if evt.get("page_name") else ""
+            box.write(f"{icon} **{evt['company']}** — {evt['status']} · {evt['ads']} ads{extra}")
+
+    try:
+        summary = run_once(progress=_cb)
+        st.session_state.last_summary = summary
+        bar.progress(1.0, text="Complete")
+        box.update(
+            label=f"✅ Done · {summary['collected']}/{summary['companies']} collected"
+                  + (f" · {summary['errors']} error(s)" if summary["errors"] else ""),
+            state="complete", expanded=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        st.session_state.last_summary = {"error": str(exc)}
+        box.update(label=f"❌ Run failed: {exc}", state="error")
+    st.divider()
 
 # ============================================================================
 # Header
@@ -148,6 +180,25 @@ with tab_insights:
     k2.metric("Total active ads", total_ads)
     k3.metric("Hiring / Selling ads", f"{total_hiring} / {total_selling}")
     k4.metric("Est. spend / week", f"{_eur(spend_lo)}–{_eur(spend_hi)}" if have else "—")
+
+    # -- Top-5 PDF export --
+    has_active = any((m["total_active_ads"] or 0) > 0 for m in have)
+    pc1, pc2 = st.columns([1, 3])
+    with pc1:
+        if st.button("📄 Generate Top-5 PDF", use_container_width=True, disabled=not has_active):
+            from adwatch.report import build_top5_report
+            with st.spinner("Building report…"):
+                path = build_top5_report()
+                with open(path, "rb") as fh:
+                    st.session_state.top5_pdf = fh.read()
+                st.session_state.top5_name = os.path.basename(path)
+    with pc2:
+        if st.session_state.get("top5_pdf"):
+            st.download_button(
+                "⬇️ Download Top-5 PDF", data=st.session_state.top5_pdf,
+                file_name=st.session_state.get("top5_name", "adwatch_top5.pdf"),
+                mime="application/pdf", use_container_width=True,
+            )
 
     st.divider()
     st.subheader("This week by company")
