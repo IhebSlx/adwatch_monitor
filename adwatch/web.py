@@ -53,6 +53,10 @@ class SearchIn(BaseModel):
     term: str
 
 
+class FetchIn(BaseModel):
+    company_id: int | None = None
+
+
 class ConfirmIn(BaseModel):
     page_id: str
     page_name: str | None = None
@@ -114,10 +118,14 @@ def reseed():
 # ---------------------------------------------------------------------------
 
 @app.post("/api/fetch")
-def start_fetch():
+def start_fetch(payload: FetchIn = FetchIn()):
     global _fetch_running
     if config.MODE == "live" and not config.APIFY_API_TOKEN:
         raise HTTPException(400, "Live mode needs APIFY_API_TOKEN in .env")
+    if payload.company_id is not None:
+        companies = services.list_companies()
+        if not any(c["id"] == payload.company_id for c in companies):
+            raise HTTPException(404, "Company not found")
     with _fetch_lock:
         if _fetch_running:
             raise HTTPException(409, "A fetch is already running.")
@@ -127,13 +135,14 @@ def start_fetch():
     q: queue.Queue = queue.Queue()
     _runs[run_id] = q
     mode_at_start = config.MODE  # pin the mode this run started in
+    company_id = payload.company_id
 
     def worker():
         global _fetch_running
         prev_mode = config.MODE
         config.MODE = mode_at_start
         try:
-            summary = run_once(progress=lambda evt: q.put(evt))
+            summary = run_once(progress=lambda evt: q.put(evt), company_id=company_id)
             q.put({"phase": "result", "summary": summary})
         except Exception as exc:  # noqa: BLE001
             q.put({"phase": "result", "error": str(exc)})

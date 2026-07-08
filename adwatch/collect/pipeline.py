@@ -124,8 +124,13 @@ def _store_metrics(s, company, week_start, classified, status) -> None:
 # the weekly cycle
 # ---------------------------------------------------------------------------
 
-def run_once(progress=None) -> dict:
-    """Collect + resolve + classify + aggregate + store for all companies.
+def run_once(progress=None, company_id: int | None = None) -> dict:
+    """Collect + resolve + classify + aggregate + store.
+
+    By default runs the full weekly cycle for every company. Pass `company_id`
+    to fetch just that one company — the partner-hub sweep still runs (needed
+    to catch that company's own partner pages) but is scoped to only match
+    this company, so no other company's data is touched.
 
     `progress`, if given, receives dict events for a live UI:
       {"phase":"begin","total":N,"backend":...}
@@ -149,7 +154,14 @@ def run_once(progress=None) -> dict:
                "partner_pages_linked": 0, "partner_ads_attributed": 0}
 
     with SessionLocal() as s:
-        companies = list(s.scalars(select(Company)))
+        query = select(Company)
+        if company_id is not None:
+            query = query.where(Company.id == company_id)
+        companies = list(s.scalars(query))
+        if company_id is not None and not companies:
+            summary["errors"] += 1
+            emit({"phase": "end", "summary": summary, "error": "Company not found"})
+            return summary
         summary["companies"] = len(companies)
         total = len(companies)
         emit({"phase": "begin", "total": total, "backend": source.backend})

@@ -175,7 +175,10 @@
     }
     const m = data.metric, week = data.week, hist = data.history;
 
-    let html = `<div class="detail-head"><h2>${esc(m.company)}</h2></div>`;
+    let html = `<div class="detail-head"><h2>${esc(m.company)}</h2>
+      <button class="btn btn-sm fetch-company-btn" ${STATE.fetch_running ? "disabled" : ""}
+              title="Fetch only this company's data">Fetch this company</button>
+    </div>`;
     html += `<div class="detail-kpis">
       <div class="kpi"><div class="kpi-label">Score</div><div class="kpi-value">${m.score != null ? m.score.toFixed(0) + "/100" : "—"}</div></div>
       <div class="kpi"><div class="kpi-label">Active ads</div><div class="kpi-value">${m.has_data ? m.total_active_ads : "—"}</div></div>
@@ -232,6 +235,7 @@
 
     panel.classList.remove("hidden");
     panel.innerHTML = html;
+    $(".fetch-company-btn", panel).addEventListener("click", () => startFetch(cid));
 
     if (hist.length > 1) {
       const labels = hist.map(h => h.week_start);
@@ -286,6 +290,8 @@
             <div class="status-label">${esc(c.status_label)}</div>
           </div>
           <div class="company-actions">
+            <button class="btn btn-sm fetch-one-btn" ${STATE.fetch_running ? "disabled" : ""}
+                    title="Fetch only this company's data">Fetch</button>
             <button class="btn btn-sm save-btn" disabled>Save</button>
             <button class="btn btn-sm del-btn">Delete</button>
           </div>
@@ -310,6 +316,7 @@
         if (!confirm(`Delete "${c.name}" and all its collected data?`)) return;
         await api(`/api/companies/${cid}`, "DELETE"); await loadState();
       });
+      $(".fetch-one-btn", row).addEventListener("click", () => startFetch(cid));
       $(".pages-toggle", row).addEventListener("click", async () => {
         if (expandedPages.has(cid)) { expandedPages.delete(cid); }
         else { expandedPages.add(cid); await ensureSearchTerm(cid); }
@@ -425,13 +432,17 @@
   }
 
   // ------------------------------------------------------------------ fetch + progress
-  function startFetch() {
-    api("/api/fetch", "POST").then(({ run_id }) => {
+  function startFetch(companyId) {
+    const body = companyId != null ? { company_id: companyId } : undefined;
+    api("/api/fetch", "POST", body).then(({ run_id }) => {
       STATE.fetch_running = true;
       renderTopbar();
       const panel = $("#fetchPanel"), bar = $("#progressFill"), log = $("#fetchLog"), status = $("#fetchStatus");
       panel.classList.remove("hidden"); log.innerHTML = ""; bar.style.width = "0%";
-      status.textContent = `Running in ${STATE.mode.toUpperCase()} mode…`;
+      const companyName = companyId != null ? (STATE.companies.find(c => c.id === companyId) || {}).name : null;
+      status.textContent = companyName
+        ? `Fetching ${companyName} in ${STATE.mode.toUpperCase()} mode…`
+        : `Running in ${STATE.mode.toUpperCase()} mode…`;
 
       const es = new EventSource(`/api/fetch/stream/${run_id}`);
       const addLog = (text) => { const d = document.createElement("div"); d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; };
@@ -439,7 +450,7 @@
       es.onmessage = (ev) => {
         const evt = JSON.parse(ev.data);
         const phase = evt.phase;
-        if (phase === "begin") status.textContent = `Fetching ${evt.total} companies via ${evt.backend}…`;
+        if (phase === "begin") status.textContent = `Fetching ${evt.total} ${evt.total === 1 ? "company" : "companies"} via ${evt.backend}…`;
         else if (phase === "company_start") {
           bar.style.width = `${100 * (evt.i - 1) / Math.max(evt.total, 1)}%`;
           addLog(`→ ${evt.company} — resolving / fetching…`);
