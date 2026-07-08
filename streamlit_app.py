@@ -218,25 +218,9 @@ with tab_insights:
             "Est. spend / wk": _spend_cell(m),
             "Note": "" if m["resolution_status"] in ("confirmed", "pending") else m["status_label"],
         })
-    df = pd.DataFrame(rows)
-    st.dataframe(
-        df, use_container_width=True, hide_index=True,
-        column_config={
-            "": st.column_config.TextColumn(width="small", help="🟢 confirmed  🟡 ambiguous  🔴 no ads found  ⚪ pending"),
-            "Products": st.column_config.TextColumn(width="medium"),
-            "Note": st.column_config.TextColumn(width="medium"),
-        },
-    )
-    st.caption("Spend is a **modelled low–high estimate**, not published by Meta. "
-               "Tune assumptions in `config/spend_assumptions.yaml`.")
-
-    # -- per-company drill-down --
-    st.divider()
-    st.subheader("Company detail")
-    if companies:
-        sel = st.selectbox("Pick a company", [c["name"] for c in companies])
-        cid = name_to_id[sel]
-        detail = next((m for m in metrics if m["company"] == sel), None)
+    def render_company_detail(cid: int, sel_name: str) -> None:
+        """Full drill-down for one company: status, weekly trend, individual ads."""
+        detail = next((m for m in metrics if m["company"] == sel_name), None)
         hist = services.company_history(cid)
         run = services.latest_run_ads(cid)
 
@@ -245,7 +229,7 @@ with tab_insights:
             c1.metric("Status", f"{STATUS_EMOJI.get(detail['resolution_status'], '⚪')} {detail['resolution_status']}")
             c2.metric("Active ads (latest)", detail["total_active_ads"] if detail["has_data"] else "—")
             c3.metric("Est. spend / wk", _spend_cell(detail))
-            if detail.get("page_name") and detail["page_name"] != sel:
+            if detail.get("page_name") and detail["page_name"] != sel_name:
                 st.caption(f"Matched Facebook page: **{detail['page_name']}**")
             if detail["resolution_status"] == "no_ads_found":
                 st.warning("A name search returned **zero ads**. Either the name doesn't match how they "
@@ -275,6 +259,35 @@ with tab_insights:
             )
         elif run["has_run"]:
             st.caption(f"Latest run ({run['run_date']}): status **{run['status']}**, no individual ads stored.")
+
+    def open_company_dialog(cid: int, name: str) -> None:
+        @st.dialog(f"📊 {name}", width="large")
+        def _dialog():
+            render_company_detail(cid, name)
+        _dialog()
+
+    df = pd.DataFrame(rows)
+    table_event = st.dataframe(
+        df, use_container_width=True, hide_index=True,
+        on_select="rerun", selection_mode="single-row", key="company_table",
+        column_config={
+            "": st.column_config.TextColumn(width="small", help="🟢 confirmed  🟡 ambiguous  🔴 no ads found  ⚪ pending"),
+            "Products": st.column_config.TextColumn(width="medium"),
+            "Note": st.column_config.TextColumn(width="medium"),
+        },
+    )
+    st.caption("💡 Click a row to open full detail for that company. "
+               "Spend is a **modelled low–high estimate**, not published by Meta — "
+               "tune assumptions in `config/spend_assumptions.yaml`.")
+
+    clicked_rows = list(table_event.selection.rows) if table_event and table_event.selection else []
+    if clicked_rows:
+        clicked_company = df.iloc[clicked_rows[0]]["Company"]
+        if st.session_state.get("_last_table_click") != clicked_company:
+            st.session_state["_last_table_click"] = clicked_company
+            cid = name_to_id.get(clicked_company)
+            if cid:
+                open_company_dialog(cid, clicked_company)
 
 # ============================================================================
 # Tab: Companies
