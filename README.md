@@ -1,6 +1,6 @@
-# AdWatch — Competitor Ad-Activity Monitor (Meta, live)
+# AdWatch — Ad Activity Monitor (Meta, live)
 
-Pulls competitor ad activity from the Meta Ad Library via Apify, auto-matches
+Pulls ad activity for a tracked list of companies from the Meta Ad Library via Apify, auto-matches
 each company name to its real Facebook page (so a "0 ads" result is trustworthy,
 not a wrong-name guess), classifies each ad (hiring / selling / brand / event),
 estimates weekly ad spend as a **modelled low–high interval**, stores every run

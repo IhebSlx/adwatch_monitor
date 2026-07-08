@@ -54,6 +54,27 @@ def _norm_name(s: str) -> str:
     return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
 
+# German/EU legal forms + generic descriptors that make a keyword_unordered search
+# too strict (it requires EVERY word to appear in an ad). Stripped to a searchable term.
+_LEGAL_TOKENS = {
+    "gmbh", "mbh", "ohg", "kg", "ag", "ug", "gbr", "se", "kgaa", "ek", "e.k.",
+    "co", "co.", "&", "vertriebs", "vertrieb", "haftungsbeschränkt",
+}
+
+
+def search_term(name: str) -> str:
+    """Turn a formal company name into a keyword-search term: drop legal forms and
+    hyphenated product descriptors so the Ad Library actually returns the page.
+    e.g. 'Fortuna Wintergarten Vertriebs GmbH' -> 'Fortuna Wintergarten'."""
+    # split on whitespace; also treat a hyphenated descriptor tail as droppable
+    words = (name or "").replace("(", " ").replace(")", " ").split()
+    kept = [w for w in words if w.lower().strip(".") not in _LEGAL_TOKENS]
+    # drop a trailing multi-hyphen product descriptor like 'Fenster-Türen-Tore-Wintergärten'
+    kept = [w for w in kept if not (w.count("-") >= 2)]
+    term = " ".join(kept).strip()
+    return term or (name or "").strip()
+
+
 def _parse_date(value) -> dt.date | None:
     if not value:
         return None
@@ -192,20 +213,20 @@ class MetaAdSource(AdSource):
             return {"status": "confirmed", "page_id": key, "page_name": name, "ads": ads,
                    "candidates": [{"page_id": key, "name": name, "ad_count": len(ads)}]}
 
-        url = build_ads_library_url(name=name, country=country, active_status="all")
-        items = self._run_items(url, max_ads)
-
-        pages: dict[str, dict] = {}
-        for item in items:
-            pid = str(item.get("page_id") or "")
-            if not pid:
-                continue
-            pname = item.get("page_name") or (item.get("snapshot") or {}).get("page_name") or ""
-            bucket = pages.setdefault(pid, {"page_id": pid, "name": pname, "ads": []})
-            bucket["ads"].append(self._map_ad(item))
+        # Resolve by keyword search over ALL statuses (an inactive-only page still
+        # tells us the name maps to a real page). Formal names are too strict for the
+        # actor's keyword_unordered search, so search the cleaned term; if that finds
+        # nothing, fall back once to the distinctive leading token(s).
+        term = search_term(name)
+        pages = self._search_pages(term, country, max_ads)
+        if not pages:
+            head = " ".join(term.split()[:2]) or term
+            if head and head != term:
+                pages = self._search_pages(head, country, max_ads)
 
         if not pages:
-            return {"status": "no_ads_found", "page_id": None, "page_name": None, "ads": [], "candidates": []}
+            return {"status": "no_ads_found", "page_id": None, "page_name": None,
+                    "ads": [], "candidates": [], "search_term": term}
 
         target = _norm_name(name)
         scored = sorted(
@@ -213,7 +234,12 @@ class MetaAdSource(AdSource):
              for info in pages.values()),
             key=lambda x: (-x["sim"], -len(x["ads"])),
         )
-        candidates = [{"page_id": c["page_id"], "name": c["name"], "ad_count": len(c["ads"])} for c in scored[:5]]
+        candidates = [{
+            "page_id": c["page_id"], "name": c["name"], "ad_count": len(c["ads"]),
+            "active_ad_count": sum(1 for a in c["ads"] if a.is_active),
+            "category": c.get("category"), "profile_uri": c.get("profile_uri"),
+            "similarity": round(c["sim"], 2),
+        } for c in scored[:8]]
         best = scored[0]
 
         if len(scored) == 1:
@@ -224,11 +250,42 @@ class MetaAdSource(AdSource):
 
         active_ads = [a for a in best["ads"] if a.is_active]
         return {"status": status, "page_id": best["page_id"], "page_name": best["name"],
-               "ads": active_ads, "candidates": candidates}
+               "ads": active_ads, "candidates": candidates, "search_term": term}
 
-    def _run_items(self, url: str, max_ads: int) -> list[dict]:
+    def _search_pages(self, term: str, country: str, max_ads: int) -> dict[str, dict]:
+        """Run one keyword search and group returned ads by their Facebook page."""
+        url = build_ads_library_url(name=term, country=country, active_status="all")
+        items = self._run_items(url, max_ads, active_status="all", country=country)
+        pages: dict[str, dict] = {}
+        for item in items:
+            pid = str(item.get("page_id") or "")
+            if not pid:
+                continue
+            snap = item.get("snapshot") if isinstance(item.get("snapshot"), dict) else {}
+            pname = item.get("page_name") or snap.get("page_name") or ""
+            bucket = pages.get(pid)
+            if bucket is None:
+                cats = snap.get("page_categories") or []
+                bucket = pages[pid] = {
+                    "page_id": pid, "name": pname, "ads": [],
+                    "category": cats[0] if cats else None,
+                    "profile_uri": snap.get("page_profile_uri"),
+                }
+            bucket["ads"].append(self._map_ad(item))
+        return pages
+
+    def _run_items(self, url: str, max_ads: int, active_status: str = "all",
+                   country: str = "DE") -> list[dict]:
         if self.backend == "apify":
-            return self._run_actor({"urls": [{"url": url}], "count": max_ads})
+            # The actor parses filters from the library URL, but the documented
+            # top-level fields are passed too so behaviour is explicit and stable.
+            payload = {
+                "urls": [{"url": url}],
+                "count": max_ads,
+                "scrapePageAds.activeStatus": active_status,
+                "scrapePageAds.countryCode": country or "ALL",
+            }
+            return self._run_actor(payload)
         if self.backend == "searchapi":
             # NOTE: SearchAPI's meta_ad_library engine takes q= / page_id= directly rather
             # than a raw library URL; this path is a lower-priority alternate backend.
@@ -251,8 +308,8 @@ class MetaAdSource(AdSource):
             ads = generate_ads(name, country)
             return [a for a in ads if a.is_active] if active_only else ads
 
-        url = build_ads_library_url(page_id=page_id, country=country,
-                                    active_status="active" if active_only else "all")
-        items = self._run_items(url, max_ads=500)
+        active_status = "active" if active_only else "all"
+        url = build_ads_library_url(page_id=page_id, country=country, active_status=active_status)
+        items = self._run_items(url, max_ads=500, active_status=active_status, country=country)
         ads = [self._map_ad(it) for it in items]
         return [a for a in ads if a.is_active] if active_only else ads

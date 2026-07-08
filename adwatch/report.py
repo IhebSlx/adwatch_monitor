@@ -48,7 +48,7 @@ def build_report(path: str | None = None) -> str:
                             topMargin=16 * mm, bottomMargin=16 * mm)
     story = []
     mode_tag = "SAMPLE DATA (mock mode)" if config.MODE != "live" else f"live · {config.LIVE_SOURCE}"
-    story.append(Paragraph("Competitor Ad-Activity Report", h1))
+    story.append(Paragraph("Ad-Activity Report", h1))
     story.append(Paragraph(f"Generated {dt.datetime.now():%d %b %Y, %H:%M} &nbsp;·&nbsp; {mode_tag} &nbsp;·&nbsp; Meta Ad Library", sub))
     story.append(Spacer(1, 8))
 

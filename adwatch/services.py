@@ -1,6 +1,8 @@
 """Thin data-access layer for the dashboard: company CRUD + metric queries."""
 from __future__ import annotations
 
+import datetime as dt
+
 from sqlalchemy import select
 
 from . import config
@@ -23,6 +25,7 @@ def list_companies() -> list[dict]:
             "resolution_status": c.resolution_status,
             "status_label": STATUS_LABELS.get(c.resolution_status, c.resolution_status),
             "page_name": c.page_name,
+            "page_id": c.page_id,
             "candidates": c.candidates,
         } for c in rows]
 
@@ -61,6 +64,49 @@ def update_company(cid: int, name: str) -> None:
         s.commit()
 
 
+def set_company_page(cid: int, page_id: str, page_name: str | None = None,
+                     page_category: str | None = None) -> None:
+    """Manually lock a company to a specific Facebook page id (the human-confirm path
+    for the identity problem). Marks it confirmed so future fetches hit this exact page."""
+    page_id = (page_id or "").strip()
+    if not page_id:
+        raise ValueError("A page ID is required")
+    with SessionLocal() as s:
+        c = s.get(Company, cid)
+        if not c:
+            raise ValueError("Not found")
+        c.page_id = page_id
+        c.page_name = (page_name or "").strip() or None
+        c.page_category = page_category
+        c.resolution_status = "confirmed"
+        c.confirmed_at = dt.datetime.utcnow()
+        c.candidates = None
+        s.commit()
+
+
+def clear_resolution(cid: int) -> None:
+    """Reset a company back to pending (forget the matched page)."""
+    with SessionLocal() as s:
+        c = s.get(Company, cid)
+        if not c:
+            return
+        c.page_id = None
+        c.page_name = None
+        c.resolution_status = "pending"
+        c.candidates = None
+        s.commit()
+
+
+def find_candidates(term: str, country: str | None = None) -> dict:
+    """Live keyword search that returns candidate pages WITHOUT storing anything —
+    powers the manual 'find the right page' step. Costs one Apify call."""
+    from .sources.meta import MetaAdSource
+    src = MetaAdSource()
+    res = src.search_and_resolve(term, country=country or config.DEFAULT_COUNTRY, max_ads=60)
+    return {"status": res["status"], "search_term": res.get("search_term", term),
+            "candidates": res.get("candidates", [])}
+
+
 def delete_company(cid: int) -> None:
     with SessionLocal() as s:
         c = s.get(Company, cid)
@@ -89,6 +135,7 @@ def latest_metrics() -> list[dict]:
             latest = metrics[0] if metrics else None
             prev = metrics[1] if len(metrics) > 1 else None
             out.append({
+                "company_id": c.id,
                 "company": c.name,
                 "resolution_status": c.resolution_status,
                 "status_label": STATUS_LABELS.get(c.resolution_status, c.resolution_status),
@@ -106,3 +153,58 @@ def latest_metrics() -> list[dict]:
                 "status": latest.status if latest else None,
             })
         return out
+
+
+def company_history(company_id: int) -> list[dict]:
+    """All weekly metric rows for one company, oldest first — for trend charts."""
+    with SessionLocal() as s:
+        rows = s.scalars(
+            select(WeeklyCompanyMetric)
+            .where(WeeklyCompanyMetric.company_id == company_id)
+            .order_by(WeeklyCompanyMetric.week_start)
+        ).all()
+        out = []
+        for m in rows:
+            cats = m.ads_by_category or {}
+            out.append({
+                "week_start": m.week_start.isoformat(),
+                "total_active_ads": m.total_active_ads,
+                "recruitment": cats.get("recruitment", 0),
+                "product_sale": cats.get("product_sale", 0),
+                "brand_awareness": cats.get("brand_awareness", 0),
+                "event_promo": cats.get("event_promo", 0),
+                "spend_low": m.estimated_spend_low,
+                "spend_high": m.estimated_spend_high,
+            })
+        return out
+
+
+def latest_run_ads(company_id: int) -> dict:
+    """The individual ads from a company's most recent collection run (drill-down)."""
+    with SessionLocal() as s:
+        run = s.scalar(
+            select(CollectionRun)
+            .where(CollectionRun.company_id == company_id)
+            .order_by(CollectionRun.run_date.desc())
+            .limit(1)
+        )
+        if not run:
+            return {"has_run": False, "ads": []}
+        ads = s.scalars(select(Ad).where(Ad.run_id == run.id).order_by(Ad.category)).all()
+        return {
+            "has_run": True,
+            "run_date": run.run_date.isoformat(timespec="minutes"),
+            "week_start": run.week_start.isoformat(),
+            "status": run.status,
+            "ads_scraped": run.ads_scraped,
+            "ads": [{
+                "category": a.category,
+                "product": a.product,
+                "cta": a.cta,
+                "media_type": a.media_type,
+                "reach": a.reach,
+                "start_date": a.start_date.isoformat() if a.start_date else None,
+                "ad_text": (a.ad_text or "")[:400],
+                "classifier": a.classifier,
+            } for a in ads],
+        }

@@ -7,7 +7,7 @@ from . import config
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="adwatch", description="Competitor ad-activity monitor")
+    p = argparse.ArgumentParser(prog="adwatch", description="Ad-activity monitor")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init-db", help="Create the database and seed companies")
     sub.add_parser("run", help="Run one collection cycle (collect -> classify -> store)")

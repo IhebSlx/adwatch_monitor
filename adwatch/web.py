@@ -88,7 +88,7 @@ def index():
 HTML = """
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AdWatch — Competitor Ad Monitor</title>
+<title>AdWatch — Ad Activity Monitor</title>
 <style>
   :root{--ink:#1f2933;--muted:#647380;--accent:#2b6cb0;--line:#d9e2ec;--bg:#f0f4f8;--card:#fff;--ok:#2f855a;--warn:#b7791f;--danger:#c53030}
   *{box-sizing:border-box}
