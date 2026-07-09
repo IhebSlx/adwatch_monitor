@@ -39,6 +39,11 @@ OUTPUT_DIR = ROOT / "output"
 
 DEFAULT_COUNTRY = os.getenv("ADWATCH_COUNTRY", "DE").strip() or "DE"
 
+# ---- Power Automate (emails the report PDF on demand) ----------------------
+# Treat this URL as a secret: whoever has it can trigger the flow (send mail).
+POWER_AUTOMATE_WEBHOOK_URL = os.getenv("POWER_AUTOMATE_WEBHOOK_URL", "").strip()
+REPORT_EMAIL_DEFAULT_RECIPIENT = os.getenv("REPORT_EMAIL_DEFAULT_RECIPIENT", "").strip()
+
 
 def is_live() -> bool:
     return MODE == "live"

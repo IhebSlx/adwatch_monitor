@@ -57,6 +57,12 @@ class FetchIn(BaseModel):
     company_id: int | None = None
 
 
+class EmailReportIn(BaseModel):
+    report: str = "top5"          # top5 | full
+    recipient: str | None = None  # falls back to REPORT_EMAIL_DEFAULT_RECIPIENT
+    subject: str = "AdWatch Weekly Report"
+
+
 class ConfirmIn(BaseModel):
     page_id: str
     page_name: str | None = None
@@ -86,6 +92,8 @@ def state():
         "country": config.DEFAULT_COUNTRY,
         "classifier": "llm" if (config.is_live() and config.ANTHROPIC_API_KEY) else "keywords",
         "apify_configured": bool(config.APIFY_API_TOKEN),
+        "email_configured": bool(config.POWER_AUTOMATE_WEBHOOK_URL),
+        "email_default_recipient": config.REPORT_EMAIL_DEFAULT_RECIPIENT,
         "fetch_running": _fetch_running,
         "companies": companies,
         "metrics": metrics,
@@ -281,6 +289,19 @@ def report_full():
     from .report import build_report
     path = build_report()
     return FileResponse(path, media_type="application/pdf", filename=path.split("/")[-1].split("\\")[-1])
+
+
+@app.post("/api/report/send-email")
+def send_report_email_route(payload: EmailReportIn = EmailReportIn()):
+    from .emailer import send_report_email
+    from .report import build_report, build_top5_report
+
+    path = build_report() if payload.report == "full" else build_top5_report()
+    try:
+        send_report_email(path, recipient=payload.recipient, subject=payload.subject)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "sent_to": payload.recipient or config.REPORT_EMAIL_DEFAULT_RECIPIENT}
 
 
 @app.on_event("startup")

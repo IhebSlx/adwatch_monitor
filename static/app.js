@@ -531,6 +531,25 @@
       } catch (e) { alert(e.message); }
       finally { btn.disabled = false; btn.textContent = "Generate Top-5 PDF"; }
     });
+
+    $("#emailBtn").addEventListener("click", async () => {
+      const btn = $("#emailBtn");
+      if (!STATE.email_configured) {
+        alert("Email isn't configured yet — set POWER_AUTOMATE_WEBHOOK_URL in .env.");
+        return;
+      }
+      const to = prompt("Send the Top-5 report to:", STATE.email_default_recipient || "");
+      if (!to) return;
+      btn.disabled = true; btn.textContent = "Sending…";
+      try {
+        await api("/api/report/send-email", "POST", { report: "top5", recipient: to });
+        btn.textContent = "Sent ✓";
+        setTimeout(() => { btn.textContent = "Send report by email"; btn.disabled = false; }, 2500);
+      } catch (e) {
+        alert(`Send failed: ${e.message}`);
+        btn.disabled = false; btn.textContent = "Send report by email";
+      }
+    });
   }
 
   wireStatic();
