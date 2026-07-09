@@ -144,3 +144,17 @@ class WeeklyCompanyMetric(Base):
     status: Mapped[str] = mapped_column(String(30), default="ok")
 
     company: Mapped["Company"] = relationship(back_populates="metrics")
+
+
+class ReportRecipient(Base):
+    """Who the weekly report PDF can be emailed to — managed entirely in-app;
+    Power Automate never decides this, it just sends to whatever address this
+    app tells it to."""
+    __tablename__ = "report_recipients"
+    __table_args__ = (UniqueConstraint("email", name="uq_recipient_email"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    email: Mapped[str] = mapped_column(String(300))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    added_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)

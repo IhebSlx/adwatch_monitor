@@ -49,6 +49,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="dashboard">Dashboard</button>
       <button class="tab" data-tab="companies">Companies &amp; Pages</button>
+      <button class="tab" data-tab="reports">Reports</button>
       <button class="tab" data-tab="help">How it works</button>
     </nav>
 
@@ -57,12 +58,6 @@
       <div id="signals" class="signals"></div>
 
       <div id="kpis" class="kpi-row"></div>
-
-      <div class="actions-row">
-        <button id="pdfBtn" class="btn">Generate Top-5 PDF</button>
-        <a id="pdfLink" class="btn btn-ghost hidden" href="/api/report/top5" target="_blank">Download Top-5 PDF</a>
-        <button id="emailBtn" class="btn">Send report by email</button>
-      </div>
 
       <div class="card">
         <h2>Companies this week</h2>
@@ -108,6 +103,45 @@
           Partner pages are discovered automatically from solarlux.com landing-URL evidence (editable here).
           Renaming a company resets all its links.</p>
         <div id="companiesList"></div>
+      </div>
+    </section>
+
+    <!-- ================= TAB: Reports ================= -->
+    <section id="tab-reports" class="tab-panel">
+      <div class="card">
+        <h2>Recipients</h2>
+        <p class="hint">Check who should receive a report, then use "Send" on any report below.
+          Managed entirely here — Power Automate just sends to whatever address this app gives it.</p>
+        <div id="recipientsList"></div>
+        <form id="addRecipientForm" class="inline-form" style="margin-top:10px">
+          <input id="newRecipientEmail" type="email" placeholder="email@solarlux.com" autocomplete="off" style="flex:2">
+          <input id="newRecipientName" placeholder="Name (optional)" autocomplete="off" style="flex:1">
+          <button class="btn btn-primary" type="submit">Add</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Generate a new report</h2>
+        <div class="inline-form">
+          <select id="reportTypeSelect" style="flex:0 0 auto">
+            <option value="top5">Top 5 advertisers</option>
+            <option value="full">Full report</option>
+          </select>
+          <button id="generateReportBtn" class="btn btn-primary">Generate</button>
+        </div>
+        <p class="hint">Each generated report is named after the ISO week (e.g. <code>KW29_2026</code>) and
+          never overwrites a previous one — generating again in the same week adds <code>_01</code>, <code>_02</code>, etc.</p>
+      </div>
+
+      <div class="card">
+        <h2>Report history</h2>
+        <div class="table-wrap">
+          <table id="reportsTable">
+            <thead><tr><th>Report</th><th>Created</th><th class="num">Size</th><th></th></tr></thead>
+            <tbody id="reportsTableBody"></tbody>
+          </table>
+        </div>
+        <p class="hint" id="reportsEmptyHint">No reports generated yet.</p>
       </div>
     </section>
 

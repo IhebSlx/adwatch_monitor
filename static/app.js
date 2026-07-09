@@ -516,42 +516,110 @@
       catch (e) { alert(e.message); }
     });
 
-    $("#pdfBtn").addEventListener("click", async () => {
-      const btn = $("#pdfBtn"), link = $("#pdfLink");
-      btn.disabled = true; btn.textContent = "Building…";
+    $("#addRecipientForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const emailInput = $("#newRecipientEmail"), nameInput = $("#newRecipientName");
+      const email = emailInput.value.trim();
+      if (!email) return;
       try {
-        const r = await fetch("/api/report/top5");
-        if (!r.ok) throw new Error("Report generation failed");
-        const blob = await r.blob();
-        const cd = r.headers.get("Content-Disposition") || "";
-        const m = cd.match(/filename="?([^"]+)"?/);
-        link.href = URL.createObjectURL(blob);
-        link.download = m ? m[1] : "adwatch_top5.pdf";
-        link.classList.remove("hidden");
+        await api("/api/recipients", "POST", { email, name: nameInput.value.trim() || null });
+        emailInput.value = ""; nameInput.value = "";
+        await loadReports();
       } catch (e) { alert(e.message); }
-      finally { btn.disabled = false; btn.textContent = "Generate Top-5 PDF"; }
     });
 
-    $("#emailBtn").addEventListener("click", async () => {
-      const btn = $("#emailBtn");
-      if (!STATE.email_configured) {
-        alert("Email isn't configured yet — set POWER_AUTOMATE_WEBHOOK_URL in .env.");
-        return;
-      }
-      const to = prompt("Send the Top-5 report to:", STATE.email_default_recipient || "");
-      if (!to) return;
-      btn.disabled = true; btn.textContent = "Sending…";
+    $("#generateReportBtn").addEventListener("click", async () => {
+      const btn = $("#generateReportBtn");
+      btn.disabled = true; btn.textContent = "Generating…";
       try {
-        await api("/api/report/send-email", "POST", { report: "top5", recipient: to });
-        btn.textContent = "Sent ✓";
-        setTimeout(() => { btn.textContent = "Send report by email"; btn.disabled = false; }, 2500);
-      } catch (e) {
-        alert(`Send failed: ${e.message}`);
-        btn.disabled = false; btn.textContent = "Send report by email";
-      }
+        await api("/api/reports/generate", "POST", { report: $("#reportTypeSelect").value });
+        await loadReports();
+      } catch (e) { alert(e.message); }
+      finally { btn.disabled = false; btn.textContent = "Generate"; }
+    });
+  }
+
+  // ------------------------------------------------------------------ Reports tab
+  let REPORTS_STATE = null;
+  const checkedRecipients = new Set();
+
+  function fmtSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  async function loadReports() {
+    REPORTS_STATE = await api("/api/reports");
+    renderRecipients();
+    renderReportsTable();
+  }
+
+  function renderRecipients() {
+    const box = $("#recipientsList");
+    const recipients = REPORTS_STATE.recipients;
+    if (!recipients.length) {
+      box.innerHTML = `<p class="hint">No recipients yet — add one below.</p>`;
+      return;
+    }
+    if (checkedRecipients.size === 0) {
+      recipients.filter(r => r.active).forEach(r => checkedRecipients.add(r.id));
+    }
+    box.innerHTML = recipients.map(r => `
+      <div class="page-item">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" class="recipient-check" data-rid="${r.id}" ${checkedRecipients.has(r.id) ? "checked" : ""}>
+          <span><b>${esc(r.name || r.email)}</b>${r.name ? ` <span class="muted">${esc(r.email)}</span>` : ""}</span>
+        </label>
+        <button class="btn btn-sm del-recipient-btn" data-rid="${r.id}">Remove</button>
+      </div>`).join("");
+    $$(".recipient-check", box).forEach(cb => cb.addEventListener("change", () => {
+      const rid = Number(cb.dataset.rid);
+      if (cb.checked) checkedRecipients.add(rid); else checkedRecipients.delete(rid);
+    }));
+    $$(".del-recipient-btn", box).forEach(btn => btn.addEventListener("click", async () => {
+      const rid = Number(btn.dataset.rid);
+      checkedRecipients.delete(rid);
+      await api(`/api/recipients/${rid}`, "DELETE");
+      await loadReports();
+    }));
+  }
+
+  function renderReportsTable() {
+    const reports = REPORTS_STATE.reports;
+    $("#reportsEmptyHint").classList.toggle("hidden", reports.length > 0);
+    $("#reportsTableBody").innerHTML = reports.map(r => `
+      <tr data-filename="${esc(r.filename)}">
+        <td>${esc(r.label)}</td>
+        <td>${esc(r.created_at)}</td>
+        <td class="num">${fmtSize(r.size_bytes)}</td>
+        <td style="white-space:nowrap">
+          <a class="btn btn-sm" href="/api/reports/${encodeURIComponent(r.filename)}" target="_blank">Download</a>
+          <button class="btn btn-sm send-report-btn">Send</button>
+        </td>
+      </tr>`).join("");
+    $$(".send-report-btn", $("#reportsTableBody")).forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const filename = btn.closest("tr").dataset.filename;
+        const recipient_ids = [...checkedRecipients];
+        if (!recipient_ids.length && !REPORTS_STATE.recipients.length) {
+          alert("Add a recipient first.");
+          return;
+        }
+        if (!recipient_ids.length) { alert("Check at least one recipient above."); return; }
+        btn.disabled = true; btn.textContent = "Sending…";
+        try {
+          await api(`/api/reports/${encodeURIComponent(filename)}/send-email`, "POST", { recipient_ids });
+          btn.textContent = "Sent ✓";
+          setTimeout(() => { btn.textContent = "Send"; btn.disabled = false; }, 2500);
+        } catch (e) {
+          alert(`Send failed: ${e.message}`);
+          btn.textContent = "Send"; btn.disabled = false;
+        }
+      });
     });
   }
 
   wireStatic();
   loadState();
+  loadReports();
 })();

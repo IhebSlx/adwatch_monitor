@@ -85,6 +85,14 @@ def _migrate(engine) -> None:
                   AND NOT EXISTS (SELECT 1 FROM company_pages p
                                   WHERE p.source = c.source AND p.page_id = c.page_id)
             """))
+        # seed the recipients table from .env's default, once, if still empty
+        if _existing_columns(conn, "report_recipients"):
+            has_any = conn.execute(text("SELECT 1 FROM report_recipients LIMIT 1")).first()
+            if not has_any and config.REPORT_EMAIL_DEFAULT_RECIPIENT:
+                conn.execute(text(
+                    "INSERT INTO report_recipients (name, email, active, added_at) "
+                    "VALUES (:name, :email, 1, CURRENT_TIMESTAMP)"
+                ), {"name": None, "email": config.REPORT_EMAIL_DEFAULT_RECIPIENT})
 
 
 def init_db() -> None:

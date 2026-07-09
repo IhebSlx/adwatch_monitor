@@ -14,6 +14,7 @@ import json
 import queue
 import threading
 import uuid
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -58,9 +59,21 @@ class FetchIn(BaseModel):
 
 
 class EmailReportIn(BaseModel):
-    report: str = "top5"          # top5 | full
-    recipient: str | None = None  # falls back to REPORT_EMAIL_DEFAULT_RECIPIENT
+    report: str = "top5"                    # top5 | full
+    recipient_ids: list[int] | None = None  # selected saved recipients (see ReportRecipient)
+    recipient: str | None = None            # ad-hoc single address, combined with recipient_ids
     subject: str = "AdWatch Weekly Report"
+
+
+class SendExistingIn(BaseModel):
+    recipient_ids: list[int] | None = None
+    recipient: str | None = None
+    subject: str = "AdWatch Weekly Report"
+
+
+class RecipientIn(BaseModel):
+    email: str
+    name: str | None = None
 
 
 class ConfirmIn(BaseModel):
@@ -274,34 +287,105 @@ def confirm_page(cid: int, payload: ConfirmIn):
 
 
 # ---------------------------------------------------------------------------
-# Reports
+# Reports — generate, browse history, download or email any past report
 # ---------------------------------------------------------------------------
 
-@app.get("/api/report/top5")
-def report_top5():
-    from .report import build_top5_report
-    path = build_top5_report()
-    return FileResponse(path, media_type="application/pdf", filename=path.split("/")[-1].split("\\")[-1])
+def _safe_report_path(filename: str):
+    """Resolve a report filename to a path strictly inside OUTPUT_DIR — never
+    trust a path parameter directly (directory traversal)."""
+    from .report import _REPORT_FILENAME_RE  # whitelist: only our own naming scheme
+    if not _REPORT_FILENAME_RE.match(filename):
+        raise HTTPException(400, "Invalid report filename")
+    path = (config.OUTPUT_DIR / filename).resolve()
+    if path.parent != config.OUTPUT_DIR.resolve() or not path.exists():
+        raise HTTPException(404, "Report not found")
+    return path
 
 
-@app.get("/api/report/full")
-def report_full():
-    from .report import build_report
-    path = build_report()
-    return FileResponse(path, media_type="application/pdf", filename=path.split("/")[-1].split("\\")[-1])
+def _resolve_recipients(recipient_ids: list[int] | None, recipient: str | None) -> list[str]:
+    emails: list[str] = []
+    if recipient_ids:
+        by_id = {r["id"]: r["email"] for r in services.list_recipients()}
+        emails += [by_id[i] for i in recipient_ids if i in by_id]
+    if recipient:
+        emails.append(recipient)
+    if not emails and config.REPORT_EMAIL_DEFAULT_RECIPIENT:
+        emails.append(config.REPORT_EMAIL_DEFAULT_RECIPIENT)
+    return emails
 
 
+@app.get("/api/reports")
+def list_reports():
+    from .report import list_reports as _list
+    return {"reports": _list(), "recipients": services.list_recipients()}
+
+
+@app.post("/api/reports/generate")
+def generate_report(payload: EmailReportIn = EmailReportIn()):
+    from .report import build_report, build_top5_report
+    path = build_report() if payload.report == "full" else build_top5_report()
+    return {"filename": Path(path).name}
+
+
+@app.get("/api/reports/{filename}")
+def download_report(filename: str):
+    path = _safe_report_path(filename)
+    return FileResponse(path, media_type="application/pdf", filename=filename)
+
+
+@app.post("/api/reports/{filename}/send-email")
+def send_existing_report(filename: str, payload: SendExistingIn = SendExistingIn()):
+    from .emailer import send_report_email
+    path = _safe_report_path(filename)
+    to = _resolve_recipients(payload.recipient_ids, payload.recipient)
+    if not to:
+        raise HTTPException(400, "No recipient given and no default is configured")
+    try:
+        send_report_email(str(path), recipient=to, subject=payload.subject)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "sent_to": to}
+
+
+# Legacy one-shot endpoint (generate + send immediately) — kept for the
+# original "Send report by email" quick-action.
 @app.post("/api/report/send-email")
 def send_report_email_route(payload: EmailReportIn = EmailReportIn()):
     from .emailer import send_report_email
     from .report import build_report, build_top5_report
 
     path = build_report() if payload.report == "full" else build_top5_report()
+    to = _resolve_recipients(payload.recipient_ids, payload.recipient)
+    if not to:
+        raise HTTPException(400, "No recipient given and no default is configured")
     try:
-        send_report_email(path, recipient=payload.recipient, subject=payload.subject)
+        send_report_email(path, recipient=to, subject=payload.subject)
     except RuntimeError as e:
         raise HTTPException(400, str(e))
-    return {"ok": True, "sent_to": payload.recipient or config.REPORT_EMAIL_DEFAULT_RECIPIENT}
+    return {"ok": True, "sent_to": to}
+
+
+# ---------------------------------------------------------------------------
+# Report recipients — managed entirely in-app, independent of Power Automate
+# ---------------------------------------------------------------------------
+
+@app.get("/api/recipients")
+def get_recipients():
+    return services.list_recipients()
+
+
+@app.post("/api/recipients")
+def add_recipient_route(payload: RecipientIn):
+    try:
+        return services.add_recipient(payload.email, payload.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/recipients/{rid}")
+def delete_recipient_route(rid: int):
+    services.delete_recipient(rid)
+    return {"ok": True}
 
 
 @app.on_event("startup")

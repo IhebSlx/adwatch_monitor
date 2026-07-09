@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from . import config
 from .db import SessionLocal
-from .models import Ad, CollectionRun, Company, CompanyPage, WeeklyCompanyMetric
+from .models import Ad, CollectionRun, Company, CompanyPage, ReportRecipient, WeeklyCompanyMetric
 
 STATUS_LABELS = {
     "pending": "Not fetched yet",
@@ -223,3 +223,39 @@ def latest_week_detail(company_id: int) -> dict:
                     "landing_url": a.landing_url,
                 })
         return {"has_run": True, "week_start": week.isoformat(), "pages": pages, "ads": ads}
+
+
+# ---------------------------------------------------------------------------
+# Report recipients — managed entirely in-app (see adwatch.emailer)
+# ---------------------------------------------------------------------------
+
+def list_recipients() -> list[dict]:
+    with SessionLocal() as s:
+        rows = s.scalars(select(ReportRecipient).order_by(ReportRecipient.added_at)).all()
+        return [{"id": r.id, "name": r.name, "email": r.email, "active": r.active} for r in rows]
+
+
+def add_recipient(email: str, name: str | None = None) -> dict:
+    email = (email or "").strip()
+    if not email or "@" not in email:
+        raise ValueError("A valid email address is required")
+    with SessionLocal() as s:
+        existing = s.scalar(select(ReportRecipient).where(ReportRecipient.email == email))
+        if existing:
+            if existing.active:
+                raise ValueError("That recipient is already in the list")
+            existing.active = True
+            s.commit()
+            return {"id": existing.id, "email": existing.email}
+        r = ReportRecipient(email=email, name=(name or "").strip() or None, active=True)
+        s.add(r)
+        s.commit()
+        return {"id": r.id, "email": r.email}
+
+
+def delete_recipient(rid: int) -> None:
+    with SessionLocal() as s:
+        r = s.get(ReportRecipient, rid)
+        if r:
+            s.delete(r)
+            s.commit()

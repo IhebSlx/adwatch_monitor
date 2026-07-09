@@ -1,7 +1,15 @@
-"""Generate the weekly PDF report from stored metrics."""
+"""Generate the weekly PDF report from stored metrics.
+
+Filenames are named after the ISO calendar week (e.g. adwatch_top5_KW29_2026.pdf)
+rather than the exact day, since one report is meant to represent one week.
+Generating again within the same week never overwrites the previous file —
+it gets an incrementing suffix instead (_01, _02, ...), so every past report
+stays available in output/."""
 from __future__ import annotations
 
 import datetime as dt
+import re
+from pathlib import Path
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -27,11 +35,47 @@ def _eur(v) -> str:
     return f"€{v:,.0f}".replace(",", ".")
 
 
-def build_report(path: str | None = None) -> str:
+def week_label(d: dt.date | None = None) -> str:
+    """'KW29_2026' — ISO calendar week, filename-safe."""
+    d = d or dt.date.today()
+    iso_year, iso_week, _ = d.isocalendar()
+    return f"KW{iso_week:02d}_{iso_year}"
+
+
+def next_report_path(prefix: str, label: str | None = None) -> Path:
+    """First free path for `{prefix}_{label}.pdf`, else `_01`, `_02`, ... so an
+    existing report for that week is never overwritten."""
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    label = label or week_label()
+    base = config.OUTPUT_DIR / f"{prefix}_{label}.pdf"
+    if not base.exists():
+        return base
+    n = 1
+    while True:
+        candidate = config.OUTPUT_DIR / f"{prefix}_{label}_{n:02d}.pdf"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+_REPORT_FILENAME_RE = re.compile(r"^adwatch_(top5|report)_(KW\d{2}_\d{4})(?:_(\d{2}))?\.pdf$")
+
+
+def parse_report_filename(filename: str) -> dict | None:
+    """Reverse of the naming scheme, for the reports-history listing.
+    Returns {report_type, label, version} or None if it doesn't match."""
+    m = _REPORT_FILENAME_RE.match(filename)
+    if not m:
+        return None
+    kind, label, version = m.groups()
+    return {"report_type": "top5" if kind == "top5" else "full",
+           "label": label, "version": int(version) if version else None}
+
+
+def build_report(path: str | None = None) -> str:
     if path is None:
-        stamp = dt.date.today().isoformat()
-        path = str(config.OUTPUT_DIR / f"adwatch_report_{stamp}.pdf")
+        path = str(next_report_path("adwatch_report"))
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     data = latest_metrics()
     styles = getSampleStyleSheet()
@@ -140,10 +184,9 @@ def _signal(cats: dict, products: list) -> str:
 
 def build_top5_report(path: str | None = None) -> str:
     """A focused PDF: the 5 most active advertisers this week, with insights."""
-    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if path is None:
-        stamp = dt.date.today().isoformat()
-        path = str(config.OUTPUT_DIR / f"adwatch_top5_{stamp}.pdf")
+        path = str(next_report_path("adwatch_top5"))
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     data = [d for d in latest_metrics() if d["has_data"] and (d["total_active_ads"] or 0) > 0]
     # rank by activity score (falls back to ad count for rows without one)
@@ -204,3 +247,29 @@ def build_top5_report(path: str | None = None) -> str:
         "Ranked by number of active ads in the latest weekly collection.", note))
     doc.build(story)
     return path
+
+
+REPORT_TYPE_LABEL = {"top5": "Top 5", "full": "Full report"}
+
+
+def list_reports() -> list[dict]:
+    """Every generated report still on disk, newest first."""
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = []
+    for f in config.OUTPUT_DIR.glob("adwatch_*.pdf"):
+        parsed = parse_report_filename(f.name)
+        stat = f.stat()
+        week = (parsed or {}).get("label", "").replace("_", " ")
+        version = (parsed or {}).get("version")
+        label = f"{REPORT_TYPE_LABEL.get((parsed or {}).get('report_type'), 'Report')} — {week or f.stem}"
+        if version:
+            label += f" (v{version})"
+        out.append({
+            "filename": f.name,
+            "report_type": (parsed or {}).get("report_type", "unknown"),
+            "label": label,
+            "size_bytes": stat.st_size,
+            "created_at": dt.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="minutes"),
+        })
+    out.sort(key=lambda r: r["created_at"], reverse=True)
+    return out
