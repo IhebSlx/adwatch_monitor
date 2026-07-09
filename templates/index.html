@@ -121,6 +121,30 @@
       </div>
 
       <div class="card">
+        <h2>Automatic schedule</h2>
+        <p class="hint">Runs inside the app while it's open (<code>python run.py serve</code>) — the dashboard
+          doesn't need to stay open in a browser tab, but the server process does.</p>
+        <div class="inline-form" style="margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="fetchEnabled"> Auto-fetch ads on</label>
+          <select id="fetchDay"></select>
+          <span>at</span>
+          <input id="fetchTime" type="time" style="flex:0 0 auto">
+        </div>
+        <div class="inline-form" style="margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="sendEnabled"> Auto-send report on</label>
+          <select id="sendDay"></select>
+          <span>at</span>
+          <input id="sendTime" type="time" style="flex:0 0 auto">
+          <select id="sendReportType">
+            <option value="top5">Top 5</option>
+            <option value="full">Full</option>
+          </select>
+        </div>
+        <button id="saveScheduleBtn" class="btn btn-primary">Save schedule</button>
+        <p class="hint" id="scheduleNextRun" style="margin-top:8px"></p>
+      </div>
+
+      <div class="card">
         <h2>Generate a new report</h2>
         <div class="inline-form">
           <select id="reportTypeSelect" style="flex:0 0 auto">

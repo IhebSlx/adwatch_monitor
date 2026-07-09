@@ -62,18 +62,28 @@ class EmailReportIn(BaseModel):
     report: str = "top5"                    # top5 | full
     recipient_ids: list[int] | None = None  # selected saved recipients (see ReportRecipient)
     recipient: str | None = None            # ad-hoc single address, combined with recipient_ids
-    subject: str = "AdWatch Weekly Report"
+    subject: str | None = None              # defaults to 'Bericht-KW-<n>' from the filename
 
 
 class SendExistingIn(BaseModel):
     recipient_ids: list[int] | None = None
     recipient: str | None = None
-    subject: str = "AdWatch Weekly Report"
+    subject: str | None = None              # defaults to 'Bericht-KW-<n>' from the filename
 
 
 class RecipientIn(BaseModel):
     email: str
     name: str | None = None
+
+
+class ScheduleIn(BaseModel):
+    fetch_enabled: bool | None = None
+    fetch_day: int | None = None      # 0=Mon .. 6=Sun
+    fetch_time: str | None = None     # 'HH:MM'
+    send_enabled: bool | None = None
+    send_day: int | None = None
+    send_time: str | None = None
+    send_report: str | None = None    # top5 | full
 
 
 class ConfirmIn(BaseModel):
@@ -336,12 +346,14 @@ def download_report(filename: str):
 @app.post("/api/reports/{filename}/send-email")
 def send_existing_report(filename: str, payload: SendExistingIn = SendExistingIn()):
     from .emailer import send_report_email
+    from .report import subject_for_filename
     path = _safe_report_path(filename)
     to = _resolve_recipients(payload.recipient_ids, payload.recipient)
     if not to:
         raise HTTPException(400, "No recipient given and no default is configured")
+    subject = payload.subject or subject_for_filename(filename)
     try:
-        send_report_email(str(path), recipient=to, subject=payload.subject)
+        send_report_email(str(path), recipient=to, subject=subject)
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "sent_to": to}
@@ -351,15 +363,17 @@ def send_existing_report(filename: str, payload: SendExistingIn = SendExistingIn
 # original "Send report by email" quick-action.
 @app.post("/api/report/send-email")
 def send_report_email_route(payload: EmailReportIn = EmailReportIn()):
+    import os
     from .emailer import send_report_email
-    from .report import build_report, build_top5_report
+    from .report import build_report, build_top5_report, subject_for_filename
 
     path = build_report() if payload.report == "full" else build_top5_report()
     to = _resolve_recipients(payload.recipient_ids, payload.recipient)
     if not to:
         raise HTTPException(400, "No recipient given and no default is configured")
+    subject = payload.subject or subject_for_filename(os.path.basename(path))
     try:
-        send_report_email(path, recipient=to, subject=payload.subject)
+        send_report_email(path, recipient=to, subject=subject)
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "sent_to": to}
@@ -388,7 +402,26 @@ def delete_recipient_route(rid: int):
     return {"ok": True}
 
 
+@app.get("/api/schedule")
+def get_schedule_route():
+    from . import scheduler
+    return {**services.get_schedule(), "next_run": scheduler.next_run_times()}
+
+
+@app.put("/api/schedule")
+def save_schedule_route(payload: ScheduleIn):
+    from . import scheduler
+    try:
+        cfg = services.save_schedule(**payload.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    scheduler.apply_schedule()
+    return {**cfg, "next_run": scheduler.next_run_times()}
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
     seed_companies_if_empty()
+    from . import scheduler
+    scheduler.start()

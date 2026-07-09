@@ -7,6 +7,7 @@ fastapi>=0.110
 uvicorn>=0.29
 pydantic>=2.0
 requests>=2.31
+APScheduler>=3.10
 
 # Optional — only if you set ANTHROPIC_API_KEY to upgrade ad classification
 # to Claude Haiku (otherwise a deterministic keyword classifier is used).

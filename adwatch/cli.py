@@ -1,4 +1,4 @@
-"""CLI: init-db | run | report | serve | reseed"""
+"""CLI: init-db | run | report | serve | reseed | send-weekly"""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,8 @@ def main() -> None:
     sub.add_parser("run", help="Run one collection cycle (collect -> classify -> store)")
     sub.add_parser("report", help="Generate the PDF report from stored data")
     sub.add_parser("reseed", help="Reset the company list from config/companies.yaml")
+    weekly = sub.add_parser("send-weekly", help="Build the top5 report and email it to all active recipients")
+    weekly.add_argument("--full", action="store_true", help="Send the full report instead of top5")
     serve = sub.add_parser("serve", help="Start the dashboard")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
@@ -39,6 +41,14 @@ def main() -> None:
     elif args.cmd == "reseed":
         from .collect.pipeline import reseed_from_file
         print("Re-seeded companies:", reseed_from_file())
+
+    elif args.cmd == "send-weekly":
+        from .emailer import send_weekly_report
+        result = send_weekly_report(full=args.full)
+        if not result["sent"]:
+            print("Report built but not sent:", result["path"], "—", result["reason"])
+        else:
+            print(f"Sent {result['path']} ({result['subject']}) to {', '.join(result['recipients'])}")
 
     elif args.cmd == "serve":
         import uvicorn

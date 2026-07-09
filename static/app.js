@@ -537,11 +537,53 @@
       } catch (e) { alert(e.message); }
       finally { btn.disabled = false; btn.textContent = "Generate"; }
     });
+
+    fillDaySelect($("#fetchDay"));
+    fillDaySelect($("#sendDay"));
+    $("#saveScheduleBtn").addEventListener("click", async () => {
+      const btn = $("#saveScheduleBtn");
+      btn.disabled = true; btn.textContent = "Saving…";
+      try {
+        await api("/api/schedule", "PUT", {
+          fetch_enabled: $("#fetchEnabled").checked,
+          fetch_day: Number($("#fetchDay").value),
+          fetch_time: $("#fetchTime").value,
+          send_enabled: $("#sendEnabled").checked,
+          send_day: Number($("#sendDay").value),
+          send_time: $("#sendTime").value,
+          send_report: $("#sendReportType").value,
+        });
+        await loadSchedule();
+      } catch (e) { alert(e.message); }
+      finally { btn.disabled = false; btn.textContent = "Save schedule"; }
+    });
+  }
+
+  const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  function fillDaySelect(sel) {
+    sel.innerHTML = DAY_NAMES.map((d, i) => `<option value="${i}">${d}</option>`).join("");
+  }
+
+  async function loadSchedule() {
+    const s = await api("/api/schedule");
+    $("#fetchEnabled").checked = s.fetch_enabled;
+    $("#fetchDay").value = s.fetch_day;
+    $("#fetchTime").value = s.fetch_time;
+    $("#sendEnabled").checked = s.send_enabled;
+    $("#sendDay").value = s.send_day;
+    $("#sendTime").value = s.send_time;
+    $("#sendReportType").value = s.send_report;
+    const next = s.next_run || {};
+    const fmt = (iso) => iso ? new Date(iso).toLocaleString("de-DE") : "not scheduled";
+    $("#scheduleNextRun").textContent = `Next fetch: ${fmt(next.fetch)} · Next send: ${fmt(next.send)}`;
   }
 
   // ------------------------------------------------------------------ Reports tab
   let REPORTS_STATE = null;
-  const checkedRecipients = new Set();
+  // Recipients are checked by default; this tracks ones the user explicitly
+  // unchecked, so newly added recipients always start checked too.
+  const uncheckedRecipients = new Set();
 
   function fmtSize(bytes) {
     if (bytes < 1024) return `${bytes} B`;
@@ -561,24 +603,21 @@
       box.innerHTML = `<p class="hint">No recipients yet — add one below.</p>`;
       return;
     }
-    if (checkedRecipients.size === 0) {
-      recipients.filter(r => r.active).forEach(r => checkedRecipients.add(r.id));
-    }
     box.innerHTML = recipients.map(r => `
       <div class="page-item">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" class="recipient-check" data-rid="${r.id}" ${checkedRecipients.has(r.id) ? "checked" : ""}>
+          <input type="checkbox" class="recipient-check" data-rid="${r.id}" ${uncheckedRecipients.has(r.id) ? "" : "checked"}>
           <span><b>${esc(r.name || r.email)}</b>${r.name ? ` <span class="muted">${esc(r.email)}</span>` : ""}</span>
         </label>
         <button class="btn btn-sm del-recipient-btn" data-rid="${r.id}">Remove</button>
       </div>`).join("");
     $$(".recipient-check", box).forEach(cb => cb.addEventListener("change", () => {
       const rid = Number(cb.dataset.rid);
-      if (cb.checked) checkedRecipients.add(rid); else checkedRecipients.delete(rid);
+      if (cb.checked) uncheckedRecipients.delete(rid); else uncheckedRecipients.add(rid);
     }));
     $$(".del-recipient-btn", box).forEach(btn => btn.addEventListener("click", async () => {
       const rid = Number(btn.dataset.rid);
-      checkedRecipients.delete(rid);
+      uncheckedRecipients.delete(rid);
       await api(`/api/recipients/${rid}`, "DELETE");
       await loadReports();
     }));
@@ -600,7 +639,9 @@
     $$(".send-report-btn", $("#reportsTableBody")).forEach(btn => {
       btn.addEventListener("click", async () => {
         const filename = btn.closest("tr").dataset.filename;
-        const recipient_ids = [...checkedRecipients];
+        const recipient_ids = REPORTS_STATE.recipients
+          .filter(r => !uncheckedRecipients.has(r.id))
+          .map(r => r.id);
         if (!recipient_ids.length && !REPORTS_STATE.recipients.length) {
           alert("Add a recipient first.");
           return;
@@ -622,4 +663,5 @@
   wireStatic();
   loadState();
   loadReports();
+  loadSchedule();
 })();

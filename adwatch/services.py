@@ -4,11 +4,15 @@ Identity mutations (linking/unlinking pages) live in adwatch.identity.resolver;
 this module only reads/aggregates for display, plus basic company CRUD."""
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import select
 
 from . import config
 from .db import SessionLocal
-from .models import Ad, CollectionRun, Company, CompanyPage, ReportRecipient, WeeklyCompanyMetric
+from .models import (
+    Ad, CollectionRun, Company, CompanyPage, ReportRecipient, ScheduleConfig, WeeklyCompanyMetric,
+)
 
 STATUS_LABELS = {
     "pending": "Not fetched yet",
@@ -259,3 +263,49 @@ def delete_recipient(rid: int) -> None:
         if r:
             s.delete(r)
             s.commit()
+
+
+# ---------------------------------------------------------------------------
+# Schedule config — single row (id=1), read by the in-process scheduler
+# ---------------------------------------------------------------------------
+
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _schedule_to_dict(r: ScheduleConfig) -> dict:
+    return {
+        "fetch_enabled": r.fetch_enabled, "fetch_day": r.fetch_day, "fetch_time": r.fetch_time,
+        "send_enabled": r.send_enabled, "send_day": r.send_day, "send_time": r.send_time,
+        "send_report": r.send_report,
+    }
+
+
+def get_schedule() -> dict:
+    with SessionLocal() as s:
+        r = s.get(ScheduleConfig, 1)
+        if not r:
+            r = ScheduleConfig(id=1)
+            s.add(r)
+            s.commit()
+        return _schedule_to_dict(r)
+
+
+def save_schedule(**fields) -> dict:
+    for key in ("fetch_time", "send_time"):
+        if key in fields and fields[key] is not None and not _TIME_RE.match(fields[key]):
+            raise ValueError(f"{key} must be 'HH:MM' 24h format")
+    for key in ("fetch_day", "send_day"):
+        if key in fields and fields[key] is not None and not (0 <= int(fields[key]) <= 6):
+            raise ValueError(f"{key} must be 0 (Mon) .. 6 (Sun)")
+    if fields.get("send_report") not in (None, "top5", "full"):
+        raise ValueError("send_report must be 'top5' or 'full'")
+    with SessionLocal() as s:
+        r = s.get(ScheduleConfig, 1)
+        if not r:
+            r = ScheduleConfig(id=1)
+            s.add(r)
+        for key, value in fields.items():
+            if value is not None and hasattr(r, key):
+                setattr(r, key, value)
+        s.commit()
+        return _schedule_to_dict(r)

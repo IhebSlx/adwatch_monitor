@@ -158,3 +158,19 @@ class ReportRecipient(Base):
     email: Mapped[str] = mapped_column(String(300))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     added_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
+class ScheduleConfig(Base):
+    """Single-row table (id=1) holding when the app auto-fetches ads and
+    auto-emails the weekly report. Edited from the dashboard's Settings panel;
+    the in-process scheduler (see scheduler.py) re-reads it whenever it's saved."""
+    __tablename__ = "schedule_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fetch_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    fetch_day: Mapped[int] = mapped_column(Integer, default=6)   # 0=Mon .. 6=Sun (cron 'day_of_week')
+    fetch_time: Mapped[str] = mapped_column(String(5), default="22:00")  # 'HH:MM'
+    send_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    send_day: Mapped[int] = mapped_column(Integer, default=0)    # Monday
+    send_time: Mapped[str] = mapped_column(String(5), default="07:00")
+    send_report: Mapped[str] = mapped_column(String(10), default="top5")  # top5 | full

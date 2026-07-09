@@ -72,6 +72,27 @@ def parse_report_filename(filename: str) -> dict | None:
            "label": label, "version": int(version) if version else None}
 
 
+def subject_for_filename(filename: str) -> str:
+    """'Bericht-KW-29' from a report filename like adwatch_top5_KW29_2026.pdf;
+    falls back to a generic subject if the filename doesn't match the naming
+    scheme (e.g. a renamed or pre-existing file)."""
+    parsed = parse_report_filename(filename)
+    if not parsed:
+        return "AdWatch Weekly Report"
+    week = parsed["label"].split("_")[0][2:]  # 'KW29_2026' -> '29'
+    return f"Bericht-KW-{week}"
+
+
+def week_str_for_filename(filename: str) -> str:
+    """'KW 29' from a report filename, for use in the email body. Empty
+    string if the filename doesn't match the naming scheme."""
+    parsed = parse_report_filename(filename)
+    if not parsed:
+        return ""
+    week = parsed["label"].split("_")[0][2:]
+    return f"KW {week}"
+
+
 def build_report(path: str | None = None) -> str:
     if path is None:
         path = str(next_report_path("adwatch_report"))
