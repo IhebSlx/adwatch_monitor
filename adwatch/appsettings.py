@@ -65,13 +65,26 @@ def save_settings(changes: dict) -> dict:
     return {"saved": sorted(valid.keys())}
 
 
-def test_connection(which: str) -> dict:
-    """Validate a saved credential against its provider. Uses the EFFECTIVE
-    (saved) value — so the flow is: enter key → Save → Test. Never sends a
-    secret back to the client. Returns {ok, detail}."""
+def reveal(key: str) -> dict:
+    """Return the actual effective value of one setting (for the Settings
+    page's show/hide eye). On-demand only — secrets are still masked in the
+    normal GET /api/settings; this ships the real value solely when the user
+    explicitly clicks reveal. Behind auth when ACCESS_PASSWORD is set."""
+    keys = {s["key"] for s in config.SETTINGS_SPEC}
+    if key not in keys:
+        return {"value": None}
+    return {"value": config.resolve_setting(key)}
+
+
+def test_connection(which: str, value: str | None = None) -> dict:
+    """Validate a credential against its provider. If `value` is given (the key
+    the user just typed but hasn't saved), test THAT — so Test reflects what
+    you're about to save, not the old stored key. Otherwise test the effective
+    saved value. Never echoes the secret back. Returns {ok, detail}."""
+    value = (value or "").strip() or None
     try:
         if which == "apify":
-            token = config.APIFY_API_TOKEN
+            token = value or config.APIFY_API_TOKEN
             if not token:
                 return {"ok": False, "detail": "No Apify token set."}
             r = requests.get("https://api.apify.com/v2/users/me",
@@ -82,7 +95,7 @@ def test_connection(which: str) -> dict:
             return {"ok": False, "detail": f"Apify rejected the token (HTTP {r.status_code})."}
 
         if which == "serper":
-            key = config.SERPER_API_KEY
+            key = value or config.SERPER_API_KEY
             if not key:
                 return {"ok": False, "detail": "No Serper key set."}
             r = requests.post(config.SERPER_SEARCH_URL,
@@ -93,7 +106,7 @@ def test_connection(which: str) -> dict:
             return {"ok": False, "detail": f"Serper rejected the key (HTTP {r.status_code})."}
 
         if which == "anthropic":
-            key = config.ANTHROPIC_API_KEY
+            key = value or config.ANTHROPIC_API_KEY
             if not key:
                 return {"ok": False, "detail": "No Anthropic key set."}
             r = requests.get("https://api.anthropic.com/v1/models",

@@ -157,6 +157,11 @@ class SettingsIn(BaseModel):
 
 class TestConnIn(BaseModel):
     which: str
+    value: str | None = None    # test a just-typed (unsaved) key, if provided
+
+
+class RevealIn(BaseModel):
+    key: str
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +213,12 @@ def save_settings_route(payload: SettingsIn):
 
 @app.post("/api/settings/test")
 def test_connection_route(payload: TestConnIn):
-    return appsettings.test_connection(payload.which)
+    return appsettings.test_connection(payload.which, payload.value)
+
+
+@app.post("/api/settings/reveal")
+def reveal_setting_route(payload: RevealIn):
+    return appsettings.reveal(payload.key)
 
 
 @app.get("/api/divergence")

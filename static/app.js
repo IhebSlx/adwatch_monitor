@@ -1240,15 +1240,23 @@
       </div>`).join("");
 
     $$(".set-test").forEach(btn => btn.addEventListener("click", () => runSettingTest(btn)));
+    $$(".set-eye").forEach(btn => btn.addEventListener("click", () => toggleReveal(btn)));
+    // typing marks the field dirty so Save/Test use the new value (not a
+    // programmatically-revealed one that the user never edited)
+    $$(".set-input").forEach(inp => inp.addEventListener("input", () => { inp.dataset.dirty = "1"; }));
     $$(".set-reset").forEach(btn => btn.addEventListener("click", () => {
       const key = btn.dataset.key;
       SETTINGS_CLEARED.add(key);
       const inp = $(`.set-input[data-key="${key}"]`);
       inp.value = ""; inp.disabled = true; inp.placeholder = "will reset to .env / default on save";
+      delete inp.dataset.dirty;
       btn.remove();
     }));
     $("#settingsSaveHint").textContent = "";
   }
+
+  // provider name (test endpoint) <-> config key, so auto-test after save works
+  const SET_PROVIDER_BY_KEY = { APIFY_API_TOKEN: "apify", SERPER_API_KEY: "serper", ANTHROPIC_API_KEY: "anthropic" };
 
   function settingFieldHtml(f) {
     SETTINGS_ORIG[f.key] = f.secret ? "" : (f.value || "");
@@ -1257,8 +1265,12 @@
       ? `<button class="btn btn-sm btn-ghost set-reset" data-key="${f.key}" title="Remove your override, fall back to .env / default">Reset</button>` : "";
     const test = f.test
       ? `<button class="btn btn-sm set-test" data-test="${esc(f.test)}">Test</button>` : "";
-    const input = f.secret
-      ? `<input type="password" class="set-input" data-key="${f.key}" autocomplete="off" placeholder="${f.configured ? esc(f.hint) + " · set — leave blank to keep" : "not set"}">`
+    const inputEl = f.secret
+      ? `<div class="set-input-wrap">
+           <input type="password" class="set-input" data-key="${f.key}" data-secret="1" autocomplete="off"
+                  placeholder="${f.configured ? esc(f.hint) + " · gesetzt — zum Ändern eingeben" : "nicht gesetzt"}">
+           <button type="button" class="set-eye" data-key="${f.key}" title="Anzeigen / verbergen" aria-label="Anzeigen">👁</button>
+         </div>`
       : `<input type="text" class="set-input" data-key="${f.key}" value="${esc(f.value || "")}" autocomplete="off">`;
     return `
       <div class="set-field">
@@ -1266,19 +1278,42 @@
           <label class="set-label">${esc(f.label)}</label>
           ${badge}<span class="spacer"></span>${test}${reset}
         </div>
-        ${input}
-        <span class="set-test-result" data-for="${esc(f.test || "")}"></span>
+        ${inputEl}
+        <span class="set-test-result"></span>
         ${f.help ? `<p class="hint">${esc(f.help)}</p>` : ""}
       </div>`;
   }
 
+  // eye: reveal the stored secret (fetched on demand) or hide it again
+  async function toggleReveal(btn) {
+    const key = btn.dataset.key;
+    const inp = $(`.set-input[data-key="${key}"]`);
+    if (inp.disabled) return;
+    if (inp.type === "password") {
+      if (!inp.value && inp.dataset.dirty !== "1") {
+        try { const r = await api("/api/settings/reveal", "POST", { key }); inp.value = r.value || ""; inp.dataset.revealed = "1"; }
+        catch (e) { toast(`Anzeigen fehlgeschlagen: ${e.message}`, "error"); return; }
+      }
+      inp.type = "text"; btn.textContent = "🙈"; btn.classList.add("on");
+    } else {
+      inp.type = "password"; btn.textContent = "👁"; btn.classList.remove("on");
+      // a value that was only revealed (never typed) is cleared on hide so it
+      // re-masks and can't be accidentally re-saved
+      if (inp.dataset.revealed === "1" && inp.dataset.dirty !== "1") { inp.value = ""; delete inp.dataset.revealed; }
+    }
+  }
+
   async function runSettingTest(btn) {
     const which = btn.dataset.test;
-    const result = $(`.set-test-result[data-for="${which}"]`);
+    const field = btn.closest(".set-field");
+    const inp = field.querySelector(".set-input");
+    // test the just-typed value when the user has entered one; else the saved key
+    const value = (inp && inp.dataset.dirty === "1") ? inp.value.trim() : undefined;
+    const result = field.querySelector(".set-test-result");
     btn.disabled = true; const label = btn.textContent; btn.textContent = "Testing…";
     result.textContent = ""; result.className = "set-test-result";
     try {
-      const res = await api("/api/settings/test", "POST", { which });
+      const res = await api("/api/settings/test", "POST", value ? { which, value } : { which });
       result.textContent = (res.ok ? "✓ " : "✗ ") + res.detail;
       result.classList.add(res.ok ? "set-ok" : "set-fail");
     } catch (e) {
@@ -1292,20 +1327,24 @@
       const key = inp.dataset.key;
       if (SETTINGS_CLEARED.has(key)) { changes[key] = ""; return; }
       const v = inp.value.trim();
-      if (inp.type === "password") { if (v !== "") changes[key] = v; }   // blank secret = keep
-      else if (v !== (SETTINGS_ORIG[key] || "")) { changes[key] = v; }
+      if (inp.dataset.secret === "1") {
+        if (inp.dataset.dirty === "1" && v !== "") changes[key] = v;   // only a genuinely typed secret
+      } else if (v !== (SETTINGS_ORIG[key] || "")) { changes[key] = v; }
     });
     const hint = $("#settingsSaveHint");
-    if (!Object.keys(changes).length) { hint.textContent = "No changes to save."; return; }
+    if (!Object.keys(changes).length) { hint.textContent = "Keine Änderungen zu speichern."; return; }
     const btn = $("#settingsSaveBtn");
-    btn.disabled = true; btn.textContent = "Saving…";
+    btn.disabled = true; btn.textContent = "Speichern…";
     try {
       const res = await api("/api/settings", "PUT", { settings: changes });
-      toast(`Saved ${res.saved.length} setting${res.saved.length === 1 ? "" : "s"}.`, "info");
+      toast(`${res.saved.length} Einstellung${res.saved.length === 1 ? "" : "en"} gespeichert.`, "info");
+      const savedProviders = res.saved.map(k => SET_PROVIDER_BY_KEY[k]).filter(Boolean);
       SETTINGS_LOADED = false;
       await loadSettings();                     // refresh masks + source badges
       if (typeof loadState === "function") loadState();  // reflect e.g. apify_configured
-    } catch (e) { alert(`Could not save: ${e.message}`); }
+      // auto-test every credential that was just saved, so the ✓/✗ reflects the NEW key
+      savedProviders.forEach(prov => { const b = $(`.set-test[data-test="${prov}"]`); if (b) runSettingTest(b); });
+    } catch (e) { alert(`Speichern fehlgeschlagen: ${e.message}`); }
     finally { btn.disabled = false; btn.textContent = "Save settings"; }
   }
 

@@ -646,6 +646,15 @@ a.link:hover { text-decoration: underline; }
 .set-field-top { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; }
 .set-label { font-size: 13px; font-weight: 650; color: var(--ink); }
 .set-input { width: 100%; font-size: 13px; }
+.set-input-wrap { position: relative; display: block; }
+.set-input-wrap .set-input { padding-right: 40px; }
+.set-eye {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  border: none; background: transparent; cursor: pointer; font-size: 15px;
+  line-height: 1; padding: 4px 6px; border-radius: 6px; opacity: .7;
+}
+.set-eye:hover { opacity: 1; background: var(--bg-subtle); }
+.set-eye.on { opacity: 1; }
 .set-badge {
   display: inline-block; padding: 1.5px 8px; border-radius: 99px; font-size: 10px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .04em; border: 1px solid var(--border);
