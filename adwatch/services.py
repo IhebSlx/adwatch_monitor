@@ -40,7 +40,11 @@ def list_companies() -> list[dict]:
                 "status_label": STATUS_LABELS.get(c.resolution_status, c.resolution_status),
                 "page_name": c.page_name,
                 "page_id": c.page_id,
-                "candidates": c.candidates,
+                # `candidates` (the large scraped-snippet blob) is intentionally
+                # NOT included here — it dominated the /api/state payload (~4 MB).
+                # It's loaded on demand per company via /api/companies/{id}/detail
+                # when a Pages panel or the drawer actually needs it.
+                "has_candidates": bool(c.candidates),
                 "google_status": next((p.status for p in pages if p.source == "google"), None),
                 "pages": [{
                     "id": p.id, "source": p.source, "page_id": p.page_id, "page_name": p.page_name,

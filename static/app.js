@@ -5,6 +5,7 @@
 
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+  const debounce = (fn, ms = 200) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
   // ---------------------------------------------------------------- toasts
   // In-app notifications instead of browser alert() popups. Shadowing `alert`
@@ -211,7 +212,17 @@
 
   // ------------------------------------------------------------------ load + render
   async function loadState() {
-    STATE = await api("/api/state");
+    const notice = $("#noDataNotice");
+    if (!STATE) { notice.classList.remove("hidden"); notice.textContent = "Lädt…"; }
+    try {
+      STATE = await api("/api/state");
+    } catch (e) {
+      notice.classList.remove("hidden");
+      notice.innerHTML = `Verbindung zum Server fehlgeschlagen. `
+        + `<button class="btn btn-sm" id="retryStateBtn">Erneut versuchen</button>`;
+      $("#retryStateBtn").addEventListener("click", loadState);
+      return;                       // leave the last good render in place, don't blank the app
+    }
     render();
     loadDivergence();   // independent fetch — never blocks the main render
   }
@@ -262,9 +273,27 @@
   function refreshOpenPagesBodies() {
     expandedPages.forEach(id => {
       if (!document.getElementById(`pages-${id}`)) return;
-      const c = STATE.companies.find(x => x.id === id);
-      if (c) renderPagesBody(id, c);
+      renderPagesBodyLazy(id);
     });
+  }
+
+  // candidates are no longer shipped in /api/state (they were ~4 MB); fetch the
+  // one company's candidate list on demand, cache it on the STATE object, then
+  // render the Pages panel.
+  async function renderPagesBodyLazy(id) {
+    const c = STATE.companies.find(x => x.id === id);
+    const el = document.getElementById(`pages-${id}`);
+    if (!c) { if (el) el.innerHTML = `<p class="hint">Loading…</p>`; return; }
+    if (c.candidates === undefined) {
+      if (c.has_candidates) {
+        if (el) el.innerHTML = `<p class="hint">Loading…</p>`;
+        try { const d = await api(`/api/companies/${id}/detail`); c.candidates = d.company?.candidates || []; }
+        catch { c.candidates = []; }
+      } else {
+        c.candidates = [];
+      }
+    }
+    renderPagesBody(id, c);
   }
 
   function renderTopbar() {
@@ -373,14 +402,22 @@
       return COMP.direction === "desc" ? -cmp : cmp;
     });
 
-    $("#compFilterCount").textContent = `${rows.length}/${STATE.metrics.length} companies`;
+    // Cap the DOM: rendering all ~3,600 rows x 13 cols on every keystroke made
+    // the dashboard janky. Show the first RENDER_CAP after sort; the count text
+    // and a footer note make the truncation explicit (refine filters to narrow).
+    const RENDER_CAP = 300;
+    const total = rows.length;
+    const shown = rows.slice(0, RENDER_CAP);
+    $("#compFilterCount").textContent = total > RENDER_CAP
+      ? `${shown.length} von ${total} angezeigt (${STATE.metrics.length} gesamt) — Filter verfeinern`
+      : `${total}/${STATE.metrics.length} companies`;
     $$("#companyTable th[data-sort]").forEach(th => {
       th.classList.toggle("sorted-asc", th.dataset.sort === COMP.sort && COMP.direction === "asc");
       th.classList.toggle("sorted-desc", th.dataset.sort === COMP.sort && COMP.direction === "desc");
     });
 
     const body = $("#companyTableBody");
-    body.innerHTML = rows.map(m => {
+    body.innerHTML = shown.map(m => {
       const cats = m.ads_by_category || {};
       const delta = m.delta_ads;
       let deltaHtml = "";
@@ -409,15 +446,19 @@
         <td>${spendCell(m)}</td>
         <td class="muted">${esc(note)}</td>
       </tr>`;
-    }).join("");
-
-    $$("tr", body).forEach(tr => {
-      tr.addEventListener("click", () => {
-        // one pattern everywhere: a company click opens the full drawer
-        // (master data + identity + ad activity + current ad copies)
-        openCompanyDrawer(Number(tr.dataset.cid));
+    }).join("")
+      + (total > RENDER_CAP
+          ? `<tr><td colspan="13" class="muted" style="text-align:center;padding:12px">
+             … ${total - RENDER_CAP} weitere ausgeblendet — suchen oder filtern zum Eingrenzen</td></tr>`
+          : "");
+    // one delegated click listener (was one-per-row over thousands of rows)
+    if (!body.dataset.wired) {
+      body.dataset.wired = "1";
+      body.addEventListener("click", (e) => {
+        const tr = e.target.closest("tr[data-cid]");
+        if (tr) openCompanyDrawer(Number(tr.dataset.cid));
       });
-    });
+    }
   }
 
   function wireCompanyTableControls() {
@@ -425,8 +466,9 @@
     COMP_DROP.subSegment = mountCheckDropdown("compSubSegmentDrop", { placeholder: "All sub-segments", onChange: renderCompanyTable });
     COMP_DROP.kv = mountCheckDropdown("compKvDrop", { placeholder: "All KV", onChange: renderCompanyTable });
 
+    const debouncedRender = debounce(renderCompanyTable, 200);
     ["compSearch", "compMinTotal", "compMinMeta", "compMinGoogle"].forEach(id =>
-      $(`#${id}`).addEventListener("input", renderCompanyTable));
+      $(`#${id}`).addEventListener("input", debouncedRender));
     $("#compStatus").addEventListener("change", renderCompanyTable);
     $("#compRevenueHistory").addEventListener("change", renderCompanyTable);
     $("#compMoreFiltersBtn").addEventListener("click", () => {
@@ -1405,9 +1447,7 @@
         await ensureSearchTerm(id);
         row.classList.remove("hidden");
         btn.textContent = "Hide";
-        const c = STATE.companies.find(x => x.id === id);
-        if (c) renderPagesBody(id, c);
-        else $(`#pages-${id}`).innerHTML = `<p class="hint">Loading…</p>`;
+        renderPagesBodyLazy(id);
       }
     }));
 
