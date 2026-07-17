@@ -881,7 +881,7 @@
     wireCustomers();
     wireCompanyTableControls();
     wireLogsTabControls();
-    $("#settingsSaveBtn").addEventListener("click", saveSettings);
+    $$(".settings-save-btn").forEach(b => b.addEventListener("click", saveSettings));
 
     // restore the last-open tab after a refresh (default: dashboard) — AFTER
     // the wire* calls above, since showTab("customers") loads the table, which
@@ -1243,7 +1243,11 @@
     $$(".set-eye").forEach(btn => btn.addEventListener("click", () => toggleReveal(btn)));
     // typing marks the field dirty so Save/Test use the new value (not a
     // programmatically-revealed one that the user never edited)
-    $$(".set-input").forEach(inp => inp.addEventListener("input", () => { inp.dataset.dirty = "1"; }));
+    $$(".set-input").forEach(inp => inp.addEventListener("input", () => { inp.dataset.dirty = "1"; markSettingsDirty(); }));
+    // clear any stale dirty cue on (re)load
+    $("#settingsSaveHint").textContent = "";
+    $("#settingsSaveHint").classList.remove("dirty");
+    $$(".settings-save-btn").forEach(b => b.classList.remove("has-changes"));
     $$(".set-reset").forEach(btn => btn.addEventListener("click", () => {
       const key = btn.dataset.key;
       SETTINGS_CLEARED.add(key);
@@ -1333,19 +1337,26 @@
     });
     const hint = $("#settingsSaveHint");
     if (!Object.keys(changes).length) { hint.textContent = "Keine Änderungen zu speichern."; return; }
-    const btn = $("#settingsSaveBtn");
-    btn.disabled = true; btn.textContent = "Speichern…";
+    const btns = $$(".settings-save-btn");
+    btns.forEach(b => { b.disabled = true; b.textContent = "Speichern…"; });
     try {
       const res = await api("/api/settings", "PUT", { settings: changes });
       toast(`${res.saved.length} Einstellung${res.saved.length === 1 ? "" : "en"} gespeichert.`, "info");
       const savedProviders = res.saved.map(k => SET_PROVIDER_BY_KEY[k]).filter(Boolean);
       SETTINGS_LOADED = false;
-      await loadSettings();                     // refresh masks + source badges
+      await loadSettings();                     // refresh masks + source badges (clears dirty cue)
       if (typeof loadState === "function") loadState();  // reflect e.g. apify_configured
       // auto-test every credential that was just saved, so the ✓/✗ reflects the NEW key
       savedProviders.forEach(prov => { const b = $(`.set-test[data-test="${prov}"]`); if (b) runSettingTest(b); });
     } catch (e) { alert(`Speichern fehlgeschlagen: ${e.message}`); }
-    finally { btn.disabled = false; btn.textContent = "Save settings"; }
+    finally { $$(".settings-save-btn").forEach(b => { b.disabled = false; b.textContent = "Save settings"; }); }
+  }
+
+  // reflect unsaved changes in the sticky top bar + highlight the Save buttons
+  function markSettingsDirty() {
+    $("#settingsSaveHint").textContent = "● Ungespeicherte Änderungen";
+    $("#settingsSaveHint").classList.add("dirty");
+    $$(".settings-save-btn").forEach(b => b.classList.add("has-changes"));
   }
 
   function ensureCustomersLoaded() {

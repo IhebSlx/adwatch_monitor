@@ -667,6 +667,19 @@ a.link:hover { text-decoration: underline; }
 .set-test-result.set-fail { color: var(--danger); }
 .settings-foot { display: flex; align-items: center; gap: 14px; margin-top: 4px; }
 
+/* sticky Save bar at the top so you never scroll to save */
+.settings-topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+  padding: 14px 0 13px; margin-bottom: 14px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.settings-topbar-title h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.03em; }
+.settings-topbar-title p { margin: 5px 0 0; font-size: 13px; color: var(--muted); max-width: 640px; }
+.settings-topbar-actions { display: flex; align-items: center; gap: 12px; flex: none; }
+#settingsSaveHint.dirty { color: var(--warn); font-weight: 650; }
+.settings-save-btn.has-changes { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 26%, transparent); }
+
 /* ============================== toasts ============================== */
 /* In-app notifications (replaces browser alert() — see app.js `toast`). */
 .toast-stack {

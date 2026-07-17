@@ -442,14 +442,20 @@
 
     <!-- ================= TAB: Settings ================= -->
     <section id="tab-settings" class="tab-panel">
-      <header class="page-head">
-        <h1>Settings</h1>
-        <p>Your integrations — API keys and endpoints. Changes take effect immediately, no restart. Values live only in your local database.</p>
-      </header>
+      <div class="settings-topbar">
+        <div class="settings-topbar-title">
+          <h1>Settings</h1>
+          <p>Your integrations — changes take effect immediately, no restart. Values live only in your local database.</p>
+        </div>
+        <div class="settings-topbar-actions">
+          <span id="settingsSaveHint" class="hint" style="margin:0"></span>
+          <button class="btn btn-primary settings-save-btn">Save settings</button>
+        </div>
+      </div>
       <div id="settingsGroups"></div>
       <div class="settings-foot">
-        <button id="settingsSaveBtn" class="btn btn-primary">Save settings</button>
-        <span id="settingsSaveHint" class="hint" style="margin:0"></span>
+        <button class="btn btn-primary settings-save-btn">Save settings</button>
+        <span class="hint" style="margin:0">Änderungen gelten sofort — kein Neustart nötig.</span>
       </div>
     </section>
 
