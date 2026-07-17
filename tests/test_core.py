@@ -104,3 +104,34 @@ def test_failed_fetch_does_not_zero_metrics(temp_db):
     after = s.scalar(select(WeeklyCompanyMetric).where(WeeklyCompanyMetric.company_id == c.id))
     assert after.total_active_ads == 5, "failed fetch overwrote a good week with 0"
     s.close()
+
+
+def test_unlink_resets_collected_ads(temp_db):
+    """Unlinking a wrong page must clear its collected ads/score — otherwise
+    the wrong page's numbers linger on the company (the Bau-DL bug)."""
+    from adwatch.identity import resolver
+    from adwatch.models import Company, CompanyPage, CollectionRun, Ad, WeeklyCompanyMetric
+    from sqlalchemy import select
+    s = temp_db.SessionLocal()
+    c = Company(name="Wrong Page Co", resolution_status="confirmed", country="DE",
+                page_id="999", page_name="Wrong")
+    s.add(c); s.flush()
+    s.add(CompanyPage(company_id=c.id, source="meta", page_id="999", role="main", status="auto"))
+    run = CollectionRun(company_id=c.id, source="meta", week_start=dt.date(2026, 7, 6),
+                        page_id="999", status="ok", ads_scraped=42)
+    s.add(run); s.flush()
+    s.add(Ad(run_id=run.id, source="meta", external_ad_id="a1", is_active=True))
+    s.add(WeeklyCompanyMetric(company_id=c.id, source="meta", week_start=dt.date(2026, 7, 6),
+                             total_active_ads=42, score=85))
+    s.commit(); cid = c.id
+    s.close()
+
+    resolver.unlink_main(cid)
+
+    s = temp_db.SessionLocal()
+    assert s.scalar(select(WeeklyCompanyMetric).where(WeeklyCompanyMetric.company_id == cid)) is None
+    assert s.scalar(select(CollectionRun).where(CollectionRun.company_id == cid)) is None
+    assert s.scalar(select(Ad).where(Ad.external_ad_id == "a1")) is None
+    c = s.get(Company, cid)
+    assert c.page_id is None and c.resolution_status in ("ambiguous", "pending")
+    s.close()

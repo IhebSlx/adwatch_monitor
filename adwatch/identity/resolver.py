@@ -13,11 +13,30 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from .. import config
 from ..db import SessionLocal
-from ..models import Company, CompanyPage
+from ..models import Ad, CollectionRun, Company, CompanyPage, WeeklyCompanyMetric
+
+
+def reset_collected_ads(session, company_id: int, source: str = "meta") -> int:
+    """Delete a company's collected ad data (runs + ads + weekly metrics) for
+    one source. Called whenever the linked page CHANGES or is unlinked: the
+    ads that were fetched belonged to the OLD page, so leaving them would keep
+    a wrong page's ad counts and divergence score attached to the company.
+    Returns how many weekly-metric rows were removed. Scoped by source so a
+    Meta page change never wipes Google data."""
+    run_ids = list(session.scalars(select(CollectionRun.id).where(
+        CollectionRun.company_id == company_id, CollectionRun.source == source)))
+    if run_ids:
+        session.execute(delete(Ad).where(Ad.run_id.in_(run_ids)))
+    session.execute(delete(CollectionRun).where(
+        CollectionRun.company_id == company_id, CollectionRun.source == source))
+    n = session.execute(delete(WeeklyCompanyMetric).where(
+        WeeklyCompanyMetric.company_id == company_id,
+        WeeklyCompanyMetric.source == source)).rowcount
+    return n or 0
 
 
 # ---------------------------------------------------------------------------
@@ -54,12 +73,18 @@ def add_page(company_id: int, page_id: str, page_name: str | None = None,
             # Scoped to source="meta": this function only ever manages the Meta
             # page, so a Google advertiser (source="google") main row must be
             # left untouched — the two platforms coexist.
+            replaced = False
             for old in s.scalars(select(CompanyPage).where(
                     CompanyPage.company_id == company_id, CompanyPage.source == "meta",
                     CompanyPage.role == "main", CompanyPage.page_id != page_id)):
                 s.delete(old)
+                replaced = True
             c = s.get(Company, company_id)
             if c:
+                # switching to a DIFFERENT page => the previously collected ads
+                # belonged to the old page; clear them so counts/score reset.
+                if replaced or (c.page_id and c.page_id != page_id):
+                    reset_collected_ads(s, company_id, source="meta")
                 c.page_id, c.page_name = page_id, page_name
                 if status == "locked":
                     c.resolution_status = "locked"
@@ -68,7 +93,8 @@ def add_page(company_id: int, page_id: str, page_name: str | None = None,
                 else:
                     c.resolution_status = "ambiguous"
                 c.confirmed_at = dt.datetime.utcnow()
-                c.candidates = None
+                # keep `candidates` so the review pick-list stays visible after
+                # choosing one (lets the user switch, e.g. IG -> the FB page)
         s.commit()
 
 
@@ -114,6 +140,9 @@ def unlink_main(company_id: int) -> None:
                 CompanyPage.company_id == company_id, CompanyPage.source == "meta",
                 CompanyPage.role == "main")):
             s.delete(p)
+        # the removed page's collected ads are no longer this company's — clear
+        # them so the score/ad counts reset rather than lingering on the wrong page
+        reset_collected_ads(s, company_id, source="meta")
         c.page_id = None
         c.page_name = None
         c.page_url = None
@@ -417,6 +446,8 @@ def run_identity_check(company_id: int, backend: str = "serper") -> dict:
             return {"status": "skipped_locked", "page_id": company.page_id,
                     "page_name": company.page_name}
 
+        old_page_id = company.page_id   # if a recheck changes the page, old ads are stale
+
         # STEP 1 — crawl the company's OWN website once (when it has one): a
         # social link in it is the company declaring its own page — free, no
         # API/LLM, immune to name-search failures. The crawl's page text is
@@ -462,6 +493,8 @@ def run_identity_check(company_id: int, backend: str = "serper") -> dict:
                     # Handle-only match: confirmed but not locked (a later ad
                     # lookup can still resolve the numeric id).
                     _apply_identity_result(s, company, wres, method="website_footer")
+                    if company.page_id != old_page_id and old_page_id:
+                        reset_collected_ads(s, company_id, source="meta")
                     s.commit()
                     return {"status": company.resolution_status, "page_id": company.page_id,
                             "page_name": company.page_name, "page_url": company.page_url,
@@ -487,6 +520,10 @@ def run_identity_check(company_id: int, backend: str = "serper") -> dict:
         else:
             from ..collect.meta_source import MetaAdSource
             result = resolve_and_record(MetaAdSource(), s, company)  # Apify fallback; ads discarded
+        if company.page_id != old_page_id and old_page_id:
+            # recheck landed on a different page — the old page's ads/score are
+            # no longer this company's; clear them so the numbers reset
+            reset_collected_ads(s, company_id, source="meta")
         s.commit()
         return {"status": company.resolution_status, "page_id": company.page_id,
                 "page_name": company.page_name, "page_url": company.page_url,
