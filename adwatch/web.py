@@ -16,33 +16,54 @@ import threading
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, services
+from . import appsettings, config, customers, jobs, services
 from .collect.meta_source import search_term
-from .collect.pipeline import reseed_from_file, run_once, seed_companies_if_empty
+from .collect.pipeline import run_once, run_once_google, seed_companies_if_empty
 from .db import init_db
 from .identity import resolver
 from .insights.flags import compute_flags
 
 app = FastAPI(title="AdWatch")
+
+
+@app.middleware("http")
+async def _require_auth(request, call_next):
+    """HTTP Basic auth gate — active only when config.ACCESS_PASSWORD is set.
+    Unset (the default) = no auth, which is only safe because the server binds
+    127.0.0.1 by default (see cli.py). Set the password before hosting."""
+    import base64
+    import secrets as _secrets
+    from starlette.responses import Response as _Resp
+    if config.ACCESS_PASSWORD:
+        header = request.headers.get("authorization", "")
+        ok = False
+        if header.startswith("Basic "):
+            try:
+                user, _, pw = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+                ok = (_secrets.compare_digest(user, config.ACCESS_USER)
+                      and _secrets.compare_digest(pw, config.ACCESS_PASSWORD))
+            except Exception:
+                ok = False
+        if not ok:
+            return _Resp(status_code=401, headers={"WWW-Authenticate": 'Basic realm="AdWatch"'})
+    return await call_next(request)
+
+
 app.mount("/static", StaticFiles(directory=str(config.ROOT / "static")), name="static")
 
-# Single-user local tool: one fetch at a time, tracked via a plain module flag.
-_fetch_lock = threading.Lock()
-_fetch_running = False
+# Single-user local tool: one fetch at a time (manual OR a scoped job — see
+# jobs.py's shared try_acquire/release), tracked via jobs.is_busy().
 _runs: dict[str, queue.Queue] = {}
 
 
 class CompanyIn(BaseModel):
     name: str
-
-
-class ModeIn(BaseModel):
-    mode: str
+    website_domain: str | None = None   # used to resolve the Google Ads advertiser
 
 
 class PageIn(BaseModel):
@@ -56,6 +77,7 @@ class SearchIn(BaseModel):
 
 class FetchIn(BaseModel):
     company_id: int | None = None
+    sources: list[str] | None = None   # meta | google, any combo — None defaults to ["meta"]
 
 
 class EmailReportIn(BaseModel):
@@ -63,6 +85,7 @@ class EmailReportIn(BaseModel):
     recipient_ids: list[int] | None = None  # selected saved recipients (see ReportRecipient)
     recipient: str | None = None            # ad-hoc single address, combined with recipient_ids
     subject: str | None = None              # defaults to 'Bericht-KW-<n>' from the filename
+    filters: dict | None = None             # optional Companies Explorer filter to scope the report to
 
 
 class SendExistingIn(BaseModel):
@@ -80,6 +103,7 @@ class ScheduleIn(BaseModel):
     fetch_enabled: bool | None = None
     fetch_day: int | None = None      # 0=Mon .. 6=Sun
     fetch_time: str | None = None     # 'HH:MM'
+    fetch_sources: list[str] | None = None  # meta | google, any combo
     send_enabled: bool | None = None
     send_day: int | None = None
     send_time: str | None = None
@@ -92,13 +116,62 @@ class ConfirmIn(BaseModel):
     category: str | None = None
 
 
+class SelectTopIn(BaseModel):
+    filters: dict = {}
+    sort: str | None = None
+    direction: str = "asc"
+    n: int = 30
+
+
+class CustomerExportIn(BaseModel):
+    filters: dict = {}
+    ids: list[int] | None = None   # explicit selection; falls back to the filtered set
+    sort: str | None = None
+    direction: str = "asc"
+
+
+class JobEstimateIn(BaseModel):
+    company_ids: list[int]
+    sources: list[str] = ["meta"]
+
+
+class JobCreateIn(BaseModel):
+    company_ids: list[int]
+    sources: list[str] = ["meta"]
+    label: str | None = None
+
+
+class IdentityJobIn(BaseModel):
+    company_ids: list[int]
+    label: str | None = None
+
+
+class LockIdentityIn(BaseModel):
+    page_id: str
+    page_name: str | None = None
+
+
+class SettingsIn(BaseModel):
+    settings: dict
+
+
+class TestConnIn(BaseModel):
+    which: str
+
+
 # ---------------------------------------------------------------------------
 # Page
 # ---------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (config.ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    html = (config.ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    # Cache-bust the static assets so a browser holding an old app.js/app.css
+    # in cache always picks up the latest version after a normal reload.
+    for name in ("app.js", "app.css"):
+        v = int((config.ROOT / "static" / name).stat().st_mtime)
+        html = html.replace(f"/static/{name}", f"/static/{name}?v={v}")
+    return html
 
 
 # ---------------------------------------------------------------------------
@@ -110,76 +183,86 @@ def state():
     metrics = services.latest_metrics()
     companies = services.list_companies()
     return {
-        "mode": config.MODE,
-        "backend": config.LIVE_SOURCE if config.is_live() else "mock",
+        "backend": config.LIVE_SOURCE,
         "country": config.DEFAULT_COUNTRY,
-        "classifier": "llm" if (config.is_live() and config.ANTHROPIC_API_KEY) else "keywords",
+        "classifier": "llm" if config.ANTHROPIC_API_KEY else "keywords",
         "apify_configured": bool(config.APIFY_API_TOKEN),
         "email_configured": bool(config.POWER_AUTOMATE_WEBHOOK_URL),
         "email_default_recipient": config.REPORT_EMAIL_DEFAULT_RECIPIENT,
-        "fetch_running": _fetch_running,
+        "fetch_running": jobs.is_busy(),
         "companies": companies,
         "metrics": metrics,
         "flags": compute_flags(metrics),
     }
 
 
-@app.post("/api/mode")
-def set_mode(payload: ModeIn):
-    if payload.mode not in ("live", "mock"):
-        raise HTTPException(400, "mode must be 'live' or 'mock'")
-    if _fetch_running:
-        raise HTTPException(409, "A fetch is currently running — wait for it to finish.")
-    config.MODE = payload.mode
-    init_db()
-    seed_companies_if_empty()
-    return {"mode": config.MODE}
+@app.get("/api/settings")
+def get_settings_route():
+    return appsettings.get_settings()
 
 
-@app.post("/api/reseed")
-def reseed():
-    if _fetch_running:
-        raise HTTPException(409, "A fetch is currently running — wait for it to finish.")
-    n = reseed_from_file()
-    return {"reseeded": n}
+@app.put("/api/settings")
+def save_settings_route(payload: SettingsIn):
+    return appsettings.save_settings(payload.settings)
+
+
+@app.post("/api/settings/test")
+def test_connection_route(payload: TestConnIn):
+    return appsettings.test_connection(payload.which)
+
+
+@app.get("/api/divergence")
+def divergence():
+    """Ranked divergence list — Marketing-Aktivität × Umsatz-Lücke per fetched
+    company (see insights/divergence.py). The dashboard's 'Interessante
+    Partner' section."""
+    from .insights.divergence import compute_divergence
+    return compute_divergence()
 
 
 # ---------------------------------------------------------------------------
 # Fetch (Part 2) — background thread + Server-Sent Events progress
 # ---------------------------------------------------------------------------
 
+_SOURCE_RUNNERS = {"meta": run_once, "google": run_once_google}
+
+
 @app.post("/api/fetch")
 def start_fetch(payload: FetchIn = FetchIn()):
-    global _fetch_running
-    if config.MODE == "live" and not config.APIFY_API_TOKEN:
-        raise HTTPException(400, "Live mode needs APIFY_API_TOKEN in .env")
+    sources = payload.sources or ["meta"]
+    unknown = [s for s in sources if s not in _SOURCE_RUNNERS]
+    if unknown:
+        raise HTTPException(400, f"Unknown source(s): {', '.join(unknown)}")
+    if not config.APIFY_API_TOKEN:
+        raise HTTPException(400, "APIFY_API_TOKEN is not set in .env")
+    if "google" in sources and not config.GOOGLE_ADS_ACTOR_ID:
+        raise HTTPException(400, "Google Ads fetching needs GOOGLE_ADS_ACTOR_ID in .env")
     if payload.company_id is not None:
         companies = services.list_companies()
         if not any(c["id"] == payload.company_id for c in companies):
             raise HTTPException(404, "Company not found")
-    with _fetch_lock:
-        if _fetch_running:
-            raise HTTPException(409, "A fetch is already running.")
-        _fetch_running = True
+    if not jobs.try_acquire("manual"):
+        raise HTTPException(409, "A fetch (or scoped job) is already running.")
 
     run_id = uuid.uuid4().hex
     q: queue.Queue = queue.Queue()
     _runs[run_id] = q
-    mode_at_start = config.MODE  # pin the mode this run started in
     company_id = payload.company_id
 
     def worker():
-        global _fetch_running
-        prev_mode = config.MODE
-        config.MODE = mode_at_start
+        summaries = {}
         try:
-            summary = run_once(progress=lambda evt: q.put(evt), company_id=company_id)
-            q.put({"phase": "result", "summary": summary})
+            for src in sources:
+                q.put({"phase": "source_start", "source": src})
+                summaries[src] = _SOURCE_RUNNERS[src](
+                    progress=lambda evt, src=src: q.put({**evt, "source": src}),
+                    company_id=company_id)
+                q.put({"phase": "source_done", "source": src})
+            q.put({"phase": "result", "summary": summaries})
         except Exception as exc:  # noqa: BLE001
-            q.put({"phase": "result", "error": str(exc)})
+            q.put({"phase": "result", "error": str(exc), "summary": summaries})
         finally:
-            config.MODE = prev_mode
-            _fetch_running = False
+            jobs.release("manual")
             q.put(None)  # sentinel: stream end
 
     threading.Thread(target=worker, daemon=True).start()
@@ -224,6 +307,8 @@ def create_company(payload: CompanyIn):
 def rename_company(cid: int, payload: CompanyIn):
     try:
         services.update_company(cid, payload.name)
+        if payload.website_domain is not None:
+            services.update_company_domain(cid, payload.website_domain)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True}
@@ -237,15 +322,29 @@ def remove_company(cid: int):
 
 @app.get("/api/companies/{cid}/detail")
 def company_detail(cid: int):
-    metrics = services.latest_metrics()
+    metrics = services.latest_metrics([cid])   # scoped — not the whole base
     m = next((x for x in metrics if x["company_id"] == cid), None)
     if m is None:
         raise HTTPException(404, "Company not found")
     return {
+        "company": customers.get_company(cid),   # full master data — drawer works from any tab
         "metric": m,
         "history": services.company_history(cid),
         "week": services.latest_week_detail(cid),
     }
+
+
+@app.get("/api/logs")
+def list_logs_route(status: str | None = None, source: str | None = None, q: str | None = None,
+                    page: int = 1, page_size: int = 50):
+    return services.list_logs(status, source, q, page, page_size)
+
+
+@app.post("/api/logs/clear")
+def clear_logs_route():
+    """Clear the fetch log — removes every run WITHOUT stored ads; runs with
+    ads are kept (they anchor the collected ad copies)."""
+    return services.clear_logs()
 
 
 # ---------------------------------------------------------------------------
@@ -270,10 +369,11 @@ def unlink_page(page_row_id: int):
 
 @app.post("/api/companies/{cid}/search")
 def search_pages(cid: int, payload: SearchIn):
-    if config.MODE != "live":
-        raise HTTPException(400, "Switch to Live mode to search the real Ad Library.")
+    companies = services.list_companies()
+    c = next((x for x in companies if x["id"] == cid), None)
+    website_domain = c["website_domain"] if c else None
     try:
-        return resolver.find_candidates(payload.term)
+        return resolver.find_candidates(payload.term, website_domain=website_domain)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Search failed: {exc}")
 
@@ -333,7 +433,8 @@ def list_reports():
 @app.post("/api/reports/generate")
 def generate_report(payload: EmailReportIn = EmailReportIn()):
     from .report import build_report, build_top5_report
-    path = build_report() if payload.report == "full" else build_top5_report()
+    path = build_report(filters=payload.filters) if payload.report == "full" \
+        else build_top5_report(filters=payload.filters)
     return {"filename": Path(path).name}
 
 
@@ -380,6 +481,179 @@ def send_report_email_route(payload: EmailReportIn = EmailReportIn()):
 
 
 # ---------------------------------------------------------------------------
+# Company Explorer — bulk master-data import / filter / export. A company IS
+# a customer (see models.Company docstring) — there's no separate promote
+# step; a row becomes "tracked" the first time it's fetched. Per-row identity
+# management (linking pages, confirming a match) stays in the /api/companies/*
+# routes below, same as before the merge. See adwatch/customers.py.
+# ---------------------------------------------------------------------------
+
+@app.post("/api/customers/import")
+async def import_customers_route(file: UploadFile = File(...)):
+    data = await file.read()
+    try:
+        return customers.import_excel(data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001 — surface any parse failure to the UI
+        raise HTTPException(400, f"Could not read the file: {e}")
+
+
+@app.get("/api/customers/filter-options")
+def customer_filter_options_route():
+    return customers.filter_options()
+
+
+@app.post("/api/customers/select-top")
+def customer_select_top_route(payload: SelectTopIn):
+    return {"ids": customers.top_ids(payload.filters, payload.sort, payload.direction, payload.n)}
+
+
+@app.post("/api/customers/export")
+def customer_export_route(payload: CustomerExportIn):
+    data = customers.export_xlsx(payload.filters, payload.ids, payload.sort, payload.direction)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="companies_export.xlsx"'},
+    )
+
+
+@app.get("/api/customers")
+def list_customers_route(
+    q: str | None = None,
+    kv: list[str] = Query(default=[]), segment: list[str] = Query(default=[]),
+    sub_segment: list[str] = Query(default=[]), sales_channel: list[str] = Query(default=[]),
+    country: list[str] = Query(default=[]),
+    has_website: bool = False, revenue_min: float | None = None, revenue_max: float | None = None,
+    revenue_history: str | None = None,
+    exclude_kv: list[str] = Query(default=[]), exclude_segment: list[str] = Query(default=[]),
+    exclude_sub_segment: list[str] = Query(default=[]),
+    resolution_status: list[str] = Query(default=[]),
+    tracked: bool | None = None, page_id_state: str | None = None,
+    sort: str | None = None, direction: str = "asc", page: int = 1, page_size: int = 50,
+):
+    filters = {"q": q, "kv": kv, "segment": segment, "sub_segment": sub_segment,
+               "sales_channel": sales_channel, "country": country,
+               "has_website": has_website, "revenue_min": revenue_min,
+               "revenue_max": revenue_max, "revenue_history": revenue_history,
+               "exclude_kv": exclude_kv, "exclude_segment": exclude_segment,
+               "exclude_sub_segment": exclude_sub_segment,
+               "resolution_status": resolution_status, "tracked": tracked,
+               "page_id_state": page_id_state}
+    return customers.query_companies(filters, sort, direction, page, page_size)
+
+
+# ---------------------------------------------------------------------------
+# Scoped fetch jobs — resumable background fetches over a chosen set of
+# companies (see jobs.py). Separate from the manual "Fetch latest ads" flow
+# but shares its busy-lock so they never run concurrently.
+# ---------------------------------------------------------------------------
+
+@app.post("/api/fetch-jobs/estimate")
+def estimate_job_route(payload: JobEstimateIn):
+    try:
+        return jobs.estimate(payload.company_ids, payload.sources)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/fetch-jobs")
+def create_job_route(payload: JobCreateIn):
+    if not config.APIFY_API_TOKEN:
+        raise HTTPException(400, "APIFY_API_TOKEN is not set in .env")
+    if "google" in payload.sources and not config.GOOGLE_ADS_ACTOR_ID:
+        raise HTTPException(400, "Google Ads fetching needs GOOGLE_ADS_ACTOR_ID in .env")
+    try:
+        job = jobs.create_job(payload.company_ids, payload.sources, payload.label)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        return jobs.start_job(job["id"])
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/fetch-jobs")
+def list_jobs_route(kind: str | None = None):
+    return jobs.list_jobs(kind=kind)
+
+
+@app.post("/api/identity-jobs")
+def create_identity_job_route(payload: IdentityJobIn):
+    """Run the Meta identity check (page resolution only — no ad fetch, no sweep)
+    for the selected companies. Locked companies are skipped by the runner."""
+    if not config.APIFY_API_TOKEN:
+        raise HTTPException(400, "APIFY_API_TOKEN is not set in .env")
+    try:
+        job = jobs.create_job(payload.company_ids, ["meta"], payload.label, kind="identity")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        return jobs.start_job(job["id"])
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/companies/{cid}/identity-check")
+def recheck_identity_route(cid: int):
+    """Re-run the identity check for ONE company, synchronously — the drawer's
+    'Recheck identity' button. Uses the full pipeline (website → serper +
+    domain query → AI judge → embed page-id). Blocked while a bulk job runs so
+    the two never contend on the single SQLite writer."""
+    if jobs.is_busy():
+        raise HTTPException(409, "A fetch or job is running — wait for it to finish, then recheck.")
+    if not config.SERPER_API_KEY:
+        raise HTTPException(400, "No Serper API key set — add one under Settings to run identity checks.")
+    return resolver.run_identity_check(cid)
+
+
+@app.post("/api/companies/{cid}/lock")
+def lock_identity_route(cid: int, payload: LockIdentityIn):
+    try:
+        resolver.lock_identity(cid, payload.page_id, payload.page_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/companies/{cid}/unlock")
+def unlock_identity_route(cid: int):
+    resolver.unlock_identity(cid)
+    return {"ok": True}
+
+
+@app.post("/api/companies/{cid}/unlink")
+def unlink_main_route(cid: int):
+    """Drop the company's current (wrong) main page but keep its candidates —
+    the row returns to review. The drawer's 'Unlink' button."""
+    resolver.unlink_main(cid)
+    return {"ok": True}
+
+
+@app.get("/api/fetch-jobs/{job_id}")
+def get_job_route(job_id: int):
+    job = jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
+
+
+@app.post("/api/fetch-jobs/{job_id}/resume")
+def resume_job_route(job_id: int):
+    try:
+        return jobs.resume_job(job_id)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/fetch-jobs/{job_id}/cancel")
+def cancel_job_route(job_id: int):
+    jobs.cancel_job(job_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Report recipients — managed entirely in-app, independent of Power Automate
 # ---------------------------------------------------------------------------
 
@@ -423,5 +697,9 @@ def save_schedule_route(payload: ScheduleIn):
 def _startup() -> None:
     init_db()
     seed_companies_if_empty()
+    n = jobs.reconcile_on_startup()
+    if n:
+        import logging
+        logging.getLogger("adwatch.jobs").warning("%d fetch job(s) marked 'interrupted' after restart", n)
     from . import scheduler
     scheduler.start()

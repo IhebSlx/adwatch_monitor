@@ -174,7 +174,7 @@ def _classify_llm(text: str) -> dict:
 
 def classify_ad(text: str) -> dict:
     """Returns {category, product, classifier, scores?, matched?}."""
-    if config.is_live() and config.ANTHROPIC_API_KEY:
+    if config.ANTHROPIC_API_KEY:
         try:
             result = _classify_llm(text)
             return {**result, "classifier": "llm"}

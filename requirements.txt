@@ -1,4 +1,4 @@
-# Core — needed always (mock mode, dashboard, PDF, and live mode)
+# Core — needed always (dashboard, PDF, and live fetch)
 SQLAlchemy>=2.0
 PyYAML>=6.0
 python-dotenv>=1.0
@@ -8,7 +8,13 @@ uvicorn>=0.29
 pydantic>=2.0
 requests>=2.31
 APScheduler>=3.10
+openpyxl>=3.1
+python-multipart>=0.0.9
+rapidfuzz>=3.0
+cleanco>=2.2
+tldextract>=5.0
 
 # Optional — only if you set ANTHROPIC_API_KEY to upgrade ad classification
 # to Claude Haiku (otherwise a deterministic keyword classifier is used).
 anthropic>=0.40
+pytest

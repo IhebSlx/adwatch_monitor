@@ -15,6 +15,15 @@
 
 enabled: true
 
+# Advertiser pages whose Meta ads are ALWAYS excluded — no matter which company
+# they'd otherwise be attributed to, and whether they arrive via the partner
+# sweep or an already-linked partner page. Matched case-insensitively as a
+# normalized substring (umlauts folded, punctuation/spacing ignored), so
+# regional variants like "Solarlux Quality Partner Westfalen" are covered too.
+excluded_pages:
+  - Solarlux Gold Partner
+  - Solarlux Quality Partner
+
 # Landing-page domain that identifies partner campaigns.
 hub_domain: solarlux.com
 

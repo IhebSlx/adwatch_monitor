@@ -25,6 +25,12 @@ class Base(DeclarativeBase):
 
 
 class Company(Base):
+    """A tracked company IS a customer — there is no separate customer entity.
+    Most rows (up to ~3000, from the Solarlux Excel export or a future direct
+    DB feed — see customers.upsert_customers) carry only the master-data
+    fields below and no ad-tracking data at all; a row becomes "tracked" the
+    first time it's fetched (page_id/resolution_status get set then), not via
+    any separate promotion step."""
     __tablename__ = "companies"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -32,12 +38,36 @@ class Company(Base):
     country: Mapped[str] = mapped_column(String(4), default="DE")
     source: Mapped[str] = mapped_column(String(20), default="meta")
 
+    # ---- Master data (from the Excel import / SAP) — optional, since the
+    # original hand-added companies predate this and have none of it. ----
+    sap_number: Mapped[str | None] = mapped_column(String(40), nullable=True)   # SAP Nummer
+    kv: Mapped[str | None] = mapped_column(String(120), nullable=True)          # KV (account owner)
+    segment: Mapped[str | None] = mapped_column(String(120), nullable=True)     # Kundensegment
+    sub_segment: Mapped[str | None] = mapped_column(String(120), nullable=True)  # Kundenuntersegment
+    sales_channel: Mapped[str | None] = mapped_column(String(120), nullable=True)  # Vertriebsweg
+    street: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    fax: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    revenue_y0: Mapped[float | None] = mapped_column(Float, nullable=True)   # Umsatz aktuelles Jahr
+    revenue_y1: Mapped[float | None] = mapped_column(Float, nullable=True)   # -1
+    revenue_y2: Mapped[float | None] = mapped_column(Float, nullable=True)   # -2
+    revenue_y3: Mapped[float | None] = mapped_column(Float, nullable=True)   # -3
+    revenue_y4: Mapped[float | None] = mapped_column(Float, nullable=True)   # -4
+    imported_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    website_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)  # e.g. 'solarlux.com' — used to resolve the Google Ads advertiser (no name search available there)
+
     page_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     page_name: Mapped[str | None] = mapped_column(String(300), nullable=True)   # matched Facebook page name
     page_url: Mapped[str | None] = mapped_column(String(400), nullable=True)
     resolution_status: Mapped[str] = mapped_column(String(20), default="pending")
-    # pending = never fetched yet | confirmed = page_id locked in | ambiguous = best-guess, needs a human look
+    # pending = never fetched yet | confirmed = page_id linked (auto or manual) | ambiguous = best-guess, needs a human look
     # no_ads_found = a name search ran and returned zero ads (wrong name OR genuinely inactive)
+    # locked = a human verified & locked this identity — the HIGHEST status: never
+    #   overwritten by any automatic API resolution (the identity-check job skips it).
     candidates: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{page_id,name,ad_count}] when ambiguous
     page_category: Mapped[str | None] = mapped_column(String(200), nullable=True)
     page_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -160,6 +190,46 @@ class ReportRecipient(Base):
     added_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
 
+class FetchJob(Base):
+    """A scoped fetch run (e.g. 'fetch these 80 selected companies') that
+    persists its own progress, unlike the original single in-memory fetch
+    (adwatch/web.py's `_runs` queue), which dies with the process. Restarting
+    the app mid-job doesn't lose the job — see jobs.py's startup reconciliation,
+    which marks any row still 'running' as 'interrupted' so a human decides
+    whether to resume, rather than silently continuing (and re-spending) on
+    every restart."""
+    __tablename__ = "fetch_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    # queued | running | cancelling | done | failed | cancelled | interrupted
+    kind: Mapped[str] = mapped_column(String(20), default="fetch")     # fetch (ads) | identity (page resolution only)
+    sources: Mapped[list] = mapped_column(JSON, default=list)          # ['meta','google']
+    company_ids: Mapped[list] = mapped_column(JSON, default=list)      # the scoped set, fixed at creation
+    label: Mapped[str | None] = mapped_column(String(300), nullable=True)  # e.g. filter description, for history
+
+    total: Mapped[int] = mapped_column(Integer, default=0)       # total (company × source) units of work
+    completed: Mapped[int] = mapped_column(Integer, default=0)   # units done so far — the resume cursor
+    errors: Mapped[int] = mapped_column(Integer, default=0)
+    ads_collected: Mapped[int] = mapped_column(Integer, default=0)
+    log: Mapped[list] = mapped_column(JSON, default=list)  # capped list of recent {ts, text} entries
+
+
+class Setting(Base):
+    """In-app overrides for the settings in config.SETTINGS_SPEC (API keys,
+    endpoints, model, country). A row here takes precedence over the matching
+    .env variable; an absent/blank row falls back to .env, then the default.
+    Edited from the Settings tab — see config.__getattr__ for resolution."""
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
 class ScheduleConfig(Base):
     """Single-row table (id=1) holding when the app auto-fetches ads and
     auto-emails the weekly report. Edited from the dashboard's Settings panel;
@@ -170,6 +240,7 @@ class ScheduleConfig(Base):
     fetch_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     fetch_day: Mapped[int] = mapped_column(Integer, default=6)   # 0=Mon .. 6=Sun (cron 'day_of_week')
     fetch_time: Mapped[str] = mapped_column(String(5), default="22:00")  # 'HH:MM'
+    fetch_sources: Mapped[list] = mapped_column(JSON, default=lambda: ["meta"])  # meta | google, any combo
     send_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     send_day: Mapped[int] = mapped_column(Integer, default=0)    # Monday
     send_time: Mapped[str] = mapped_column(String(5), default="07:00")

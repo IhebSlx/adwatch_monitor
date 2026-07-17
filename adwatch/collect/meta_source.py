@@ -1,6 +1,5 @@
 ﻿"""Meta Ad Library adapter — live via Apify (curious_coder/facebook-ads-library-scraper,
-actor id XtaWFhbtfxyzqrFmd), with SearchAPI.io as an optional alternate backend, and an
-offline mock generator for testing without burning credits.
+actor id XtaWFhbtfxyzqrFmd), with SearchAPI.io as an optional alternate backend.
 
 KEY IDEA (page-identity problem): this actor takes an arbitrary Facebook Ads Library
 *URL* (keyword search OR page view), not a pre-known page_id. So a company only gets a
@@ -15,11 +14,14 @@ re-scraping, since exact nesting wasn't verifiable from outside a live account.
 from __future__ import annotations
 
 import datetime as dt
+import re
 import time
-from difflib import SequenceMatcher
 from urllib.parse import quote_plus, urlencode
 
 import requests
+import tldextract
+from cleanco import basename as _cleanco_basename
+from rapidfuzz import fuzz
 
 from .. import config
 from .base import AdSource, PageCandidate, RawAd
@@ -31,6 +33,43 @@ TERMINAL_STATES = {"SUCCEEDED", "FAILED", "TIMED-OUT", "TIMED_OUT", "ABORTED"}
 SIM_CONFIRM_SINGLE = 0.30   # only one distinct page in results
 SIM_CONFIRM = 0.50          # multiple pages: top candidate similarity floor
 SIM_MARGIN = 0.15           # top candidate must lead the runner-up by this much
+
+# Facebook page categories that are never a legitimate business match for a
+# window/facade dealer — a page in one of these can rank #1 by name similarity
+# alone (political pages run huge ad volumes and often share common surname
+# tokens) but must never be auto-confirmed as a company's identity.
+_BLOCKED_CATEGORIES = {
+    "politician", "political party", "political organization",
+    "government official", "government organization", "public figure",
+    "musician/band", "artist", "author", "actor", "athlete",
+    "news & media website", "religious organization", "community organization",
+}
+
+
+def _category_is_blocked(category: str | None) -> bool:
+    if not category:
+        return False
+    c = category.strip().lower()
+    return any(term in c for term in _BLOCKED_CATEGORIES)
+
+
+def _clean_name_for_similarity(name: str) -> str:
+    """Strip legal-entity suffixes (GmbH, Co. KG, ...) via cleanco, then reduce
+    to lowercase whitespace-separated tokens — rapidfuzz's token_set_ratio
+    needs real word boundaries, unlike the old char-level normalization."""
+    base = _cleanco_basename(name or "") or (name or "")
+    return re.sub(r"[^\w\s]", " ", base).lower().strip()
+
+
+def _registered_domain(url_or_domain: str | None) -> str | None:
+    """'https://www.fenster-mueller.de/aktion?x=1' -> 'fenster-mueller.de';
+    also accepts a bare domain. None if nothing extractable (e.g. a fb.com link)."""
+    if not url_or_domain:
+        return None
+    ext = tldextract.extract(url_or_domain)
+    if not ext.domain:
+        return None
+    return f"{ext.domain}.{ext.suffix}".lower() if ext.suffix else ext.domain.lower()
 
 
 def _normalize_actor_id(value: str) -> str:
@@ -48,10 +87,6 @@ def _normalize_actor_id(value: str) -> str:
                     v = v.split("/", 1)[0]
                 break
     return v
-
-
-def _norm_name(s: str) -> str:
-    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
 
 
 # German/EU legal forms + generic descriptors that make a keyword_unordered search
@@ -125,9 +160,7 @@ class MetaAdSource(AdSource):
     name = "meta"
 
     def __init__(self, backend: str | None = None):
-        self.backend = (backend or (config.LIVE_SOURCE if config.is_live() else "mock")).strip().lower()
-        if config.MODE == "mock":
-            self.backend = "mock"
+        self.backend = (backend or config.LIVE_SOURCE).strip().lower()
         if self.backend == "apify":
             self.token = config.APIFY_API_TOKEN
             self.actor_id = _normalize_actor_id(config.APIFY_ACTOR_ID)
@@ -224,18 +257,20 @@ class MetaAdSource(AdSource):
         )
 
     # ---------------- combined search + resolve (Meta-specific) -------------
-    def search_and_resolve(self, name: str, country: str = "DE", max_ads: int = 200) -> dict:
+    def search_and_resolve(self, name: str, country: str = "DE", max_ads: int = 200,
+                           website_domain: str | None = None) -> dict:
         """One Apify run: search by company name, group ads by page, pick the best
-        name match. Returns dict(status, page_id, page_name, ads, candidates)."""
-        if self.backend == "mock":
-            from .mockdata import generate_ads
-            ads = [a for a in generate_ads(name, country) if a.is_active]
-            if not ads:
-                return {"status": "no_ads_found", "page_id": None, "page_name": None, "ads": [], "candidates": []}
-            key = f"MOCK::{name}"
-            return {"status": "confirmed", "page_id": key, "page_name": name, "ads": ads,
-                   "candidates": [{"page_id": key, "name": name, "ad_count": len(ads)}]}
+        match. Returns dict(status, page_id, page_name, ads, candidates).
 
+        Name similarity alone is unreliable — political pages run huge ad
+        volumes and often share a common surname token with a company name, so
+        a politician can easily out-score the real page on string similarity.
+        Two corroborating signals fix that: `website_domain`, if given, is
+        matched against each candidate's ad landing URLs (a page whose ads
+        link to the company's own site is near-certain — the same technique
+        `partner_linker.py` uses for partner-account discovery), and a page
+        category blocklist (`_BLOCKED_CATEGORIES`) vetoes auto-confirming
+        obviously-non-business pages regardless of how well the name matches."""
         # Resolve by keyword search over ALL statuses (an inactive-only page still
         # tells us the name maps to a real page). Formal names are too strict for the
         # actor's keyword_unordered search, so search the cleaned term; if that finds
@@ -251,21 +286,40 @@ class MetaAdSource(AdSource):
             return {"status": "no_ads_found", "page_id": None, "page_name": None,
                     "ads": [], "candidates": [], "search_term": term}
 
-        target = _norm_name(name)
+        target = _clean_name_for_similarity(name)
+        company_domain = _registered_domain(website_domain)
+
+        def score(info: dict) -> dict:
+            sim = fuzz.token_set_ratio(target, _clean_name_for_similarity(info["name"])) / 100
+            site_match = company_domain is not None and any(
+                _registered_domain(ad.landing_url) == company_domain
+                for ad in info["ads"] if ad.landing_url
+            )
+            return {**info, "sim": sim, "site_match": site_match,
+                    "blocked": _category_is_blocked(info.get("category"))}
+
         scored = sorted(
-            ({**info, "sim": SequenceMatcher(None, target, _norm_name(info["name"])).ratio()}
-             for info in pages.values()),
-            key=lambda x: (-x["sim"], -len(x["ads"])),
+            (score(info) for info in pages.values()),
+            key=lambda x: (x["site_match"], not x["blocked"], x["sim"], len(x["ads"])),
+            reverse=True,
         )
         candidates = [{
             "page_id": c["page_id"], "name": c["name"], "ad_count": len(c["ads"]),
             "active_ad_count": sum(1 for a in c["ads"] if a.is_active),
             "category": c.get("category"), "profile_uri": c.get("profile_uri"),
-            "similarity": round(c["sim"], 2),
+            "similarity": round(c["sim"], 2), "site_match": c["site_match"], "blocked": c["blocked"],
         } for c in scored[:8]]
         best = scored[0]
 
-        if len(scored) == 1:
+        if best["blocked"]:
+            # A politician/public-figure/etc. page — never auto-confirm, even if
+            # it's the only or best-scoring result. Flag for human review instead.
+            status = "ambiguous"
+        elif best["site_match"]:
+            # Its ads link to the company's own website — stronger evidence than
+            # name similarity can ever provide, so this alone is enough to confirm.
+            status = "confirmed"
+        elif len(scored) == 1:
             status = "confirmed" if best["sim"] >= SIM_CONFIRM_SINGLE else "ambiguous"
         else:
             margin = best["sim"] - scored[1]["sim"]
@@ -318,19 +372,11 @@ class MetaAdSource(AdSource):
 
     # ---------------- AdSource interface ------------------------------------
     def resolve_company(self, name: str, country: str = "DE") -> list[PageCandidate]:
-        if self.backend == "mock":
-            return [PageCandidate(page_id=f"MOCK::{name}", name=name, has_any_ads=True)]
         result = self.search_and_resolve(name, country=country)
         return [PageCandidate(page_id=c["page_id"], name=c["name"], has_any_ads=c["ad_count"] > 0)
                 for c in result["candidates"]]
 
     def fetch_ads(self, page_id: str, country: str = "DE", active_only: bool = True) -> list[RawAd]:
-        if self.backend == "mock":
-            from .mockdata import generate_ads
-            name = page_id.split("::", 1)[1] if page_id.startswith("MOCK::") else page_id
-            ads = generate_ads(name, country)
-            return [a for a in ads if a.is_active] if active_only else ads
-
         active_status = "active" if active_only else "all"
         url = build_ads_library_url(page_id=page_id, country=country, active_status=active_status)
         items = self._run_items(url, max_ads=500, active_status=active_status, country=country)
@@ -342,8 +388,5 @@ class MetaAdSource(AdSource):
 
         Returns RAW items (dicts) — the partner linker needs the untouched
         link_url / utm evidence, and groups by page itself."""
-        if self.backend == "mock":
-            from .mockdata import generate_hub_items
-            return generate_hub_items()
         url = build_ads_library_url(name=term, country=country, active_status="active")
         return self._run_items(url, max_ads, active_status="active", country=country)

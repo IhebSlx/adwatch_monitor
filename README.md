@@ -24,8 +24,8 @@ hand-built HTML/CSS/JS frontend (`templates/`, `static/`) — no Node.js, no
 build step, nothing to install beyond `requirements.txt`.
 
 `.env` already has your Apify token and actor ID (`curious_coder/facebook-ads-library-scraper`)
-wired in, in `ADWATCH_MODE=live`. **Treat that file as a secret — it's git-ignored,
-but don't paste it anywhere else, and rotate the token if it's ever exposed again.**
+wired in. **Treat that file as a secret — it's git-ignored, but don't paste it
+anywhere else, and rotate the token if it's ever exposed again.**
 
 ## How company resolution works
 
@@ -80,8 +80,6 @@ started, polled, and its results retrieved before moving to the next company.
 - Every raw scraped item is stored (`Ad.source_raw` in the DB) even though it's
   not all surfaced in the UI — useful if a field mapping needs correcting later
   without re-scraping.
-- Switch to `ADWATCH_MODE=mock` in `.env` to run fully offline on generated
-  sample data (useful for demos or UI work without spending Apify credits).
 
 ## Layout — three parts
 
@@ -92,8 +90,8 @@ adwatch/
     partner_linker.py            auto-link partner accounts via landing-URL evidence
   collect/                     PART 2 — fetch + store weekly ad data
     base.py                      AdSource interface (Google/LinkedIn slot in later)
-    meta_source.py               Meta adapter: live Apify calls, mock fallback
-    mockdata.py                  deterministic offline sample data (mock mode)
+    meta_source.py               Meta adapter: live Apify calls
+    google_source.py             Google Ads Transparency adapter: live Apify calls
     pipeline.py                  weekly cycle: all linked pages + partner sweep
   insights/                    PART 3 — what does the data mean?
     classify.py                  ad intent (word-boundary keywords / Claude)

@@ -28,11 +28,96 @@ MUTED = colors.HexColor("#647380")
 LINE = colors.HexColor("#d9e2ec")
 BG = colors.HexColor("#f0f4f8")
 
+# Report text is German (business audience), independent of any locale
+# setting on the machine that generates it — hence the manual month names
+# rather than relying on strftime's %b/%B.
+_DE_MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
+              "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+
+_CATEGORY_LABEL_DE = {
+    "recruitment": "Personalsuche", "product_sale": "Verkauf",
+    "brand_awareness": "Marke", "event_promo": "Veranstaltungen", "other": "Sonstiges",
+}
+_STATUS_LABEL_DE = {
+    "pending": "noch nicht abgerufen", "confirmed": "bestätigte Seite",
+    "ambiguous": "mehrdeutig — beste Vermutung verwendet", "no_ads_found": "keine Anzeigen gefunden",
+}
+_METHOD_LABEL_DE = {"reach": "Reichweite", "count": "Anzahl", "mixed": "gemischt"}
+
+_REVENUE_HISTORY_LABEL_DE = {
+    "lapsed": "ehemalige Käufer (kein Umsatz akt. Jahr)",
+    "new": "Neukäufer (nur akt. Jahr)",
+    "any": "jemals Umsatz",
+    "never": "nie Umsatz",
+}
+_FILTER_FIELD_LABEL_DE = {
+    "kv": "KV", "segment": "Segment", "sub_segment": "Untersegment",
+    "sales_channel": "Vertriebsweg", "country": "Land",
+}
+
+
+def _describe_filters_de(filters: dict | None) -> str | None:
+    """Human-readable German summary of an active Companies-Explorer filter,
+    for display in the report header — None if no filter was applied."""
+    if not filters:
+        return None
+    bits = []
+    if filters.get("q"):
+        bits.append(f'Suche: "{filters["q"]}"')
+    for field, label in _FILTER_FIELD_LABEL_DE.items():
+        value = filters.get(field)
+        if value:
+            value_str = ", ".join(value) if isinstance(value, list) else value
+            bits.append(f"{label}: {value_str}")
+    rmin, rmax = filters.get("revenue_min"), filters.get("revenue_max")
+    if rmin is not None and rmax is not None:
+        bits.append(f"Umsatz: {_eur(rmin)}–{_eur(rmax)}")
+    elif rmin is not None:
+        bits.append(f"Umsatz ab {_eur(rmin)}")
+    elif rmax is not None:
+        bits.append(f"Umsatz bis {_eur(rmax)}")
+    if filters.get("revenue_history"):
+        bits.append(_REVENUE_HISTORY_LABEL_DE.get(filters["revenue_history"], filters["revenue_history"]))
+    if filters.get("exclude_kv"):
+        bits.append(f"ohne KV: {', '.join(filters['exclude_kv'])}")
+    if filters.get("exclude_segment"):
+        bits.append(f"ohne Segment: {', '.join(filters['exclude_segment'])}")
+    if filters.get("exclude_sub_segment"):
+        bits.append(f"ohne Untersegment: {', '.join(filters['exclude_sub_segment'])}")
+    if filters.get("has_website"):
+        bits.append("nur mit Website")
+    if filters.get("page_id_state") == "with":
+        bits.append("nur mit Page-ID")
+    elif filters.get("page_id_state") == "without":
+        bits.append("nur ohne Page-ID")
+    if filters.get("tracked") is not None:
+        bits.append("nur getrackte Firmen" if filters["tracked"] else "nur ungetrackte Firmen")
+    return "Gefiltert nach: " + "; ".join(bits) if bits else None
+
+
+def _filtered_company_ids(filters: dict | None) -> list[int] | None:
+    if not filters:
+        return None
+    from sqlalchemy import select as _select
+    from .customers import _apply_filters
+    from .db import SessionLocal as _SessionLocal
+    from .models import Company as _Company
+    with _SessionLocal() as s:
+        return list(s.scalars(_apply_filters(_select(_Company.id), filters)))
+
 
 def _eur(v) -> str:
     if v is None:
         return "-"
     return f"€{v:,.0f}".replace(",", ".")
+
+
+def _de_date(d: dt.date) -> str:
+    return f"{d.day}. {_DE_MONTHS[d.month - 1]} {d.year}"
+
+
+def _de_datetime(d: dt.datetime) -> str:
+    return f"{_de_date(d)}, {d:%H:%M} Uhr"
 
 
 def week_label(d: dt.date | None = None) -> str:
@@ -93,12 +178,69 @@ def week_str_for_filename(filename: str) -> str:
     return f"KW {week}"
 
 
-def build_report(path: str | None = None) -> str:
+def _divergence_story(filters: dict | None = None, limit: int = 10) -> list:
+    """The 'Interessante Partner' lead section for both report types — top
+    divergence rows (Marketing-Aktivität × Umsatz-Lücke) with the German
+    reason line per partner. Empty list when nothing scored ≥ 10, in which
+    case the section is simply omitted."""
+    from .insights.divergence import compute_divergence
+    div = compute_divergence(_filtered_company_ids(filters) if filters else None)
+    rows = [r for r in div["rows"] if r["divergence"] >= 10][:limit]
+    if not rows:
+        return []
+
+    styles = getSampleStyleSheet()
+    h2 = ParagraphStyle("divh2", parent=styles["Heading2"], textColor=ACCENT,
+                        fontSize=13, spaceBefore=4, spaceAfter=3)
+    note = ParagraphStyle("divnote", parent=styles["Normal"], textColor=MUTED,
+                          fontSize=8, leading=11)
+    cellh = ParagraphStyle("divcellh", parent=styles["Normal"], textColor=colors.white,
+                           fontSize=8.5, leading=11)
+    cell = ParagraphStyle("divcell", parent=styles["Normal"], textColor=INK,
+                          fontSize=8.5, leading=11)
+
+    out = [
+        Paragraph("Interessante Partner (Divergenz)", h2),
+        Paragraph(
+            "Divergenz = Marketing-Aktivität × Umsatz-Lücke: Partner, die kaum noch bei uns "
+            "kaufen, aber aktiv werben — Win-back-Kandidaten zuerst. Formel siehe App → "
+            "„How it works“.", note),
+        Spacer(1, 4),
+    ]
+    header = ["#", "Firma", "Divergenz", "Typ", "Grund"]
+    trows = [[Paragraph(h, cellh) for h in header]]
+    for i, r in enumerate(rows, start=1):
+        trows.append([
+            Paragraph(str(i), cell),
+            Paragraph(r["company"], cell),
+            Paragraph(f"{r['divergence']}/100", cell),
+            Paragraph(r["label"] or "—", cell),
+            Paragraph(r["reason"], cell),
+        ])
+    table = Table(trows, colWidths=[8 * mm, 42 * mm, 18 * mm, 22 * mm, 84 * mm], repeatRows=1)
+    style = [
+        ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+    ]
+    for i in range(1, len(trows)):
+        if i % 2 == 0:
+            style.append(("BACKGROUND", (0, i), (-1, i), BG))
+    table.setStyle(TableStyle(style))
+    out += [table, Spacer(1, 12)]
+    return out
+
+
+def build_report(path: str | None = None, filters: dict | None = None) -> str:
     if path is None:
         path = str(next_report_path("adwatch_report"))
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    data = latest_metrics()
+    data = latest_metrics(_filtered_company_ids(filters))
+    filter_desc = _describe_filters_de(filters)
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=20, spaceAfter=2)
     sub = ParagraphStyle("sub", parent=styles["Normal"], textColor=MUTED, fontSize=9)
@@ -112,18 +254,26 @@ def build_report(path: str | None = None) -> str:
                             leftMargin=16 * mm, rightMargin=16 * mm,
                             topMargin=16 * mm, bottomMargin=16 * mm)
     story = []
-    mode_tag = "SAMPLE DATA (mock mode)" if config.MODE != "live" else f"live · {config.LIVE_SOURCE}"
-    story.append(Paragraph("Ad-Activity Report", h1))
-    story.append(Paragraph(f"Generated {dt.datetime.now():%d %b %Y, %H:%M} &nbsp;·&nbsp; {mode_tag} &nbsp;·&nbsp; Meta Ad Library", sub))
+    mode_tag = f"live · {config.LIVE_SOURCE}"
+    story.append(Paragraph("Anzeigen-Aktivitätsbericht", h1))
+    story.append(Paragraph(f"Erstellt am {_de_datetime(dt.datetime.now())} &nbsp;·&nbsp; {mode_tag} &nbsp;·&nbsp; Meta Ad Library", sub))
+    if filter_desc:
+        story.append(Paragraph(filter_desc, sub))
     story.append(Spacer(1, 8))
+    story += _divergence_story(filters)
+
+    if not data:
+        story.append(Paragraph("Keine Firmen entsprechen dem gewählten Filter.", body))
+        doc.build(story)
+        return path
 
     # ---- summary table ----
-    header = ["Company", "Active ads", "Hiring", "Selling", "Est. spend / wk"]
+    header = ["Firma", "Aktive Anzeigen", "Personalsuche", "Verkauf", "Gesch. Ausgaben/Wo."]
     rows = [[Paragraph(h, cellh) for h in header]]
     for d in data:
         cats = d.get("ads_by_category") or {}
         if not d["has_data"]:
-            spend = "no data"
+            spend = "keine Daten"
             active = "-"
             hiring = selling = "-"
         else:
@@ -161,28 +311,31 @@ def build_report(path: str | None = None) -> str:
     story.append(table)
     story.append(Spacer(1, 6))
     story.append(Paragraph(
-        "Spend is a <b>modelled estimate</b> (low–high interval), not a figure published by Meta. "
-        "Meta only discloses spend for regulated ad categories; everything else is estimated from "
-        "EU reach data or ad counts. See spend_assumptions.yaml for the assumptions used.", note))
+        "Die Ausgaben sind ein <b>geschätzter Wert</b> (Intervall von–bis), keine von Meta "
+        "veröffentlichte Zahl. Meta legt Ausgaben nur für regulierte Anzeigenkategorien offen; "
+        "alles andere wird anhand von EU-Reichweitendaten oder Anzeigenzahlen geschätzt. "
+        "Die Annahmen dazu stehen in spend_assumptions.yaml.", note))
 
     # ---- per-company detail ----
     for d in data:
         story.append(Paragraph(d["company"], h2))
         if not d["has_data"]:
-            story.append(Paragraph(f"Status: {d['resolution_status']} · no collection data yet.", body))
+            status_de = _STATUS_LABEL_DE.get(d["resolution_status"], d["resolution_status"])
+            story.append(Paragraph(f"Status: {status_de} · noch keine Daten erfasst.", body))
             continue
         if d["total_active_ads"] == 0:
-            story.append(Paragraph("Confirmed page — <b>0 active ads</b> this week (not an error).", body))
+            story.append(Paragraph("Bestätigte Seite — <b>0 aktive Anzeigen</b> diese Woche (kein Fehler).", body))
             continue
         cats = d.get("ads_by_category") or {}
-        cat_str = ", ".join(f"{k}: {v}" for k, v in cats.items() if v) or "-"
+        cat_str = ", ".join(f"{_CATEGORY_LABEL_DE.get(k, k)}: {v}" for k, v in cats.items() if v) or "-"
         products = ", ".join(d.get("products") or []) or "-"
-        story.append(Paragraph(f"<b>Total active ads:</b> {d['total_active_ads']}", body))
-        story.append(Paragraph(f"<b>By category:</b> {cat_str}", body))
-        story.append(Paragraph(f"<b>Products advertised:</b> {products}", body))
+        method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method"))
+        story.append(Paragraph(f"<b>Aktive Anzeigen gesamt:</b> {d['total_active_ads']}", body))
+        story.append(Paragraph(f"<b>Nach Kategorie:</b> {cat_str}", body))
+        story.append(Paragraph(f"<b>Beworbene Produkte:</b> {products}", body))
         story.append(Paragraph(
-            f"<b>Estimated spend/week:</b> {_eur(d['spend_low'])}–{_eur(d['spend_high'])} "
-            f"(modelled est., method: {d.get('spend_method')})", body))
+            f"<b>Geschätzte Ausgaben/Woche:</b> {_eur(d['spend_low'])}–{_eur(d['spend_high'])} "
+            f"(geschätzt, Methode: {method_de})", body))
 
     doc.build(story)
     return path
@@ -195,21 +348,23 @@ def _signal(cats: dict, products: list) -> str:
     event = cats.get("event_promo", 0)
     bits = []
     if hire and hire >= sell:
-        bits.append(f"hiring push ({hire} ads)")
+        bits.append(f"Personalsuche ({hire} Anzeigen)")
     if sell:
-        bits.append(f"selling{' — ' + ', '.join(products[:3]) if products else ''} ({sell} ads)")
+        bits.append(f"Verkauf{' — ' + ', '.join(products[:3]) if products else ''} ({sell} Anzeigen)")
     if event:
-        bits.append(f"events ({event} ads)")
-    return "; ".join(bits) or "brand / general presence"
+        bits.append(f"Veranstaltungen ({event} Anzeigen)")
+    return "; ".join(bits) or "Marke / allgemeine Präsenz"
 
 
-def build_top5_report(path: str | None = None) -> str:
+def build_top5_report(path: str | None = None, filters: dict | None = None) -> str:
     """A focused PDF: the 5 most active advertisers this week, with insights."""
     if path is None:
         path = str(next_report_path("adwatch_top5"))
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    data = [d for d in latest_metrics() if d["has_data"] and (d["total_active_ads"] or 0) > 0]
+    filter_desc = _describe_filters_de(filters)
+    data = [d for d in latest_metrics(_filtered_company_ids(filters))
+            if d["has_data"] and (d["total_active_ads"] or 0) > 0]
     # rank by activity score (falls back to ad count for rows without one)
     data.sort(key=lambda d: (d.get("score") or 0, d["total_active_ads"]), reverse=True)
     top = data[:5]
@@ -225,47 +380,52 @@ def build_top5_report(path: str | None = None) -> str:
                             leftMargin=18 * mm, rightMargin=18 * mm,
                             topMargin=18 * mm, bottomMargin=18 * mm)
     story = []
-    mode_tag = "SAMPLE DATA (mock mode)" if config.MODE != "live" else f"live · {config.LIVE_SOURCE}"
+    mode_tag = f"live · {config.LIVE_SOURCE}"
     week = next((d["week_start"] for d in top if d.get("week_start")), None)
-    story.append(Paragraph("Top 5 Advertisers — Ad-Activity Report", h1))
+    week_de = _de_date(dt.date.fromisoformat(week)) if week else None
+    story.append(Paragraph("Top 5 Werbetreibende — Anzeigen-Aktivitätsbericht", h1))
     story.append(Paragraph(
-        f"Generated {dt.datetime.now():%d %b %Y, %H:%M}"
-        + (f" &nbsp;·&nbsp; week of {week}" if week else "")
+        f"Erstellt am {_de_datetime(dt.datetime.now())}"
+        + (f" &nbsp;·&nbsp; Woche vom {week_de}" if week_de else "")
         + f" &nbsp;·&nbsp; {mode_tag} &nbsp;·&nbsp; Meta Ad Library", sub))
+    if filter_desc:
+        story.append(Paragraph(filter_desc, sub))
     story.append(Spacer(1, 8))
+    story += _divergence_story(filters)
 
     if not top:
-        story.append(Paragraph("No companies with active ads in the latest data.", body))
+        story.append(Paragraph("Keine Unternehmen mit aktiven Anzeigen in den aktuellen Daten.", body))
         doc.build(story)
         return path
 
     for i, d in enumerate(top, start=1):
         cats = d.get("ads_by_category") or {}
         products = d.get("products") or []
-        score_tag = f" &nbsp;·&nbsp; score {d['score']:.0f}/100" if d.get("score") is not None else ""
+        score_tag = f" &nbsp;·&nbsp; Score {d['score']:.0f}/100" if d.get("score") is not None else ""
         story.append(Paragraph(f"{i}. {d['company']}{score_tag}", rank))
-        matched = f" &nbsp;·&nbsp; page: {d['page_name']}" if d.get("page_name") else ""
+        matched = f" &nbsp;·&nbsp; Seite: {d['page_name']}" if d.get("page_name") else ""
         story.append(Paragraph(
-            f"<b>{d['total_active_ads']} active ads</b>"
-            + (f" &nbsp;({'+' if (d.get('delta_ads') or 0) > 0 else ''}{d['delta_ads']} vs last week)"
+            f"<b>{d['total_active_ads']} aktive Anzeigen</b>"
+            + (f" &nbsp;({'+' if (d.get('delta_ads') or 0) > 0 else ''}{d['delta_ads']} ggü. Vorwoche)"
                if d.get("delta_ads") not in (None, 0) else "")
             + matched, body))
         story.append(Paragraph(f"<b>Signal:</b> {_signal(cats, products)}", body))
+        method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method"))
         story.append(Paragraph(
-            f"<b>Breakdown:</b> hiring {cats.get('recruitment', 0)} · "
-            f"selling {cats.get('product_sale', 0)} · brand {cats.get('brand_awareness', 0)} · "
-            f"events {cats.get('event_promo', 0)}", body))
+            f"<b>Aufschlüsselung:</b> Personalsuche {cats.get('recruitment', 0)} · "
+            f"Verkauf {cats.get('product_sale', 0)} · Marke {cats.get('brand_awareness', 0)} · "
+            f"Veranstaltungen {cats.get('event_promo', 0)}", body))
         if products:
-            story.append(Paragraph(f"<b>Products advertised:</b> {', '.join(products)}", body))
+            story.append(Paragraph(f"<b>Beworbene Produkte:</b> {', '.join(products)}", body))
         story.append(Paragraph(
-            f"<b>Est. spend/week:</b> {_eur(d['spend_low'])}–{_eur(d['spend_high'])} "
-            f"(modelled, {d.get('spend_method')})", body))
+            f"<b>Gesch. Ausgaben/Woche:</b> {_eur(d['spend_low'])}–{_eur(d['spend_high'])} "
+            f"(geschätzt, {method_de})", body))
         story.append(Spacer(1, 2))
 
     story.append(Spacer(1, 10))
     story.append(Paragraph(
-        "Spend is a <b>modelled estimate</b> (low–high interval), not published by Meta. "
-        "Ranked by number of active ads in the latest weekly collection.", note))
+        "Die Ausgaben sind ein <b>geschätzter Wert</b> (Intervall von–bis), nicht von Meta "
+        "veröffentlicht. Rangfolge nach Anzahl aktiver Anzeigen in der letzten wöchentlichen Erfassung.", note))
     doc.build(story)
     return path
 
