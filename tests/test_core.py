@@ -65,6 +65,41 @@ def test_marketing_score_recency_weight():
 
 
 # ---------------------------------------------------------------------------
+# Actor "no ads" sentinel must never become a phantom active ad
+# ---------------------------------------------------------------------------
+
+def test_is_actor_error_sentinel():
+    from adwatch.collect.meta_source import _is_actor_error
+    # the real record the Apify actor emits for a page with no matching ads
+    assert _is_actor_error({"error": "Ads not found", "errorCode": "ADS_NOT_FOUND",
+                            "url": "https://www.facebook.com/ads/library/?x"}) is True
+    # genuine ads are never errors
+    assert _is_actor_error({"ad_archive_id": "123", "is_active": True}) is False
+    assert _is_actor_error({"id": "123", "snapshot": {}}) is False
+    # an error-shaped record that still carries a real ad id is kept (defensive)
+    assert _is_actor_error({"error": "partial", "ad_archive_id": "123"}) is False
+
+
+def test_fetch_ads_drops_actor_error_stub():
+    """A page with zero active ads returns the actor's ADS_NOT_FOUND sentinel.
+    It must be filtered out so the page reads as 0 ads — not 1 phantom active
+    ad with empty text/no id (the bug that gave 72/90/135 a false score)."""
+    from adwatch.collect.meta_source import MetaAdSource
+    src = object.__new__(MetaAdSource)     # skip __init__ (no token needed)
+    src.backend = "apify"
+    stub = {"error": "Ads not found", "errorCode": "ADS_NOT_FOUND", "url": "x"}
+    real = {"ad_archive_id": "999", "is_active": True, "page_id": "111",
+            "snapshot": {"body": {"text": "Neue Fenster"}}}
+    # only the sentinel -> zero ads
+    src._run_actor = lambda payload: [stub]
+    assert src.fetch_ads("111", active_only=True) == []
+    # sentinel mixed with a real ad -> only the real ad survives
+    src._run_actor = lambda payload: [stub, real]
+    out = src.fetch_ads("111", active_only=True)
+    assert len(out) == 1 and out[0].external_ad_id == "999"
+
+
+# ---------------------------------------------------------------------------
 # DB-backed: failed-fetch must NOT overwrite good metrics with 0
 # ---------------------------------------------------------------------------
 

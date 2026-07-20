@@ -144,6 +144,24 @@ def _num_or_bound(value):
     return None
 
 
+def _is_actor_error(item: dict) -> bool:
+    """The Apify Meta actor emits a sentinel record for a page/search with no
+    matching ads, e.g. {"error": "Ads not found", "errorCode": "ADS_NOT_FOUND",
+    "url": ...}. It carries no ad identity (no id / ad_archive_id / snapshot /
+    page_id) and MUST NOT be mapped into a RawAd — otherwise a page with zero
+    active ads gets stored as one phantom active ad (empty text, no id, no date),
+    inflating the active-ad count and the divergence score."""
+    if not isinstance(item, dict):
+        return True
+    if item.get("errorCode"):
+        return True
+    if item.get("error") and not (item.get("id") or item.get("ad_archive_id")
+                                   or item.get("ad_id") or item.get("snapshot")
+                                   or item.get("page_id")):
+        return True
+    return False
+
+
 def build_ads_library_url(name: str | None = None, page_id: str | None = None,
                           country: str = "DE", active_status: str = "all") -> str:
     """Builds a real facebook.com/ads/library/ URL — either a page view (page_id known)
@@ -362,13 +380,17 @@ class MetaAdSource(AdSource):
                 "scrapePageAds.activeStatus": active_status,
                 "scrapePageAds.countryCode": country or "ALL",
             }
-            return self._run_actor(payload)
-        if self.backend == "searchapi":
+            items = self._run_actor(payload)
+        elif self.backend == "searchapi":
             # NOTE: SearchAPI's meta_ad_library engine takes q= / page_id= directly rather
             # than a raw library URL; this path is a lower-priority alternate backend.
             data = self._searchapi_get({"engine": "meta_ad_library", "q": url, "country": "ALL"})
-            return data.get("ads") or data.get("results") or []
-        raise ValueError(f"Unknown backend: {self.backend}")
+            items = data.get("ads") or data.get("results") or []
+        else:
+            raise ValueError(f"Unknown backend: {self.backend}")
+        # Drop the actor's "no ads" sentinel record so it never becomes a phantom
+        # ad. A genuinely empty page then yields [] → run status "no_active_ads".
+        return [it for it in items if not _is_actor_error(it)]
 
     # ---------------- AdSource interface ------------------------------------
     def resolve_company(self, name: str, country: str = "DE") -> list[PageCandidate]:
