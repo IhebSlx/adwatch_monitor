@@ -99,6 +99,31 @@ def test_fetch_ads_drops_actor_error_stub():
     assert len(out) == 1 and out[0].external_ad_id == "999"
 
 
+def test_shares_distinctive_token():
+    from adwatch.identity.serper_source import _shares_distinctive_token as sh
+    assert sh("Grantz GmbH & Co. KG", "Grantz Metallbau") is True         # real: shared surname
+    assert sh("Albrecht GmbH", "Heideck - Waescheweiher") is False        # unrelated
+    assert sh("SH-Fenstersysteme GmbH", "WS-Fenstersysteme") is False     # only a compound trade word
+    assert sh("Pabst Metallbau GmbH", "Candidate Flow Jobs: Metallbau") is False  # only 'Metallbau'
+
+
+def test_prefer_facebook_over_instagram():
+    from adwatch.identity.serper_source import _prefer_facebook as pf
+    ig = {"platform": "instagram", "name": "Grantz Metallbau", "similarity": 1.0}
+    fb = {"platform": "facebook", "name": "Grantz GmbH & Co. KG", "page_id": None, "similarity": 1.0}
+    # judge picked IG, a co-equal token-sharing FB exists -> switch to FB
+    assert pf("Grantz GmbH & Co. KG", ig, [fb, ig]) is fb
+    # an already-Facebook pick is never touched
+    assert pf("Grantz GmbH & Co. KG", fb, [fb, ig]) is fb
+    # FB candidate shares no distinctive token -> keep the IG pick
+    bad = {"platform": "facebook", "name": "Heideck", "page_id": None, "similarity": 1.0}
+    ig2 = {"platform": "instagram", "name": "Albrecht", "similarity": 1.0}
+    assert pf("Albrecht GmbH", ig2, [bad, ig2]) is ig2
+    # prefer the fetch-ready FB (numeric page_id) over a handle-only one
+    fb_pid = {"platform": "facebook", "name": "Grantz Bau", "page_id": "123", "similarity": 1.0}
+    assert pf("Grantz GmbH", ig, [fb, fb_pid, ig]).get("page_id") == "123"
+
+
 def test_company_score_zero_ads_is_zero():
     """A company running zero ads must score 0 — not ~12.5 off the neutral
     first-week momentum term (the phantom-ad fix exposed this)."""

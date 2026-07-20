@@ -85,6 +85,74 @@ def _brand_core(term: str) -> str | None:
     return pick if pick and pick.lower() != term.lower() else None
 
 
+# legal-form and filler tokens that never identify a specific company
+_LEGAL_TOKENS = {"gmbh", "kg", "kgaa", "co", "ohg", "ag", "mbh", "ek", "gbr", "und"}
+_GENERIC_ASCII = {_umlaut_ascii(t) for t in _GENERIC_TOKENS}
+
+
+def _is_generic_token(t: str) -> bool:
+    """A trade/legal word that doesn't identify a company. Catches plain trade
+    words AND German COMPOUNDS of them ('fenstersysteme' = fenster+systeme) so a
+    'SH-Fenstersysteme' vs 'WS-Fenstersysteme' pair doesn't look related — while
+    a real surname that merely starts with a trade root ('Baumann') is kept,
+    because it does not fully decompose into trade roots."""
+    if t in _GENERIC_ASCII or t in _LEGAL_TOKENS:
+        return True
+    rest, matched = t, False
+    changed = True
+    while changed and rest:
+        changed = False
+        for g in _GENERIC_ASCII:
+            if len(g) >= 4 and rest.startswith(g):
+                rest, changed, matched = rest[len(g):], True, True
+                break
+    return matched and rest == ""       # fully built from ≥4-char trade roots
+
+
+def _distinctive_tokens(name: str) -> set[str]:
+    """The identifying tokens of a name: ≥3 chars, ascii-folded, minus trade
+    words (_GENERIC_TOKENS) and legal forms — e.g. 'Grantz GmbH & Co. KG' → {grantz}."""
+    toks = re.findall(r"[a-z0-9]{3,}", _umlaut_ascii((name or "").lower()))
+    return {t for t in toks if not _is_generic_token(t)}
+
+
+def _shares_distinctive_token(a: str, b: str) -> bool:
+    """True when two names share a meaningful (non-trade, non-legal) token —
+    'Grantz GmbH' & 'Grantz Metallbau' share 'grantz', but 'Albrecht GmbH' &
+    'Heideck …' share nothing and '… Metallbau' shares only a trade word. Used
+    to corroborate that a Facebook candidate really is the same company before
+    overriding the judge's Instagram pick."""
+    return bool(_distinctive_tokens(a) & _distinctive_tokens(b))
+
+
+# how far below the Instagram pick a Facebook candidate's name-match may sit and
+# still be preferred (they are usually equal — same company, two platforms)
+_FB_PREFER_MARGIN = 0.15
+
+
+def _prefer_facebook(company_name: str, chosen: dict, ranked: list[dict]) -> dict:
+    """Ads live on the Facebook PAGE — Instagram shares Meta's ad identity, but
+    the Ad Library is keyed by the FB page, so an Instagram-only confirm can
+    never be fetched for ads. When the judge picked an Instagram profile yet a
+    Facebook candidate for the SAME company is present — corroborated by a
+    shared distinctive name token AND a comparable name match — prefer the
+    Facebook page (fetch-ready ones, i.e. with a numeric id, first). Otherwise
+    keep the judge's pick: better an un-fetchable-but-correct IG page than a
+    wrong FB one."""
+    if chosen.get("platform") != "instagram":
+        return chosen
+    base = chosen.get("similarity") or 0
+    fb = [c for c in ranked
+          if c.get("platform") == "facebook" and not c.get("blocked")
+          and (c.get("similarity") or 0) >= _STRONG_NAME
+          and (c.get("similarity") or 0) >= base - _FB_PREFER_MARGIN
+          and _shares_distinctive_token(company_name, c.get("name") or "")]
+    if not fb:
+        return chosen
+    fb.sort(key=lambda c: (c.get("page_id") is not None, c.get("similarity") or 0), reverse=True)
+    return fb[0]
+
+
 def _pool_viable(pages: dict[str, dict]) -> bool:
     """True when at least one candidate is worth judging — corroborated by
     site or city, or a reasonably close name."""
@@ -480,6 +548,7 @@ def resolve_identity(name: str, country: str = "DE", website_domain: str | None 
                     "candidates": candidates, "search_term": term, "llm": "rejected_all"}
         if pick is not None:
             best = ranked[pick]
+            best = _prefer_facebook(name, best, ranked)   # FB page > IG for ad-tracking
             llm = "picked"
             status = "confirmed" if (best["city_match"] or best["similarity"] >= _STRONG_NAME) \
                 else "ambiguous"
