@@ -29,6 +29,13 @@ from .base import AdSource, PageCandidate, RawAd
 APIFY_BASE = "https://api.apify.com/v2"
 TERMINAL_STATES = {"SUCCEEDED", "FAILED", "TIMED-OUT", "TIMED_OUT", "ABORTED"}
 
+
+class ApifyQuotaError(RuntimeError):
+    """Apify rejected the run because the account's usage/hard limit is reached.
+    Unlike a one-off fetch error this affects EVERY subsequent call, so the batch
+    must stop immediately rather than retry company-by-company (which would just
+    log the same 403 thousands of times and waste the whole run)."""
+
 # How confident a single-page or best-vs-runner-up match needs to be to auto-confirm.
 SIM_CONFIRM_SINGLE = 0.30   # only one distinct page in results
 SIM_CONFIRM = 0.50          # multiple pages: top candidate similarity floor
@@ -192,7 +199,13 @@ class MetaAdSource(AdSource):
         r = requests.post(f"{APIFY_BASE}/acts/{self.actor_id}/runs",
                           params={"token": self.token}, json=payload, timeout=60)
         if r.status_code >= 400:
-            raise RuntimeError(f"Apify run failed to start ({r.status_code}): {r.text[:400]}")
+            body = r.text[:400]
+            # Monthly usage / hard limit (402 payment-required or 403 with a
+            # limit message) -> a batch-fatal condition, not a per-company error.
+            if r.status_code in (402, 403) and re.search(
+                    r"usage|hard limit|monthly limit|quota|exceeded", body, re.I):
+                raise ApifyQuotaError(body)
+            raise RuntimeError(f"Apify run failed to start ({r.status_code}): {body}")
         run = r.json().get("data", {})
         run_id = run.get("id")
         status = run.get("status")

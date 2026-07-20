@@ -124,6 +124,27 @@ def test_prefer_facebook_over_instagram():
     assert pf("Grantz GmbH", ig, [fb, fb_pid, ig]).get("page_id") == "123"
 
 
+def test_apify_quota_error_detection(monkeypatch):
+    """A monthly usage / hard-limit 403 must raise ApifyQuotaError (batch-fatal),
+    while an ordinary 4xx stays a plain RuntimeError (per-company error)."""
+    import requests
+    from adwatch.collect.meta_source import ApifyQuotaError, MetaAdSource
+    src = object.__new__(MetaAdSource)
+    src.backend, src.actor_id, src.token = "apify", "x", "y"
+
+    class Resp:
+        def __init__(self, code, text): self.status_code, self.text = code, text
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp(403, "monthly usage hard limit exceeded"))
+    with pytest.raises(ApifyQuotaError):
+        src._run_actor({})
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp(400, "invalid input schema"))
+    with pytest.raises(RuntimeError) as ei:
+        src._run_actor({})
+    assert not isinstance(ei.value, ApifyQuotaError)
+
+
 def test_company_score_zero_ads_is_zero():
     """A company running zero ads must score 0 — not ~12.5 off the neutral
     first-week momentum term (the phantom-ad fix exposed this)."""

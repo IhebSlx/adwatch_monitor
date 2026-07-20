@@ -447,6 +447,10 @@ tr.id-locked-row td { background: color-mix(in srgb, var(--accent) 4.5%, transpa
 .run-status-no_active_ads, .run-status-no_ads_found { background: var(--bg-subtle); color: var(--muted); }
 .run-status-ambiguous_match { background: var(--warn-soft); color: var(--warn); }
 .run-status-error { background: var(--danger-soft); color: var(--danger); }
+/* fetch-progress status line when a run is stopped by an Apify quota/hard limit */
+.status-error { color: var(--danger); font-weight: 650; background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: var(--radius-sm); padding: 6px 10px; }
 .log-row { cursor: pointer; }
 .log-error-cell { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 12.5px; }
 .log-row.expanded .log-error-cell { max-width: none; white-space: normal; }

@@ -23,7 +23,7 @@ from ..insights.aggregate import aggregate
 from ..insights.classify import classify_ad
 from ..insights.score import company_score
 from ..models import Ad, CollectionRun, Company, CompanyPage, WeeklyCompanyMetric
-from .meta_source import MetaAdSource
+from .meta_source import ApifyQuotaError, MetaAdSource
 
 
 def monday_of(d: dt.date) -> dt.date:
@@ -239,6 +239,20 @@ def run_once(progress=None, company_id: int | None = None) -> dict:
                           "company": company.name, "status": "skipped_no_identity",
                           "ads": 0})
                     continue
+            except ApifyQuotaError as exc:
+                # Batch-fatal: every remaining company would hit the same 403.
+                # Stop now, flag it, and let the UI show one clear banner instead
+                # of an error per company.
+                summary["errors"] += 1
+                summary["quota_exceeded"] = True
+                if run is not None:
+                    run.status = "error"
+                    run.error = "Apify usage/hard limit reached"
+                    run.ads_scraped = 0
+                s.commit()
+                emit({"phase": "quota_exceeded", "i": idx, "total": total,
+                      "company": company.name, "detail": str(exc)[:200]})
+                break
             except Exception as exc:  # noqa: BLE001
                 status = "error"
                 summary["errors"] += 1
@@ -272,8 +286,11 @@ def run_once(progress=None, company_id: int | None = None) -> dict:
 
         # ---- partner-hub sweep -------------------------------------------
         try:
-            emit({"phase": "sweep_start"})
-            groups = partner_linker.run_sweep(source, s, companies)
+            if summary.get("quota_exceeded"):
+                groups = []   # quota exhausted — don't make more Apify calls
+            else:
+                emit({"phase": "sweep_start"})
+                groups = partner_linker.run_sweep(source, s, companies)
             for g in groups:
                 cid = g["company_id"]
                 fresh = [a for a in g["ads"]

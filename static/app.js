@@ -806,6 +806,14 @@
           setBar(evt.i / Math.max(evt.total, 1), srcIdx);
           const extra = evt.page_name ? ` · ${evt.page_name}` : "";
           addLog(`${tag}${evt.status === "error" ? "✗" : "✓"} ${evt.company} — ${evt.status} · ${evt.ads} ads${extra}`);
+        } else if (phase === "quota_exceeded") {
+          setBar(1, srcIdx);
+          status.innerHTML = `⚠ <b>Apify-Kontingent aufgebraucht</b> — Abruf gestoppt. `
+            + `Bitte Kontingent/API-Key unter Einstellungen prüfen.`;
+          status.classList.add("status-error");
+          addLog(`${tag}✗ Apify quota/hard-limit reached — batch stopped at “${evt.company}”. `
+            + `Remaining companies were not fetched.`);
+          toast("Apify-Kontingent aufgebraucht — Abruf gestoppt. Kontingent/Key prüfen.", "error");
         } else if (phase === "sweep_start") {
           setBar(0.97, srcIdx);
           addLog(`${tag}→ Partner sweep — searching hub campaigns for partner accounts…`);
@@ -819,7 +827,14 @@
           const collected = summaries.reduce((n, s) => n + (s.collected || 0), 0);
           const companies = summaries.reduce((n, s) => n + (s.companies || 0), 0);
           const errors = summaries.reduce((n, s) => n + (s.errors || 0), 0);
-          status.textContent = `Done · ${collected}/${companies} collected` + (errors ? ` · ${errors} error(s)` : "");
+          if (summaries.some(s => s.quota_exceeded)) {
+            status.innerHTML = `⚠ <b>Apify-Kontingent aufgebraucht</b> — Abruf vorzeitig gestoppt `
+              + `(${collected}/${companies} abgerufen). Kontingent/API-Key prüfen.`;
+            status.classList.add("status-error");
+          } else {
+            status.classList.remove("status-error");
+            status.textContent = `Done · ${collected}/${companies} collected` + (errors ? ` · ${errors} error(s)` : "");
+          }
         }
       };
       es.addEventListener("done", async () => {
