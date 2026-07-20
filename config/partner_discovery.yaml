@@ -13,7 +13,14 @@
 # advertise for SEVERAL companies are treated as shared hubs and their ads
 # are attributed per-ad instead.
 
-enabled: true
+# DISABLED on purpose. AdWatch is used to find win-back / prospect dealers —
+# companies that market on their own but aren't (or are no longer) active
+# Solarlux buyers. The partner-hub sweep does the opposite: it surfaces dealers
+# already advertising THROUGH the Solarlux partner program, which are by
+# definition already engaged — not our target — and it was the single biggest
+# Apify cost (one ~$0.23 "Solarlux" 300-ad search per company fetched).
+# Leave false unless you specifically want partner-program attribution back.
+enabled: false
 
 # Advertiser pages whose Meta ads are ALWAYS excluded — no matter which company
 # they'd otherwise be attributed to, and whether they arrive via the partner

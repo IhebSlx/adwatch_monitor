@@ -285,9 +285,15 @@ def run_once(progress=None, company_id: int | None = None) -> dict:
                   "ads": len(collected), "page_name": company.page_name})
 
         # ---- partner-hub sweep -------------------------------------------
+        # OFF by design: AdWatch targets win-back / prospect dealers, not ones
+        # already advertising THROUGH the Solarlux partner program. Gated by
+        # config/partner_discovery.yaml -> enabled (default false), so the sweep
+        # never runs and never spends the per-search Apify quota unless turned on
+        # deliberately.
+        _sweep_on = partner_linker.is_enabled() and not summary.get("quota_exceeded")
         try:
-            if summary.get("quota_exceeded"):
-                groups = []   # quota exhausted — don't make more Apify calls
+            if not _sweep_on:
+                groups = []
             else:
                 emit({"phase": "sweep_start"})
                 groups = partner_linker.run_sweep(source, s, companies)
@@ -313,8 +319,9 @@ def run_once(progress=None, company_id: int | None = None) -> dict:
                 if week_status.get(cid) in (None, "no_active_ads", "no_ads_found") and fresh:
                     week_status[cid] = "ok"
             s.commit()
-            emit({"phase": "sweep_done", "linked": summary["partner_pages_linked"],
-                  "attributed": summary["partner_ads_attributed"]})
+            if _sweep_on:
+                emit({"phase": "sweep_done", "linked": summary["partner_pages_linked"],
+                      "attributed": summary["partner_ads_attributed"]})
         except Exception as exc:  # noqa: BLE001 — sweep failure must not lose the cycle
             summary["errors"] += 1
             emit({"phase": "sweep_done", "linked": 0, "attributed": 0,

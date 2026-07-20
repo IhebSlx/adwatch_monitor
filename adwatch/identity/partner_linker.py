@@ -41,6 +41,14 @@ def load_config() -> dict:
         return yaml.safe_load(f) or {"enabled": False}
 
 
+def is_enabled() -> bool:
+    """Whether partner-hub discovery/attribution runs at all. OFF by default:
+    AdWatch targets win-back / prospect dealers, not ones already advertising
+    through the Solarlux partner program. Flip enabled=true in
+    config/partner_discovery.yaml to turn it back on."""
+    return bool(load_config().get("enabled"))
+
+
 # ---------------------------------------------------------------------------
 # Normalization + token matching
 # ---------------------------------------------------------------------------
