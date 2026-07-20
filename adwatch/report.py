@@ -54,6 +54,10 @@ _FILTER_FIELD_LABEL_DE = {
     "kv": "KV", "segment": "Segment", "sub_segment": "Untersegment",
     "sales_channel": "Vertriebsweg", "country": "Land",
 }
+_STATUS_LABEL_DE = {
+    "locked": "gesperrt", "confirmed": "bestätigt", "ambiguous": "mehrdeutig",
+    "no_ads_found": "keine Seite gefunden", "pending": "nicht geprüft",
+}
 
 
 def _describe_filters_de(filters: dict | None) -> str | None:
@@ -61,6 +65,11 @@ def _describe_filters_de(filters: dict | None) -> str | None:
     for display in the report header — None if no filter was applied."""
     if not filters:
         return None
+    # An explicit hand-picked selection ("report for selected") — describe it as
+    # a selection, not a filter chain.
+    if filters.get("ids"):
+        n = len(filters["ids"])
+        return f"Auswahl: {n} {'ausgewählte Firma' if n == 1 else 'ausgewählte Firmen'}"
     bits = []
     if filters.get("q"):
         bits.append(f'Suche: "{filters["q"]}"')
@@ -69,6 +78,10 @@ def _describe_filters_de(filters: dict | None) -> str | None:
         if value:
             value_str = ", ".join(value) if isinstance(value, list) else value
             bits.append(f"{label}: {value_str}")
+    if filters.get("resolution_status"):
+        vals = filters["resolution_status"]
+        vals = vals if isinstance(vals, list) else [vals]
+        bits.append("Status: " + ", ".join(_STATUS_LABEL_DE.get(v, v) for v in vals))
     rmin, rmax = filters.get("revenue_min"), filters.get("revenue_max")
     if rmin is not None and rmax is not None:
         bits.append(f"Umsatz: {_eur(rmin)}–{_eur(rmax)}")

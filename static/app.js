@@ -1569,6 +1569,31 @@
     loadState();   // dashboard table shares this data
   }
 
+  async function runReportForSelected() {
+    const ids = [...CUST.selected];
+    if (!ids.length) return;
+    const btn = $("#custReportBtn");
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "Generating…";
+    try {
+      // Reuses the standard report path, scoped to exactly these ids via the
+      // {ids:[…]} filter — same endpoint the Reports tab uses.
+      const { filename } = await api("/api/reports/generate", "POST",
+        { report: "full", filters: { ids } });
+      toast(`✓ Report generated for ${ids.length} ${ids.length === 1 ? "company" : "companies"} — also under Reports`, "info");
+      // Open the finished PDF (same behaviour as the Download links in history).
+      const a = document.createElement("a");
+      a.href = `/api/reports/${encodeURIComponent(filename)}`;
+      a.target = "_blank"; a.rel = "noopener";
+      document.body.appendChild(a); a.click(); a.remove();
+      try { await loadReports(); } catch { /* Reports tab refresh is best-effort */ }
+    } catch (e) {
+      toast(`Report failed: ${e.message}`, "error");
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  }
+
   // ---------------- company detail drawer ----------------
 
   function drawerKv(label, value) {
@@ -1954,6 +1979,7 @@
 
     // selection actions + drawer chrome
     $("#custIdentityBtn").addEventListener("click", runIdentityAction);
+    $("#custReportBtn").addEventListener("click", runReportForSelected);
     $("#custDeleteBtn").addEventListener("click", runDeleteAction);
     $("#custEditBtn").addEventListener("click", () => {
       const ids = [...CUST.selected];

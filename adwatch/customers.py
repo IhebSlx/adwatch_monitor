@@ -227,6 +227,11 @@ def import_excel(file_bytes: bytes) -> dict:
 # ---------------------------------------------------------------------------
 
 def _apply_filters(stmt, f: dict):
+    # Explicit selection (hand-picked company ids, e.g. "report for selected"):
+    # restrict to exactly these. Kept first so it composes with any other
+    # filters, though the selection flow normally passes ids alone.
+    if f.get("ids"):
+        stmt = stmt.where(Company.id.in_([int(i) for i in f["ids"]]))
     if f.get("q"):
         like = f"%{f['q'].strip()}%"
         stmt = stmt.where(or_(Company.name.ilike(like), Company.sap_number.ilike(like)))
