@@ -99,6 +99,15 @@ def test_fetch_ads_drops_actor_error_stub():
     assert len(out) == 1 and out[0].external_ad_id == "999"
 
 
+def test_company_score_zero_ads_is_zero():
+    """A company running zero ads must score 0 — not ~12.5 off the neutral
+    first-week momentum term (the phantom-ad fix exposed this)."""
+    from adwatch.insights.score import company_score
+    assert company_score(0, None, 0, 0) == 0.0
+    assert company_score(0, 5, 0, 0) == 0.0     # even with prior-week ads
+    assert company_score(3, None, 3, 2) > 0     # real activity still scores
+
+
 # ---------------------------------------------------------------------------
 # DB-backed: failed-fetch must NOT overwrite good metrics with 0
 # ---------------------------------------------------------------------------

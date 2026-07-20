@@ -24,6 +24,11 @@ def load_config() -> dict:
 def company_score(total_ads: int, prev_total: int | None,
                   new_ads: int, categories_active: int) -> float:
     """See score_config.yaml for the formula. Returns 0.0-100.0."""
+    # No ads = no activity = 0. Without this guard the neutral first-week
+    # momentum term (0.5) alone gives a company that runs ZERO ads a nonzero
+    # activity score (~12.5), which reads as mild activity where there is none.
+    if total_ads <= 0:
+        return 0.0
     cfg = load_config()
     w = cfg["weights"]
     norm = max(int(cfg.get("volume_norm_ads", 15)), 1)
