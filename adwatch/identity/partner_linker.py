@@ -41,6 +41,14 @@ def load_config() -> dict:
         return yaml.safe_load(f) or {"enabled": False}
 
 
+def is_enabled() -> bool:
+    """Whether partner-hub discovery/attribution runs at all. OFF by default:
+    AdWatch targets win-back / prospect dealers, not ones already advertising
+    through the Solarlux partner program. Flip enabled=true in
+    config/partner_discovery.yaml to turn it back on."""
+    return bool(load_config().get("enabled"))
+
+
 # ---------------------------------------------------------------------------
 # Normalization + token matching
 # ---------------------------------------------------------------------------
@@ -59,6 +67,20 @@ def normalize_haystack(s: str) -> str:
     can respect word boundaries ('schmidt' must NOT match inside
     'wintergarten-nagelschmidt' — but 'nagelschmidt' must)."""
     return re.sub(r"[^a-z0-9]+", " ", (s or "").translate(_UMLAUTS).lower()).strip()
+
+
+def excluded_page_patterns(cfg: dict | None = None) -> list[str]:
+    """Normalized name fragments of pages whose ads must always be excluded
+    (see `excluded_pages` in partner_discovery.yaml)."""
+    cfg = load_config() if cfg is None else cfg
+    return [p for p in (normalize(x) for x in cfg.get("excluded_pages", [])) if p]
+
+
+def is_excluded_page(page_name: str | None, cfg: dict | None = None) -> bool:
+    """True if this advertiser page is on the exclusion list. Matched as a
+    normalized substring, so regional variants ("… Westfalen") are covered."""
+    hay = normalize(page_name or "")
+    return bool(hay) and any(pat in hay for pat in excluded_page_patterns(cfg))
 
 
 def company_tokens(name: str, cfg: dict) -> list[str]:
@@ -160,9 +182,12 @@ def run_sweep(source, session, companies) -> list[dict]:
         if not pid or pid in already_linked:
             continue  # linked pages are fetched directly in the main loop
         snap = it.get("snapshot") if isinstance(it.get("snapshot"), dict) else {}
+        page_name = it.get("page_name") or snap.get("page_name") or ""
+        if is_excluded_page(page_name, cfg):
+            continue  # excluded page — never link or attribute its ads
         page = pages.setdefault(pid, {
             "page_id": pid,
-            "page_name": it.get("page_name") or snap.get("page_name") or "",
+            "page_name": page_name,
             "matches": {},   # company_id -> {"ads": [RawAd], "evidence": {...}}
             "all_ads": [],
         })

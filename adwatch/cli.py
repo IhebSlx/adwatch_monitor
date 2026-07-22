@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from . import config
 
@@ -16,8 +17,12 @@ def main() -> None:
     weekly = sub.add_parser("send-weekly", help="Build the top5 report and email it to all active recipients")
     weekly.add_argument("--full", action="store_true", help="Send the full report instead of top5")
     serve = sub.add_parser("serve", help="Start the dashboard")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8000)
+    # Bind to localhost by DEFAULT — the app has no auth unless an access
+    # password is configured, so it must not be reachable from the network
+    # out of the box. Hosting (Railway/a server) sets HOST=0.0.0.0 explicitly
+    # AND an access password (see config.ACCESS_PASSWORD / web.py auth).
+    serve.add_argument("--host", default=os.getenv("HOST", "127.0.0.1"))
+    serve.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")))
 
     args = p.parse_args()
 
@@ -52,7 +57,7 @@ def main() -> None:
 
     elif args.cmd == "serve":
         import uvicorn
-        print(f"Dashboard: http://{args.host}:{args.port}   (mode={config.MODE})")
+        print(f"Dashboard: http://{args.host}:{args.port}")
         uvicorn.run("adwatch.web:app", host=args.host, port=args.port, reload=False)
 
 

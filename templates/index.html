@@ -3,30 +3,65 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#4f5ce5">
 <title>AdWatch — Ad Activity Monitor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%234f5ce5'/%3E%3Crect x='10' y='10' width='12' height='12' rx='4' fill='white' fill-opacity='.92'/%3E%3C/svg%3E">
+<!-- Inter — the UI font the stylesheet targets; display=swap keeps the system
+     fallback stack rendering instantly if the network is slow/offline -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <div id="app">
 
-  <header class="topbar">
-    <div class="brand-block">
-      <span class="brand">AdWatch</span>
-      <span class="tagline">Ad-activity monitor · Meta Ad Library</span>
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div class="brand-text">
+        <span class="brand">AdWatch</span>
+        <span class="brand-sub">Partner ad monitor</span>
+      </div>
     </div>
-    <div class="spacer"></div>
-    <div class="mode-switch" id="modeSwitch">
-      <button class="mode-btn" data-mode="live">Live</button>
-      <button class="mode-btn" data-mode="mock">Mock</button>
-    </div>
-    <button id="fetchBtn" class="btn btn-primary">Fetch latest ads</button>
-  </header>
 
-  <div class="subbar">
-    <span id="subbarTags" class="tags"></span>
-    <span class="spacer"></span>
-    <button id="resetBtn" class="link-btn">Reset company list</button>
-  </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        Dashboard
+      </button>
+      <button class="tab" data-tab="customers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4v18"/><path d="M19 21V11l-7-4"/><path d="M9 9v.01M9 12v.01M9 15v.01M9 18v.01"/></svg>
+        Companies
+      </button>
+      <button class="tab" data-tab="reports">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15h6M9 11h2"/></svg>
+        Reports
+      </button>
+      <button class="tab" data-tab="logs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        Logs
+      </button>
+      <button class="tab" data-tab="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Settings
+      </button>
+      <button class="tab" data-tab="help">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+        How it works
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="source-switch" id="sourceSwitch" title="Which ad platform(s) to fetch">
+        <label><input type="checkbox" id="sourceMeta" checked> Meta</label>
+        <label><input type="checkbox" id="sourceGoogle"> Google</label>
+      </div>
+      <button id="fetchBtn" class="btn btn-primary btn-block">Fetch latest ads</button>
+    </div>
+  </aside>
+
+  <div class="content">
 
   <div id="fetchPanel" class="fetch-panel hidden">
     <div class="fetch-panel-head">
@@ -37,60 +72,112 @@
   </div>
 
   <main>
-    <div class="page-head">
-      <h1>Ad Activity Monitor</h1>
-      <p class="page-sub" id="pageSub">Loading…</p>
-    </div>
-
     <div id="noDataNotice" class="notice hidden">
-      No data yet — click <b>Fetch latest ads</b> above to populate the dashboard.
+      No data yet — click <b>Fetch latest ads</b> in the sidebar to populate the dashboard.
     </div>
-
-    <nav class="tabs">
-      <button class="tab active" data-tab="dashboard">Dashboard</button>
-      <button class="tab" data-tab="companies">Companies &amp; Pages</button>
-      <button class="tab" data-tab="reports">Reports</button>
-      <button class="tab" data-tab="help">How it works</button>
-    </nav>
 
     <!-- ================= TAB: Dashboard ================= -->
     <section id="tab-dashboard" class="tab-panel active">
+      <header class="page-head">
+        <h1>Dashboard</h1>
+        <p>Weekly ad activity across your partner companies.</p>
+      </header>
       <div id="signals" class="signals"></div>
 
       <div id="kpis" class="kpi-row"></div>
 
+      <!-- Divergenz: Marketing-Aktivität × Umsatz-Lücke — the ranked "who to
+           call" list (see insights/divergence.py and the How-it-works tab). -->
+      <div class="card" id="divergenceCard">
+        <h2>Interessante Partner <span class="div-meta muted" id="divergenceMeta"></span></h2>
+        <p class="hint">Divergenz = Marketing-Aktivität × Umsatz-Lücke: Partner, die kaum noch kaufen, aber aktiv werben — Win-back-Kandidaten zuerst. Formel unter „How it works“.</p>
+        <div class="table-wrap">
+          <table id="divergenceTable">
+            <thead><tr>
+              <th style="width:30px">#</th>
+              <th>Firma</th>
+              <th style="width:130px">Divergenz</th>
+              <th style="width:105px">Typ</th>
+              <th>Grund</th>
+              <th class="num" style="width:120px">Umsatz früher (max)</th>
+            </tr></thead>
+            <tbody id="divergenceBody"></tbody>
+          </table>
+        </div>
+        <p class="hint hidden" id="divergenceEmpty">Noch keine bewerteten Partner — erst per <b>Ad lookup</b> Anzeigen abrufen, dann erscheint hier die Rangliste.</p>
+      </div>
+
       <div class="card">
         <h2>Companies this week</h2>
+        <div class="filter-bar">
+          <input type="text" id="compSearch" placeholder="Search company…" style="flex:2;min-width:160px">
+          <select id="compStatus">
+            <option value="">All statuses</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="ambiguous">Ambiguous</option>
+            <option value="no_ads_found">No ads found</option>
+            <option value="pending">Pending</option>
+          </select>
+          <input type="number" id="compMinTotal" placeholder="Min total ads" style="width:110px">
+          <input type="number" id="compMinMeta" placeholder="Min Meta ads" style="width:110px">
+          <input type="number" id="compMinGoogle" placeholder="Min Google ads" style="width:110px">
+          <button id="compMoreFiltersBtn" class="btn btn-sm" type="button">Filter ▾</button>
+          <button id="compClearFilterBtn" class="btn btn-sm">Clear</button>
+          <span class="spacer"></span>
+          <span id="compFilterCount" class="muted"></span>
+        </div>
+        <div class="filter-bar hidden" id="compMoreFilters" style="margin-top:8px">
+          <div id="compSegmentDrop"></div>
+          <div id="compSubSegmentDrop"></div>
+          <div id="compKvDrop"></div>
+          <select id="compRevenueHistory" style="width:210px">
+            <option value="">Umsatz-Historie: alle</option>
+            <option value="lapsed">Ehemalige Käufer (nicht akt. Jahr)</option>
+            <option value="new">Neukäufer (nur akt. Jahr)</option>
+            <option value="any">Jemals Umsatz</option>
+            <option value="never">Nie Umsatz</option>
+          </select>
+        </div>
         <div class="table-wrap">
-          <table id="companyTable">
+          <table id="companyTable" class="sortable">
             <thead>
               <tr>
                 <th class="col-dot"></th>
-                <th>Company</th>
-                <th>Score</th>
-                <th class="num">Active ads</th>
-                <th class="num">Δ wk</th>
-                <th class="num">New</th>
-                <th class="num">Hiring</th>
-                <th class="num">Selling</th>
+                <th data-sort="company">Company</th>
+                <th data-sort="score">Score</th>
+                <th class="num" data-sort="meta_active_ads">Meta ads</th>
+                <th class="num" data-sort="google_active_ads">Google ads</th>
+                <th class="num" data-sort="total_active_ads">Total ads</th>
+                <th class="num" data-sort="delta_ads">Δ wk</th>
+                <th class="num" data-sort="new_ads">New</th>
+                <th class="num" data-sort="hiring">Hiring</th>
+                <th class="num" data-sort="selling">Selling</th>
                 <th>Products</th>
-                <th>Est. spend / wk</th>
+                <th data-sort="spend_low">Est. spend / wk</th>
                 <th>Note</th>
               </tr>
             </thead>
             <tbody id="companyTableBody"></tbody>
           </table>
         </div>
-        <p class="hint">Click a row for full detail. Spend is a modelled low–high estimate — Meta publishes no real spend for commercial ads.</p>
       </div>
 
       <div id="detailPanel" class="card hidden"></div>
     </section>
 
-    <!-- ================= TAB: Companies & Pages ================= -->
-    <section id="tab-companies" class="tab-panel">
+    <!-- ================= TAB: Companies ================= -->
+    <!-- A company IS a customer — one list, no separate "tracking" entity.
+         Import the Excel master data here; every row can be fetched directly
+         (expand "Pages" to link/confirm a Meta/Google page) with no separate
+         opt-in step — a row just becomes "tracked" the first time it's fetched. -->
+    <section id="tab-customers" class="tab-panel">
+      <header class="page-head">
+        <h1>Companies</h1>
+        <p>Everything in one place — master data, identity check, ad lookup. Click a row for details; select rows to run an action.</p>
+      </header>
       <div class="card">
-        <h2>Add a company</h2>
+        <h2>Add a company by hand</h2>
+        <p class="hint">For a one-off company not in your Excel export. Bulk data comes from the import below.</p>
         <form id="addCompanyForm" class="inline-form">
           <input id="newCompanyName" placeholder="e.g. Villatrium Schmidt GmbH" autocomplete="off">
           <button class="btn btn-primary" type="submit">Add</button>
@@ -98,16 +185,153 @@
       </div>
 
       <div class="card">
-        <h2>Companies and their linked pages</h2>
-        <p class="hint">Every linked page is fetched weekly and rolled into the company's numbers.
-          Partner pages are discovered automatically from solarlux.com landing-URL evidence (editable here).
-          Renaming a company resets all its links.</p>
-        <div id="companiesList"></div>
+        <h2>Import company data</h2>
+        <p class="hint">Upload the customer Excel export (<code>.xlsx</code>). Rows are matched on
+          <b>SAP Nummer</b> (falling back to an exact name match for companies added by hand, like above) —
+          existing rows are updated, new ones added, nothing is deleted or renamed.
+          This data stays local (not sent to any hosted URL).</p>
+        <div class="inline-form">
+          <input type="file" id="customerFile" accept=".xlsx,.xls">
+          <button id="customerImportBtn" class="btn btn-primary">Import</button>
+        </div>
+        <p class="hint" id="customerImportResult"></p>
+      </div>
+
+      <div class="card">
+        <h2>Explorer</h2>
+        <div class="filter-bar">
+          <input type="text" id="custSearch" placeholder="Search name or SAP…" style="flex:2;min-width:160px">
+          <div id="custStatusDrop"></div>
+          <div id="custKvDrop"></div>
+          <div id="custSegmentDrop"></div>
+          <div id="custSubSegmentDrop"></div>
+          <div id="custChannelDrop"></div>
+          <div id="custCountryDrop"></div>
+          <input type="number" id="custRevenueMin" placeholder="Umsatz von €" style="width:120px">
+          <input type="number" id="custRevenueMax" placeholder="Umsatz bis €" style="width:120px">
+          <select id="custRevenueHistory" style="width:210px">
+            <option value="">Umsatz-Historie: alle</option>
+            <option value="lapsed">Ehemalige Käufer (nicht akt. Jahr)</option>
+            <option value="new">Neukäufer (nur akt. Jahr)</option>
+            <option value="any">Jemals Umsatz</option>
+            <option value="never">Nie Umsatz</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="custHasWebsite"> Has website</label>
+          <select id="custTracked">
+            <option value="">Tracked + untracked</option>
+            <option value="true">Tracked only</option>
+            <option value="false">Untracked only</option>
+          </select>
+          <select id="custAdActivity" title="Filter by advertising activity (based on the latest ad fetch)">
+            <option value="">Ad activity: all</option>
+            <option value="active">Running ads (active now)</option>
+            <option value="any">Any ads (ever)</option>
+            <option value="none">No active ads</option>
+          </select>
+          <div id="custExcludeKvDrop"></div>
+          <div id="custExcludeSegmentDrop"></div>
+          <div id="custExcludeSubSegmentDrop"></div>
+          <button id="custClearBtn" class="btn btn-sm">Clear</button>
+        </div>
+
+        <div class="explorer-toolbar">
+          <span id="custTotal" class="muted"></span>
+          <span class="spacer"></span>
+          <span class="select-top">Select top
+            <input type="number" id="custTopN" value="30" min="1" style="width:60px">
+            <button id="custSelectTopBtn" class="btn btn-sm">Select</button>
+          </span>
+          <button id="custFetchAllBtn" class="btn btn-sm" title="Anzeigen für ALLE gefilterten Firmen abrufen (keine Auswahl nötig)">📣 Ad lookup (gefiltert)</button>
+          <button id="custReportAllBtn" class="btn btn-sm" title="PDF-Bericht über ALLE gefilterten Firmen — der verwendete Filter steht im Berichtskopf">📄 Report (gefiltert)</button>
+          <button id="custExportAllBtn" class="btn btn-sm">Export filtered</button>
+        </div>
+
+        <!-- appears when ≥1 company is selected: choose what to do with the selection -->
+        <div class="action-bar hidden" id="custActionBar">
+          <span class="action-count" id="custSelCount"></span>
+          <button id="custIdentityBtn" class="btn btn-sm">🔍 Identity check</button>
+          <button id="custFetchBtn" class="btn btn-sm">📣 Ad lookup…</button>
+          <button id="custEditBtn" class="btn btn-sm" title="Select exactly one company to edit">✎ Edit</button>
+          <button id="custReportBtn" class="btn btn-sm" title="Generate a PDF report covering exactly the selected companies">📄 Report</button>
+          <button id="custExportSelBtn" class="btn btn-sm">Export</button>
+          <button id="custDeleteBtn" class="btn btn-sm btn-danger">Delete</button>
+          <span class="spacer"></span>
+          <button id="custClearSelBtn" class="btn btn-sm btn-ghost">Clear selection ✕</button>
+        </div>
+
+        <div id="fetchPlanPanel" class="fetch-plan hidden">
+          <h3>Fetch plan for the selected companies</h3>
+          <div class="inline-form" style="margin-bottom:8px">
+            <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="planSourceMeta" checked> Meta</label>
+            <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="planSourceGoogle"> Google</label>
+            <button id="planRecalcBtn" class="btn btn-sm">Recalculate</button>
+          </div>
+          <div id="fetchPlanSummary" class="fetch-plan-summary"></div>
+          <div class="inline-form" style="margin-top:10px">
+            <button id="planConfirmBtn" class="btn btn-primary">Start fetch</button>
+            <button id="planCancelBtn" class="btn">Cancel</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table id="customersTable" class="sortable">
+            <thead><tr>
+              <th class="col-selhead">
+                <div class="selhead">
+                  <input type="checkbox" id="custSelectPage" title="Select all on this page">
+                  <button type="button" id="custSelMenuBtn" class="selhead-caret" title="Selection options" aria-haspopup="true">▾</button>
+                </div>
+                <div class="selhead-menu hidden" id="custSelMenu">
+                  <button type="button" data-sel="page">Select this page</button>
+                  <button type="button" data-sel="all">Select all matching</button>
+                  <button type="button" data-sel="none">Clear selection</button>
+                </div>
+              </th>
+              <th class="col-dot"></th>
+              <th data-sort="sap_number">SAP</th>
+              <th data-sort="name">Firmenname</th>
+              <th>Facebook Seite</th>
+              <th class="num" title="Aktive Anzeigen beim letzten Abruf">Aktive Anzeigen</th>
+              <th>KV</th>
+              <th data-sort="segment">Segment</th>
+              <th data-sort="sub_segment">Untersegment</th>
+              <th data-sort="sales_channel">Vertriebsweg</th>
+              <th data-sort="city">Ort</th>
+              <th data-sort="country">Land</th>
+              <th>Website</th>
+              <th class="num" data-sort="revenue_y0">Umsatz akt.</th>
+              <th class="num" data-sort="revenue_y1">Umsatz -1</th>
+              <th class="num" data-sort="revenue_y2">Umsatz -2</th>
+              <th class="num" data-sort="revenue_y3">Umsatz -3</th>
+              <th class="num" data-sort="revenue_y4">Umsatz -4</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="customersTableBody"></tbody>
+          </table>
+        </div>
+        <p class="hint" id="customersEmptyHint">No companies yet — add one by hand or import a file above.</p>
+        <div class="explorer-pager">
+          <button id="custPrevBtn" class="btn btn-sm">‹ Prev</button>
+          <span id="custPageInfo" class="muted"></span>
+          <button id="custNextBtn" class="btn btn-sm">Next ›</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Background jobs</h2>
+        <p class="hint">Identity checks and ad lookups both run here, one company at a time — progress is
+          saved after every step, so a job survives an app restart (it's marked "interrupted" → hit Resume)
+          instead of losing everything.</p>
+        <div id="jobsList"></div>
       </div>
     </section>
 
     <!-- ================= TAB: Reports ================= -->
     <section id="tab-reports" class="tab-panel">
+      <header class="page-head">
+        <h1>Reports</h1>
+        <p>Generate, schedule and email the weekly PDF report.</p>
+      </header>
       <div class="card">
         <h2>Recipients</h2>
         <p class="hint">Check who should receive a report, then use "Send" on any report below.
@@ -129,6 +353,8 @@
           <select id="fetchDay"></select>
           <span>at</span>
           <input id="fetchTime" type="time" style="flex:0 0 auto">
+          <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="fetchSourceMeta"> Meta</label>
+          <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="fetchSourceGoogle"> Google</label>
         </div>
         <div class="inline-form" style="margin-bottom:8px">
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="sendEnabled"> Auto-send report on</label>
@@ -151,8 +377,12 @@
             <option value="top5">Top 5 advertisers</option>
             <option value="full">Full report</option>
           </select>
+          <label style="display:flex;align-items:center;gap:5px">
+            <input type="checkbox" id="reportUseFilter"> Use current Companies filter
+          </label>
           <button id="generateReportBtn" class="btn btn-primary">Generate</button>
         </div>
+        <p class="hint" id="reportFilterHint"></p>
         <p class="hint">Each generated report is named after the ISO week (e.g. <code>KW29_2026</code>) and
           never overwrites a previous one — generating again in the same week adds <code>_01</code>, <code>_02</code>, etc.</p>
       </div>
@@ -169,16 +399,90 @@
       </div>
     </section>
 
+    <!-- ================= TAB: Logs ================= -->
+    <section id="tab-logs" class="tab-panel">
+      <header class="page-head">
+        <h1>Logs</h1>
+        <p>Every fetch attempt, with the full error text when something fails.</p>
+      </header>
+      <div class="card">
+        <h2>Fetch logs</h2>
+        <p class="hint">Every fetch attempt, one row per company/page — including the actual error text
+          when a fetch fails (e.g. an Apify quota limit). A job's own log only shows whether it crashed
+          the whole job, not whether an individual company's fetch actually succeeded — this does.</p>
+        <div class="filter-bar">
+          <input type="text" id="logSearch" placeholder="Search company…" style="flex:2;min-width:160px">
+          <select id="logStatus">
+            <option value="">All statuses</option>
+            <option value="error">Error</option>
+            <option value="ok">OK</option>
+            <option value="no_active_ads">No active ads</option>
+            <option value="no_ads_found">No ads found</option>
+            <option value="ambiguous_match">Ambiguous</option>
+          </select>
+          <select id="logSource">
+            <option value="">Meta + Google</option>
+            <option value="meta">Meta</option>
+            <option value="google">Google</option>
+          </select>
+          <button id="logClearBtn" class="btn btn-sm" title="Reset the filters above">Reset</button>
+          <span class="spacer"></span>
+          <span id="logTotal" class="muted"></span>
+          <button id="logsPurgeBtn" class="btn btn-sm btn-danger" title="Delete all log entries without stored ads — entries with collected ad copies are kept">Clear logs</button>
+        </div>
+        <div class="table-wrap">
+          <table id="logsTable">
+            <thead>
+              <tr>
+                <th>Run date</th><th>Company</th><th>Source</th><th>Page</th>
+                <th>Status</th><th class="num">Ads</th><th>Error</th>
+              </tr>
+            </thead>
+            <tbody id="logsTableBody"></tbody>
+          </table>
+        </div>
+        <p class="hint" id="logsEmptyHint">No fetch attempts yet.</p>
+        <div class="explorer-pager">
+          <button id="logPrevBtn" class="btn btn-sm">‹ Prev</button>
+          <span id="logPageInfo" class="muted"></span>
+          <button id="logNextBtn" class="btn btn-sm">Next ›</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= TAB: Settings ================= -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="settings-topbar">
+        <div class="settings-topbar-title">
+          <h1>Settings</h1>
+          <p>Your integrations — changes take effect immediately, no restart. Values live only in your local database.</p>
+        </div>
+        <div class="settings-topbar-actions">
+          <span id="settingsSaveHint" class="hint" style="margin:0"></span>
+          <button class="btn btn-primary settings-save-btn">Save settings</button>
+        </div>
+      </div>
+      <div id="settingsGroups"></div>
+      <div class="settings-foot">
+        <button class="btn btn-primary settings-save-btn">Save settings</button>
+        <span class="hint" style="margin:0">Änderungen gelten sofort — kein Neustart nötig.</span>
+      </div>
+    </section>
+
     <!-- ================= TAB: How it works ================= -->
     <section id="tab-help" class="tab-panel">
+      <header class="page-head">
+        <h1>How it works</h1>
+        <p>The pipeline behind the numbers — identity, collection, insights.</p>
+      </header>
       <div class="card">
         <h2>The three parts</h2>
         <table class="info-table">
           <tr><th>Part</th><th>What it does</th><th>Where</th></tr>
           <tr>
             <td><b>1 · Identity</b></td>
-            <td>Link each company to its Facebook page(s) — main page by name search, partner accounts by landing-URL evidence. Once linked, fetching is deterministic.</td>
-            <td>Companies &amp; Pages tab · <code>adwatch/identity/</code></td>
+            <td>Link each company to its Facebook/Instagram page in three tiers: its <b>own website</b> first (footer/Impressum links — authoritative, free), then a <b>Google search</b> (serper) with a fallback query ladder, with <b>Claude Haiku</b> judging candidates against the full company profile and suggesting brand-name search phrases. Once linked, fetching is deterministic.</td>
+            <td>Companies tab · <code>adwatch/identity/</code></td>
           </tr>
           <tr>
             <td><b>2 · Collect</b></td>
@@ -187,10 +491,56 @@
           </tr>
           <tr>
             <td><b>3 · Insights</b></td>
-            <td>Classify each ad, estimate spend, score companies, raise weekly flags.</td>
+            <td>Classify each ad, estimate spend, score companies, compute the <b>Divergenz</b> ranking (see below), raise weekly flags.</td>
             <td>Dashboard tab · <code>adwatch/insights/</code></td>
           </tr>
         </table>
+      </div>
+
+      <div class="card">
+        <h2>Divergenz — the "Interessante Partner" ranking</h2>
+        <p>One number per partner answering: <b>how big is the gap between what this company buys
+          from us and how alive their marketing is?</b> A partner who stopped buying but runs fresh
+          campaigns is alive, investing in lead generation — just not with us. That's a win-back
+          call. The score separates those from healthy partners and truly dormant ones, across the
+          whole base.</p>
+        <table class="info-table">
+          <tr><th></th><th><b>Marketing active</b></th><th><b>Marketing dead</b></th></tr>
+          <tr><td><b>Buying healthy</b></td><td>fine — no action</td><td>fine — no action</td></tr>
+          <tr><td><b>Buying lapsed/declining</b></td><td>🎯 <b>the list</b> (Win-back)</td><td>dormant, low priority</td></tr>
+        </table>
+        <p style="margin-top:12px"><b>Formel: &nbsp;Divergenz = M × G</b> &nbsp;(0–100)</p>
+        <table class="info-table">
+          <tr><th>M — Marketing-Aktivität (0–100)</th><th>Punkte</th></tr>
+          <tr><td>Aktive Anzeigen (5 Punkte je Anzeige, max. 10 Anzeigen)</td><td>bis 50</td></tr>
+          <tr><td>Neueste Anzeige gestartet ≤ 30 Tage (+25) bzw. ≤ 90 Tage (+15)</td><td>bis 25</td></tr>
+          <tr><td>Neue Anzeigen diese Woche</td><td>+10</td></tr>
+          <tr><td>Auf Meta <i>und</i> Google aktiv</td><td>+10</td></tr>
+          <tr><td>Personalsuche-Anzeigen (Wachstumssignal)</td><td>+5</td></tr>
+        </table>
+        <table class="info-table" style="margin-top:10px">
+          <tr><th>G — Umsatz-Lücke (Faktor)</th><th>G</th></tr>
+          <tr><td><b>Ehemaliger Käufer</b> — Umsatz in Vorjahren, €0 im akt. Jahr</td><td>1.0</td></tr>
+          <tr><td><b>Stark rückläufig</b> — hochgerechnet &lt; 30 % des besten Vorjahres</td><td>0.8</td></tr>
+          <tr><td><b>Nie gekauft</b> (ruhende Partnerschaft)</td><td>0.6</td></tr>
+          <tr><td><b>Rückläufig</b> — hochgerechnet &lt; 70 % des besten Vorjahres</td><td>0.4</td></tr>
+          <tr><td><b>Stabil / wachsend / Neukäufer</b></td><td>0.15</td></tr>
+        </table>
+        <p class="hint" style="margin-top:10px">
+          Details, die die Rangliste ehrlich halten:
+          <br>· Der aktuelle Jahresumsatz ist ein <b>Teiljahr</b> — er wird vor dem Vergleich aufs
+          Jahr hochgerechnet, sonst sähe im Juli jeder gesunde Partner „rückläufig“ aus.
+          <br>· Sortierung: Divergenz absteigend, bei Gleichstand <b>bestes Vorjahres-Umsatzvolumen</b>
+          zuerst — ein ehemaliger €150k-Partner steht über einem €5k-Partner.
+          <br>· Firmen ohne abgerufene Anzeigen-Daten sind <b>unbewertet</b>, nie „0“ — unbekannt
+          darf nicht wie inaktiv aussehen.
+          <br>· Typen: <b>Win-back</b> (kauft nicht mehr, wirbt aktiv) · <b>Neupotenzial</b> (nie
+          gekauft, wirbt aktiv) · <b>Aufsteiger</b> (frische Kampagnen + neue Anzeigen diese Woche).
+          <br>· Jede Zeile trägt einen <b>Grund</b> im Klartext — die Punktwerte sind Startwerte und
+          werden gegen euer Urteil kalibriert (<code>adwatch/insights/divergence.py</code>).
+        </p>
+        <p class="hint">Zu sehen: Dashboard → „Interessante Partner“ und als Leitabschnitt in beiden
+          PDF-Berichten.</p>
       </div>
 
       <div class="card">
@@ -238,6 +588,15 @@
       </div>
     </section>
   </main>
+  </div><!-- /.content -->
+
+  <!-- live job progress overlay (centered modal + blurred backdrop). Direct child
+       of #app so no transformed tab-panel ancestor breaks its position:fixed. -->
+  <div id="jobStrip" class="job-overlay hidden"></div>
+
+  <!-- company detail drawer (opened by clicking a row in the Companies table) -->
+  <div id="drawerBackdrop" class="drawer-backdrop hidden"></div>
+  <aside id="companyDrawer" class="company-drawer hidden" aria-hidden="true"></aside>
 </div>
 
 <script src="/static/app.js"></script>

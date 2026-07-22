@@ -1,45 +1,60 @@
 """Database engine / session helpers.
 
-Mock and live data live in SEPARATE database files, chosen by config.MODE at
-call time. This keeps deterministic mock data (and its fake MOCK:: page ids)
-from ever polluting real live data, and makes the dashboard show the dataset
-that matches the selected mode.
-
 init_db() also performs a lightweight in-place migration for pre-existing
 SQLite files (adds new columns, backfills company_pages from the legacy
 single page_id column) so upgrading never requires wiping collected history.
 """
 from __future__ import annotations
 
-from sqlalchemy import create_engine, text
+import logging
+
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from . import config
 from .models import Base
 
-_engines: dict[str, object] = {}
-_makers: dict[str, sessionmaker] = {}
+logger = logging.getLogger("adwatch.db")
+
+_engine = create_engine(config.DB_URL, future=True)
 
 
-def db_url_for_mode() -> str:
-    """Live uses config.DB_URL (respects ADWATCH_DB_URL); mock uses a sibling file."""
-    if config.MODE == "mock":
-        return f"sqlite:///{config.DATA_DIR / 'adwatch_mock.db'}"
-    return config.DB_URL
+# WAL + a real busy timeout: writers no longer block readers, and a concurrent
+# writer waits up to 15s instead of failing instantly with "database is locked"
+# (the default was 5s). Applied to every new SQLite connection.
+@event.listens_for(_engine, "connect")
+def _sqlite_pragmas(dbapi_conn, _record):
+    if config.DB_URL.startswith("sqlite"):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=15000")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.close()
 
 
-def _maker() -> sessionmaker:
-    url = db_url_for_mode()
-    if url not in _makers:
-        eng = create_engine(url, future=True)
-        _engines[url] = eng
-        _makers[url] = sessionmaker(bind=eng, future=True, expire_on_commit=False)
-    return _makers[url]
+_Maker = sessionmaker(bind=_engine, future=True, expire_on_commit=False)
 
 
 def SessionLocal() -> Session:
-    """Return a new Session bound to the current mode's database."""
-    return _maker()()
+    return _Maker()
+
+
+def integrity_ok() -> bool:
+    """PRAGMA quick_check on startup — logs a loud warning if the DB file is
+    corrupt so a bad file is noticed rather than silently half-working."""
+    if not config.DB_URL.startswith("sqlite"):
+        return True
+    try:
+        with _engine.connect() as c:
+            result = c.exec_driver_sql("PRAGMA quick_check").scalar()
+        if result != "ok":
+            logger.error("SQLite quick_check FAILED: %s — restore from a backup in %s",
+                         result, config.BACKUP_DIR)
+            return False
+        return True
+    except Exception:
+        logger.exception("SQLite quick_check could not run")
+        return False
 
 
 def _existing_columns(conn, table: str) -> set[str]:
@@ -70,6 +85,107 @@ def _migrate(engine) -> None:
             for name in ("ad_library_url", "landing_url"):
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE ads ADD COLUMN {name} VARCHAR(500)"))
+        # companies: website domain, used to resolve the Google Ads advertiser
+        cols = _existing_columns(conn, "companies")
+        if cols and "website_domain" not in cols:
+            conn.execute(text("ALTER TABLE companies ADD COLUMN website_domain VARCHAR(200)"))
+        # companies: master-data columns — a company IS a customer, no separate
+        # table (see models.Company docstring). Additive only; nullable.
+        if cols:
+            for name, ddl in [
+                ("sap_number", "VARCHAR(40)"), ("kv", "VARCHAR(120)"), ("segment", "VARCHAR(120)"),
+                ("sub_segment", "VARCHAR(120)"), ("sales_channel", "VARCHAR(120)"),
+                ("street", "VARCHAR(300)"), ("postal_code", "VARCHAR(20)"), ("city", "VARCHAR(200)"),
+                ("phone", "VARCHAR(80)"), ("email", "VARCHAR(300)"), ("fax", "VARCHAR(80)"),
+                ("revenue_y0", "FLOAT"), ("revenue_y1", "FLOAT"), ("revenue_y2", "FLOAT"),
+                ("revenue_y3", "FLOAT"), ("revenue_y4", "FLOAT"), ("imported_at", "DATETIME"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+        # (a stray legacy 'customer_id' column may exist from an earlier build
+        # that briefly had a separate customers table — left alone, unused)
+
+        # One-time-ish fold-in: earlier builds had a SEPARATE `customers` table
+        # (from before "a company IS a customer" was settled). If it's still
+        # there, fold every row into `companies` — update ones already linked
+        # via the old customer_id, match unlinked ones by exact name, else
+        # insert a new row — then leave the old table alone (never dropped).
+        # Idempotent: safe to run on every startup once the fold is done.
+        have_customers = _existing_columns(conn, "customers")
+        cols = _existing_columns(conn, "companies")
+        if have_customers and cols and "customer_id" in cols:
+            customer_rows = conn.execute(text("""
+                SELECT id, sap_number, company_name, kv, segment, sub_segment, sales_channel,
+                       street, postal_code, city, country, phone, email, fax, website,
+                       revenue_y0, revenue_y1, revenue_y2, revenue_y3, revenue_y4, imported_at
+                FROM customers
+            """)).fetchall()
+            for row in customer_rows:
+                (cust_id, sap, cname, kv, seg, subseg, chan, street, plz, city, land, phone,
+                 email, fax, website, r0, r1, r2, r3, r4, imported_at) = row
+                params = {
+                    "cid": cust_id, "sap": sap, "kv": kv, "seg": seg, "subseg": subseg,
+                    "chan": chan, "street": street, "plz": plz, "city": city,
+                    "phone": phone, "email": email, "fax": fax, "website": website,
+                    "r0": r0, "r1": r1, "r2": r2, "r3": r3, "r4": r4,
+                    "imported_at": imported_at, "name": cname,
+                    "country": land if (land and len(land) <= 3) else config.DEFAULT_COUNTRY,
+                }
+                linked = conn.execute(text("SELECT id FROM companies WHERE customer_id = :cid"),
+                                      {"cid": cust_id}).first()
+                if linked:
+                    conn.execute(text("""
+                        UPDATE companies SET sap_number=:sap, kv=:kv, segment=:seg, sub_segment=:subseg,
+                               sales_channel=:chan, street=:street, postal_code=:plz, city=:city,
+                               phone=:phone, email=:email, fax=:fax,
+                               revenue_y0=:r0, revenue_y1=:r1, revenue_y2=:r2, revenue_y3=:r3, revenue_y4=:r4,
+                               imported_at=:imported_at,
+                               website_domain = CASE WHEN website_domain IS NULL OR website_domain = ''
+                                                      THEN :website ELSE website_domain END
+                        WHERE customer_id=:cid
+                    """), params)
+                    continue
+                if not cname:
+                    continue  # nothing to name a new row with, and nothing to match by name
+                existing_by_name = conn.execute(
+                    text("SELECT id FROM companies WHERE name = :name AND customer_id IS NULL"),
+                    {"name": cname}).first()
+                if existing_by_name:
+                    conn.execute(text("""
+                        UPDATE companies SET sap_number=:sap, kv=:kv, segment=:seg, sub_segment=:subseg,
+                               sales_channel=:chan, street=:street, postal_code=:plz, city=:city,
+                               phone=:phone, email=:email, fax=:fax,
+                               revenue_y0=:r0, revenue_y1=:r1, revenue_y2=:r2, revenue_y3=:r3, revenue_y4=:r4,
+                               imported_at=:imported_at, customer_id=:cid,
+                               website_domain = CASE WHEN website_domain IS NULL OR website_domain = ''
+                                                      THEN :website ELSE website_domain END
+                        WHERE id=:existing_id
+                    """), {**params, "existing_id": existing_by_name[0]})
+                    continue
+                already = conn.execute(text("SELECT 1 FROM companies WHERE name = :name"),
+                                       {"name": cname}).first()
+                if already:
+                    continue  # name collision with a row not tied to this customer — skip, don't guess
+                conn.execute(text("""
+                    INSERT INTO companies (name, country, source, resolution_status, customer_id,
+                        sap_number, kv, segment, sub_segment, sales_channel, street, postal_code,
+                        city, phone, email, fax, website_domain,
+                        revenue_y0, revenue_y1, revenue_y2, revenue_y3, revenue_y4, imported_at)
+                    VALUES (:name, :country, 'meta', 'pending', :cid,
+                        :sap, :kv, :seg, :subseg, :chan, :street, :plz,
+                        :city, :phone, :email, :fax, :website,
+                        :r0, :r1, :r2, :r3, :r4, :imported_at)
+                """), params)
+        # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
+        cols = _existing_columns(conn, "fetch_jobs")
+        if cols and "kind" not in cols:
+            conn.execute(text("ALTER TABLE fetch_jobs ADD COLUMN kind VARCHAR(20) DEFAULT 'fetch'"))
+            conn.execute(text("UPDATE fetch_jobs SET kind = 'fetch' WHERE kind IS NULL"))
+        # schedule_config: which source(s) the auto-fetch job runs
+        cols = _existing_columns(conn, "schedule_config")
+        if cols and "fetch_sources" not in cols:
+            conn.execute(text("ALTER TABLE schedule_config ADD COLUMN fetch_sources JSON"))
+            conn.execute(text("UPDATE schedule_config SET fetch_sources = '[\"meta\"]' WHERE fetch_sources IS NULL"))
         # backfill: every company with a legacy page_id gets a main CompanyPage row
         have_companies = _existing_columns(conn, "companies")
         have_pages = _existing_columns(conn, "company_pages")
@@ -97,6 +213,8 @@ def _migrate(engine) -> None:
 
 def init_db() -> None:
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    engine = _maker().kw["bind"]
-    Base.metadata.create_all(engine)
-    _migrate(engine)
+    integrity_ok()                     # loud warning if the DB file is corrupt
+    from .backup import backup_now
+    backup_now(tag="startup")          # snapshot before any migration runs
+    Base.metadata.create_all(_engine)
+    _migrate(_engine)
