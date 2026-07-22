@@ -226,6 +226,41 @@ def test_ad_activity_filter(temp_db):
     s.close()
 
 
+def test_downgrade_resets_collected_ads(temp_db):
+    """A recheck that DOWNGRADES an auto-confirmed page (page before, none now)
+    must clear that page's collected ads/metric at the point the page is dropped
+    — not leave a phantom active-ad count on a now-page-less company (the
+    Andreas-Schimke bug)."""
+    from adwatch.identity import resolver
+    from adwatch.models import Ad, CollectionRun, Company, CompanyPage, WeeklyCompanyMetric
+    from sqlalchemy import select
+    s = temp_db.SessionLocal()
+    c = Company(name="Downgrade Co", resolution_status="confirmed", country="DE",
+                page_id="777", page_name="Wrong Page")
+    s.add(c); s.flush()
+    s.add(CompanyPage(company_id=c.id, source="meta", page_id="777", role="main", status="auto"))
+    run = CollectionRun(company_id=c.id, source="meta", week_start=dt.date(2026, 7, 6),
+                        page_id="777", status="ok", ads_scraped=1)
+    s.add(run); s.flush()
+    s.add(Ad(run_id=run.id, source="meta", external_ad_id="a1", is_active=True))
+    s.add(WeeklyCompanyMetric(company_id=c.id, source="meta", week_start=dt.date(2026, 7, 6),
+                             total_active_ads=1, score=10))
+    s.commit(); cid = c.id
+
+    c = s.get(Company, cid)
+    resolver._apply_identity_result(
+        s, c, {"status": "no_ads_found", "page_id": None, "page_name": None,
+               "page_url": None, "candidates": []}, method="serper")
+    s.commit()
+
+    assert s.scalar(select(CollectionRun).where(CollectionRun.company_id == cid)) is None
+    assert s.scalar(select(WeeklyCompanyMetric).where(WeeklyCompanyMetric.company_id == cid)) is None
+    assert s.scalar(select(CompanyPage).where(CompanyPage.company_id == cid, CompanyPage.role == "main")) is None
+    c = s.get(Company, cid)
+    assert c.page_id is None and c.resolution_status == "no_ads_found"
+    s.close()
+
+
 def test_unlink_resets_collected_ads(temp_db):
     """Unlinking a wrong page must clear its collected ads/score — otherwise
     the wrong page's numbers linger on the company (the Bau-DL bug)."""

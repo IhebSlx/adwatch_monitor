@@ -159,6 +159,8 @@ def clear_resolution(company_id: int) -> None:
             return
         for p in s.scalars(select(CompanyPage).where(CompanyPage.company_id == company_id)):
             s.delete(p)
+        reset_collected_ads(s, company_id, source="meta")     # forget the old pages' ads too,
+        reset_collected_ads(s, company_id, source="google")   # else a phantom count survives
         c.page_id = None
         c.page_name = None
         c.resolution_status = "pending"
@@ -365,10 +367,14 @@ def _apply_identity_result(session, company, result: dict, method: str) -> None:
 
     def _drop_stale_auto():
         """Downgrade path: clear a provisional AUTO link so a wrong auto-confirm
-        can't silently linger after the check no longer confirms it."""
+        can't silently linger after the check no longer confirms it. Also resets
+        the dropped page's collected ads/metrics — they belonged to that page,
+        so leaving them would keep a phantom ad count on a company that now has
+        no page (the Andreas-Schimke bug)."""
         if main is not None and main.status == "auto":
             session.delete(main)
             company.page_id = None
+            reset_collected_ads(session, company.id, source="meta")
 
     if status == "confirmed":
         if human_set:
