@@ -2110,6 +2110,13 @@
     if (_jobPollTimer) return;
     _jobPollTimer = setInterval(async () => {
       const jobs = await loadJobs();
+      // Confirm (or stop tracking) any cancellation the user requested.
+      for (const jid of [..._cancelRequestedJobs]) {
+        const j = jobs.find(x => x.id === jid);
+        if (!j || ["running", "queued", "cancelling"].includes(j.status)) continue;  // still finishing
+        if (j.status === "cancelled") toast(`✓ ${jobKindLabel(j)} abgebrochen.`, "info");
+        _cancelRequestedJobs.delete(jid);
+      }
       if (!jobs.some(j => j.status === "running" || j.status === "queued" || j.status === "cancelling")) {
         clearInterval(_jobPollTimer);
         _jobPollTimer = null;
@@ -2132,6 +2139,7 @@
   let _stripActiveJobId = null;     // job the overlay is/was following
   let _stripDismissedJobId = null;  // finished job the user dismissed
   let _stripHiddenJobId = null;     // job the user hid while it runs
+  const _cancelRequestedJobs = new Set();  // jobs the user asked to cancel — toast once cancelled
 
   function jobKindLabel(j) { return j.kind === "identity" ? "Identity check" : "Ad lookup"; }
 
@@ -2180,7 +2188,20 @@
           </div>`;
         $(".job-strip-cancel", strip).addEventListener("click", async (ev) => {
           const b = ev.currentTarget; b.disabled = true; b.textContent = "Cancelling…";
-          await api(`/api/fetch-jobs/${active.id}/cancel`, "POST");
+          const jid = active.id;
+          try {
+            await api(`/api/fetch-jobs/${jid}/cancel`, "POST");
+          } catch (e) {
+            toast(`Could not cancel: ${e.message}`, "error");
+            b.disabled = false; b.textContent = "Cancel"; return;
+          }
+          // Unblock the app right away — the in-flight fetch finishes in the
+          // background, then the job stops. A toast confirms once it's cancelled.
+          _cancelRequestedJobs.add(jid);
+          _stripHiddenJobId = jid;
+          hideJobStrip();
+          toast("Abbruch angefordert — der laufende Abruf wird noch beendet, dann stoppt der Job. "
+            + "Du kannst normal weiterarbeiten.", "info");
           await loadJobs();
         });
         const hide = () => { _stripHiddenJobId = active.id; hideJobStrip(); };
@@ -2260,8 +2281,13 @@
     }));
     $$(".job-cancel-btn", box).forEach(btn => btn.addEventListener("click", async () => {
       const jobId = Number(btn.closest(".job-item").dataset.job);
-      await api(`/api/fetch-jobs/${jobId}/cancel`, "POST");
+      btn.disabled = true; btn.textContent = "Cancelling…";
+      try { await api(`/api/fetch-jobs/${jobId}/cancel`, "POST"); }
+      catch (e) { toast(`Could not cancel: ${e.message}`, "error"); return; }
+      _cancelRequestedJobs.add(jobId);
+      toast("Abbruch angefordert — der laufende Abruf wird noch beendet, dann stoppt der Job.", "info");
       await loadJobs();
+      startJobPolling();   // ensure we detect the final 'cancelled' and confirm it
     }));
   }
 

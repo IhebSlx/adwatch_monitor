@@ -375,10 +375,19 @@ def reconcile_on_startup() -> int:
     silently appearing stuck forever or auto-resuming (and re-spending)
     without anyone choosing to."""
     with SessionLocal() as s:
-        stuck = s.scalars(select(FetchJob).where(FetchJob.status == "running")).all()
+        # No in-memory thread survives a restart, so ANY non-terminal job is
+        # orphaned. A 'cancelling' one had a cancel already requested -> finalize
+        # it as cancelled; 'running'/'queued' -> interrupted (a human decides).
+        stuck = s.scalars(select(FetchJob).where(
+            FetchJob.status.in_(["running", "queued", "cancelling"]))).all()
         for job in stuck:
-            job.status = "interrupted"
-            _append_log(s, job, "Interrupted — the app restarted mid-job.")
+            if job.status == "cancelling":
+                job.status = "cancelled"
+                job.finished_at = dt.datetime.utcnow()
+                _append_log(s, job, "Cancelled — the app restarted while cancelling.")
+            else:
+                job.status = "interrupted"
+                _append_log(s, job, "Interrupted — the app restarted mid-job.")
         total = len(stuck)
         s.commit()
     return total
