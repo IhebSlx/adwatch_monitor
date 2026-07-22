@@ -1435,6 +1435,7 @@
         <td>${esc(r.sap_number || "")}</td>
         <td>${esc(r.name)}</td>
         <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
+        <td class="num">${r.active_ads == null ? '<span class="muted">—</span>' : (r.active_ads > 0 ? `<strong>${r.active_ads}</strong>` : '<span class="muted">0</span>')}</td>
         <td>${esc(r.kv || "")}</td>
         <td>${esc(r.segment || "")}</td>
         <td>${esc(r.sub_segment || "")}</td>
@@ -1450,7 +1451,7 @@
         <td><button class="btn btn-sm pages-toggle-row" data-id="${r.id}">${open ? "Hide" : "Pages"}</button></td>
       </tr>
       <tr class="pages-row ${open ? "" : "hidden"}" data-pages-for="${r.id}">
-        <td colspan="18"><div class="pages-body-inline" id="pages-${r.id}"></div></td>
+        <td colspan="19"><div class="pages-body-inline" id="pages-${r.id}"></div></td>
       </tr>`;
     }).join("");
 

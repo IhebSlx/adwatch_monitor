@@ -356,6 +356,26 @@ def get_company(company_id: int) -> dict | None:
         return d
 
 
+def _attach_active_ads(s, rows: list[dict]) -> None:
+    """Fill each row's `active_ads` = active-ad count from its LATEST fetched
+    week (summed across sources) in ONE query for the whole page. None means the
+    company has never been fetched (shown as '—', distinct from a real 0)."""
+    ids = [r["id"] for r in rows]
+    if not ids:
+        return
+    from sqlalchemy import and_ as _and
+    from .models import WeeklyCompanyMetric as _WCM
+    latest = (select(_WCM.company_id, func.max(_WCM.week_start).label("wk"))
+              .where(_WCM.company_id.in_(ids)).group_by(_WCM.company_id).subquery())
+    q = (select(_WCM.company_id, func.sum(_WCM.total_active_ads))
+         .join(latest, _and(_WCM.company_id == latest.c.company_id,
+                            _WCM.week_start == latest.c.wk))
+         .group_by(_WCM.company_id))
+    counts = {cid: int(n or 0) for cid, n in s.execute(q)}
+    for r in rows:
+        r["active_ads"] = counts.get(r["id"])
+
+
 def query_companies(filters: dict, sort: str | None = None, direction: str = "asc",
                     page: int = 1, page_size: int = 50) -> dict:
     with SessionLocal() as s:
@@ -363,6 +383,7 @@ def query_companies(filters: dict, sort: str | None = None, direction: str = "as
         total = s.scalar(select(func.count()).select_from(base.subquery()))
         stmt = _apply_sort(base, sort, direction).limit(page_size).offset((page - 1) * page_size)
         rows = [_to_dict(c) for c in s.scalars(stmt)]
+        _attach_active_ads(s, rows)
         return {"total": total, "page": page, "page_size": page_size, "rows": rows}
 
 
