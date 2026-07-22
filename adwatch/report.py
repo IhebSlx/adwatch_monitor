@@ -10,8 +10,10 @@ from __future__ import annotations
 import datetime as dt
 import re
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml_escape
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
@@ -24,9 +26,11 @@ from .services import latest_metrics
 
 INK = colors.HexColor("#1f2933")
 ACCENT = colors.HexColor("#2b6cb0")
+ACCENT_SOFT = colors.HexColor("#ebf2fb")
 MUTED = colors.HexColor("#647380")
 LINE = colors.HexColor("#d9e2ec")
-BG = colors.HexColor("#f0f4f8")
+BG = colors.HexColor("#f7f9fb")
+_LINK_HEX = "#2b6cb0"
 
 # Report text is German (business audience), independent of any locale
 # setting on the machine that generates it — hence the manual month names
@@ -37,10 +41,6 @@ _DE_MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
 _CATEGORY_LABEL_DE = {
     "recruitment": "Personalsuche", "product_sale": "Verkauf",
     "brand_awareness": "Marke", "event_promo": "Veranstaltungen", "other": "Sonstiges",
-}
-_STATUS_LABEL_DE = {
-    "pending": "noch nicht abgerufen", "confirmed": "bestätigte Seite",
-    "ambiguous": "mehrdeutig — beste Vermutung verwendet", "no_ads_found": "keine Anzeigen gefunden",
 }
 _METHOD_LABEL_DE = {"reach": "Reichweite", "count": "Anzahl", "mixed": "gemischt"}
 
@@ -194,7 +194,87 @@ def week_str_for_filename(filename: str) -> str:
     return f"KW {week}"
 
 
-def _divergence_story(filters: dict | None = None, limit: int = 10) -> list:
+def _esc(text) -> str:
+    """Escape dynamic text for reportlab's mini-XML (company names contain & etc.)."""
+    return _xml_escape(str(text if text is not None else ""))
+
+
+def _link(text, url: str | None) -> str:
+    """A clickable link paragraph fragment; plain escaped text when no URL."""
+    safe = _esc(text)
+    if not url:
+        return safe
+    href = _xml_escape(str(url), {'"': "&quot;"})
+    return f'<a href="{href}" color="{_LINK_HEX}"><u>{safe}</u></a>'
+
+
+def _ad_library_url(page_id: str | None, country: str | None = "DE") -> str | None:
+    """Deep link to a page's ACTIVE ads in the Meta Ad Library — click to see the
+    exact ads behind the numbers in this report."""
+    if not page_id:
+        return None
+    return ("https://www.facebook.com/ads/library/?active_status=active&ad_type=all"
+            f"&country={country or 'DE'}&view_all_page_id={page_id}&search_type=page&media_type=all")
+
+
+def _web_url(domain: str | None) -> str | None:
+    if not domain:
+        return None
+    return domain if domain.startswith(("http://", "https://")) else "https://" + domain
+
+
+def _page_link_map(company_ids) -> dict:
+    """{company_id: {page_id, country, website}} for the given companies — used to
+    turn names into Ad-Library / website links without an extra query per row."""
+    if not company_ids:
+        return {}
+    from sqlalchemy import select as _select
+    from .db import SessionLocal as _SessionLocal
+    from .models import Company as _Company
+    with _SessionLocal() as s:
+        rows = s.execute(_select(_Company.id, _Company.page_id, _Company.country,
+                                 _Company.website_domain).where(_Company.id.in_(company_ids))).all()
+    return {cid: {"page_id": pid, "country": ctry, "website": web}
+            for cid, pid, ctry, web in rows}
+
+
+def _company_link(name: str, info: dict | None) -> str:
+    """Company name linked to its Ad Library page (preferred) or its website."""
+    info = info or {}
+    url = _ad_library_url(info.get("page_id"), info.get("country")) or _web_url(info.get("website"))
+    return _link(name, url)
+
+
+def _scope_banner(filters: dict | None, n_companies: int, n_active: int, styles) -> Table:
+    """The explicit 'what this report covers' box — filter used + counts, shown
+    prominently near the top so the reader always knows the scope."""
+    desc = _describe_filters_de(filters)
+    scope_line = _esc(desc) if desc else "Alle Firmen (kein Filter angewendet)"
+    label = ParagraphStyle("scopelbl", parent=styles["Normal"], textColor=ACCENT,
+                           fontSize=8, leading=11, spaceAfter=1)
+    val = ParagraphStyle("scopeval", parent=styles["Normal"], textColor=INK,
+                         fontSize=10.5, leading=14)
+    meta = ParagraphStyle("scopemeta", parent=styles["Normal"], textColor=MUTED,
+                          fontSize=8.5, leading=12, spaceBefore=2)
+    inner = [
+        Paragraph("BERICHT-UMFANG", label),
+        Paragraph(scope_line, val),
+        Paragraph(f"{n_companies} Firmen im Bericht &nbsp;·&nbsp; "
+                  f"<b>{n_active}</b> mit aktiven Anzeigen", meta),
+    ]
+    t = Table([[inner]], colWidths=[178 * mm])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), ACCENT_SOFT),
+        ("LINEBEFORE", (0, 0), (0, -1), 3, ACCENT),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    return t
+
+
+def _divergence_story(filters: dict | None = None, limit: int = 10, links: dict | None = None) -> list:
     """The 'Interessante Partner' lead section for both report types — top
     divergence rows (Marketing-Aktivität × Umsatz-Lücke) with the German
     reason line per partner. Empty list when nothing scored ≥ 10, in which
@@ -223,15 +303,16 @@ def _divergence_story(filters: dict | None = None, limit: int = 10) -> list:
             "„How it works“.", note),
         Spacer(1, 4),
     ]
+    links = links or _page_link_map([r["company_id"] for r in rows])
     header = ["#", "Firma", "Divergenz", "Typ", "Grund"]
     trows = [[Paragraph(h, cellh) for h in header]]
     for i, r in enumerate(rows, start=1):
         trows.append([
             Paragraph(str(i), cell),
-            Paragraph(r["company"], cell),
-            Paragraph(f"{r['divergence']}/100", cell),
-            Paragraph(r["label"] or "—", cell),
-            Paragraph(r["reason"], cell),
+            Paragraph(_company_link(r["company"], links.get(r["company_id"])), cell),
+            Paragraph(f"<b>{r['divergence']}</b>/100", cell),
+            Paragraph(_esc(r["label"] or "—"), cell),
+            Paragraph(_esc(r["reason"]), cell),
         ])
     table = Table(trows, colWidths=[8 * mm, 42 * mm, 18 * mm, 22 * mm, 84 * mm], repeatRows=1)
     style = [
@@ -250,108 +331,127 @@ def _divergence_story(filters: dict | None = None, limit: int = 10) -> list:
     return out
 
 
+def _delta_frag(delta) -> str:
+    """'▲3' green / '▼2' muted, or '' when unchanged/unknown."""
+    if not delta:
+        return ""
+    up = delta > 0
+    return f' <font color="{"#2f855a" if up else "#b04a3a"}">{"▲" if up else "▼"}{abs(delta)}</font>'
+
+
 def build_report(path: str | None = None, filters: dict | None = None) -> str:
     if path is None:
         path = str(next_report_path("adwatch_report"))
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     data = latest_metrics(_filtered_company_ids(filters))
-    filter_desc = _describe_filters_de(filters)
+    links = _page_link_map([d["company_id"] for d in data])
+    n_active = sum(1 for d in data if d.get("has_data") and (d.get("total_active_ads") or 0) > 0)
+
     styles = getSampleStyleSheet()
-    h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=20, spaceAfter=2)
+    h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=21, spaceAfter=2, alignment=0)
     sub = ParagraphStyle("sub", parent=styles["Normal"], textColor=MUTED, fontSize=9)
-    h2 = ParagraphStyle("h2", parent=styles["Heading2"], textColor=ACCENT, fontSize=13, spaceBefore=10, spaceAfter=4)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], textColor=INK, fontSize=13, spaceBefore=16, spaceAfter=5)
     body = ParagraphStyle("body", parent=styles["Normal"], textColor=INK, fontSize=9.5, leading=13)
-    note = ParagraphStyle("note", parent=styles["Normal"], textColor=MUTED, fontSize=8, leading=11)
+    note = ParagraphStyle("note", parent=styles["Normal"], textColor=MUTED, fontSize=7.5, leading=11, spaceBefore=3)
     cellh = ParagraphStyle("cellh", parent=styles["Normal"], textColor=colors.white, fontSize=8.5, leading=11)
-    cell = ParagraphStyle("cell", parent=styles["Normal"], textColor=INK, fontSize=8.5, leading=11)
+    cellhr = ParagraphStyle("cellhr", parent=cellh, alignment=TA_RIGHT)
+    cell = ParagraphStyle("cell", parent=styles["Normal"], textColor=INK, fontSize=8.5, leading=12)
+    cellr = ParagraphStyle("cellr", parent=cell, alignment=TA_RIGHT)
+    detail = ParagraphStyle("detail", parent=styles["Normal"], textColor=INK, fontSize=9, leading=13, spaceAfter=1)
+    detailm = ParagraphStyle("detailm", parent=detail, textColor=MUTED)
 
     doc = SimpleDocTemplate(path, pagesize=A4,
                             leftMargin=16 * mm, rightMargin=16 * mm,
-                            topMargin=16 * mm, bottomMargin=16 * mm)
-    story = []
-    mode_tag = f"live · {config.LIVE_SOURCE}"
-    story.append(Paragraph("Anzeigen-Aktivitätsbericht", h1))
-    story.append(Paragraph(f"Erstellt am {_de_datetime(dt.datetime.now())} &nbsp;·&nbsp; {mode_tag} &nbsp;·&nbsp; Meta Ad Library", sub))
-    if filter_desc:
-        story.append(Paragraph(filter_desc, sub))
-    story.append(Spacer(1, 8))
-    story += _divergence_story(filters)
+                            topMargin=15 * mm, bottomMargin=16 * mm,
+                            title="AdWatch — Anzeigen-Aktivitätsbericht")
+    story = [
+        Paragraph("Anzeigen-Aktivitätsbericht", h1),
+        Paragraph(f"Erstellt am {_de_datetime(dt.datetime.now())} &nbsp;·&nbsp; "
+                  f"live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: Meta Ad Library", sub),
+        Spacer(1, 9),
+        _scope_banner(filters, len(data), n_active, styles),
+        Spacer(1, 13),
+    ]
+    story += _divergence_story(filters, links=links)
 
     if not data:
         story.append(Paragraph("Keine Firmen entsprechen dem gewählten Filter.", body))
         doc.build(story)
         return path
 
-    # ---- summary table ----
-    header = ["Firma", "Aktive Anzeigen", "Personalsuche", "Verkauf", "Gesch. Ausgaben/Wo."]
-    rows = [[Paragraph(h, cellh) for h in header]]
+    # active advertisers first (most active on top), then the rest by name
+    def _sortkey(d):
+        act = d.get("total_active_ads") or 0
+        has = 1 if (d.get("has_data") and act > 0) else 0
+        return (-has, -act, (d["company"] or "").lower())
+    data = sorted(data, key=_sortkey)
+
+    # ---- overview table ----
+    story.append(Paragraph("Übersicht", h2))
+    header = ["Firma", "Aktive Anz.", "Personal", "Verkauf", "Marke", "Gesch. Ausg./Wo."]
+    rows = [[Paragraph(header[0], cellh)] + [Paragraph(h, cellhr) for h in header[1:]]]
     for d in data:
         cats = d.get("ads_by_category") or {}
-        if not d["has_data"]:
-            spend = "keine Daten"
-            active = "-"
-            hiring = selling = "-"
-        else:
-            active = str(d["total_active_ads"])
-            if d.get("delta_ads") is not None:
-                arrow = "▲" if d["delta_ads"] > 0 else ("▼" if d["delta_ads"] < 0 else "=")
-                active += f"  {arrow}{abs(d['delta_ads'])}"
-            hiring = str(cats.get("recruitment", 0))
-            selling = str(cats.get("product_sale", 0))
-            if d["total_active_ads"] == 0:
-                spend = "0"
-            else:
-                spend = f"{_eur(d['spend_low'])}–{_eur(d['spend_high'])}"
+        name = Paragraph(_company_link(d["company"], links.get(d["company_id"])), cell)
+        if not d.get("has_data"):
+            dash = Paragraph("—", cellr)
+            rows.append([name, dash, dash, dash, dash,
+                         Paragraph('<font color="#647380">keine Daten</font>', cellr)])
+            continue
+        act = d["total_active_ads"] or 0
+        active_txt = (f"<b>{act}</b>" + _delta_frag(d.get("delta_ads"))) if act else "0"
+        spend = "0" if act == 0 else f"{_eur(d['spend_low'])}–{_eur(d['spend_high'])}"
         rows.append([
-            Paragraph(d["company"], cell),
-            Paragraph(active, cell),
-            Paragraph(hiring, cell),
-            Paragraph(selling, cell),
-            Paragraph(spend, cell),
+            name,
+            Paragraph(active_txt, cellr),
+            Paragraph(str(cats.get("recruitment", 0)), cellr),
+            Paragraph(str(cats.get("product_sale", 0)), cellr),
+            Paragraph(str(cats.get("brand_awareness", 0)), cellr),
+            Paragraph(_esc(spend), cellr),
         ])
 
-    table = Table(rows, colWidths=[62 * mm, 24 * mm, 16 * mm, 16 * mm, 44 * mm], repeatRows=1)
+    table = Table(rows, colWidths=[60 * mm, 25 * mm, 19 * mm, 18 * mm, 16 * mm, 40 * mm], repeatRows=1)
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
+        ("LINEBELOW", (0, 0), (-1, 0), 0, ACCENT),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BG]),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.4, LINE),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
     ]
-    for i in range(1, len(rows)):
-        if i % 2 == 0:
-            style.append(("BACKGROUND", (0, i), (-1, i), BG))
     table.setStyle(TableStyle(style))
     story.append(table)
+
+    # ---- detail: only the active advertisers (keeps the report uncluttered) ----
+    active_rows = [d for d in data if d.get("has_data") and (d.get("total_active_ads") or 0) > 0]
+    if active_rows:
+        story.append(Paragraph("Details — aktive Werbetreibende", h2))
+        for d in active_rows:
+            cats = d.get("ads_by_category") or {}
+            method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method") or "")
+            page = f' &nbsp;·&nbsp; Seite: {_esc(d["page_name"])}' if d.get("page_name") else ""
+            cat_str = " · ".join(f"{_CATEGORY_LABEL_DE.get(k, k)} {v}"
+                                 for k, v in cats.items() if v) or "—"
+            products = ", ".join(d.get("products") or [])
+            story.append(Paragraph(f'<b>{_company_link(d["company"], links.get(d["company_id"]))}</b>{page}', detail))
+            story.append(Paragraph(
+                f'{d["total_active_ads"]} aktive Anzeigen &nbsp;·&nbsp; {cat_str} &nbsp;·&nbsp; '
+                f'Ausgaben ~{_eur(d["spend_low"])}–{_eur(d["spend_high"])}/Wo. ({method_de})', detailm))
+            if products:
+                story.append(Paragraph(f'Produkte: {_esc(products)}', detailm))
+            story.append(Spacer(1, 6))
+
     story.append(Spacer(1, 6))
     story.append(Paragraph(
-        "Die Ausgaben sind ein <b>geschätzter Wert</b> (Intervall von–bis), keine von Meta "
-        "veröffentlichte Zahl. Meta legt Ausgaben nur für regulierte Anzeigenkategorien offen; "
-        "alles andere wird anhand von EU-Reichweitendaten oder Anzeigenzahlen geschätzt. "
-        "Die Annahmen dazu stehen in spend_assumptions.yaml.", note))
-
-    # ---- per-company detail ----
-    for d in data:
-        story.append(Paragraph(d["company"], h2))
-        if not d["has_data"]:
-            status_de = _STATUS_LABEL_DE.get(d["resolution_status"], d["resolution_status"])
-            story.append(Paragraph(f"Status: {status_de} · noch keine Daten erfasst.", body))
-            continue
-        if d["total_active_ads"] == 0:
-            story.append(Paragraph("Bestätigte Seite — <b>0 aktive Anzeigen</b> diese Woche (kein Fehler).", body))
-            continue
-        cats = d.get("ads_by_category") or {}
-        cat_str = ", ".join(f"{_CATEGORY_LABEL_DE.get(k, k)}: {v}" for k, v in cats.items() if v) or "-"
-        products = ", ".join(d.get("products") or []) or "-"
-        method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method"))
-        story.append(Paragraph(f"<b>Aktive Anzeigen gesamt:</b> {d['total_active_ads']}", body))
-        story.append(Paragraph(f"<b>Nach Kategorie:</b> {cat_str}", body))
-        story.append(Paragraph(f"<b>Beworbene Produkte:</b> {products}", body))
-        story.append(Paragraph(
-            f"<b>Geschätzte Ausgaben/Woche:</b> {_eur(d['spend_low'])}–{_eur(d['spend_high'])} "
-            f"(geschätzt, Methode: {method_de})", body))
+        "<b>Firmennamen sind anklickbar</b> — sie öffnen die aktiven Anzeigen der Firma direkt in der "
+        "Meta Ad Library. ▲/▼ = Veränderung ggü. Vorwoche. Ausgaben sind ein <b>geschätzter</b> "
+        "Intervallwert (von–bis), keine von Meta veröffentlichte Zahl — Meta legt Ausgaben nur für "
+        "regulierte Kategorien offen, sonst geschätzt aus EU-Reichweite/Anzeigenzahl "
+        "(Annahmen: spend_assumptions.yaml).", note))
 
     doc.build(story)
     return path
@@ -378,12 +478,13 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         path = str(next_report_path("adwatch_top5"))
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    filter_desc = _describe_filters_de(filters)
-    data = [d for d in latest_metrics(_filtered_company_ids(filters))
-            if d["has_data"] and (d["total_active_ads"] or 0) > 0]
+    all_metrics = latest_metrics(_filtered_company_ids(filters))
+    data = [d for d in all_metrics if d["has_data"] and (d["total_active_ads"] or 0) > 0]
     # rank by activity score (falls back to ad count for rows without one)
     data.sort(key=lambda d: (d.get("score") or 0, d["total_active_ads"]), reverse=True)
     top = data[:5]
+    n_active = len(data)
+    card_links = _page_link_map([d["company_id"] for d in top])
 
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=20, spaceAfter=2)
@@ -395,18 +496,18 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
     doc = SimpleDocTemplate(path, pagesize=A4,
                             leftMargin=18 * mm, rightMargin=18 * mm,
                             topMargin=18 * mm, bottomMargin=18 * mm)
-    story = []
-    mode_tag = f"live · {config.LIVE_SOURCE}"
     week = next((d["week_start"] for d in top if d.get("week_start")), None)
     week_de = _de_date(dt.date.fromisoformat(week)) if week else None
-    story.append(Paragraph("Top 5 Werbetreibende — Anzeigen-Aktivitätsbericht", h1))
-    story.append(Paragraph(
-        f"Erstellt am {_de_datetime(dt.datetime.now())}"
-        + (f" &nbsp;·&nbsp; Woche vom {week_de}" if week_de else "")
-        + f" &nbsp;·&nbsp; {mode_tag} &nbsp;·&nbsp; Meta Ad Library", sub))
-    if filter_desc:
-        story.append(Paragraph(filter_desc, sub))
-    story.append(Spacer(1, 8))
+    story = [
+        Paragraph("Top 5 Werbetreibende — Anzeigen-Aktivitätsbericht", h1),
+        Paragraph(
+            f"Erstellt am {_de_datetime(dt.datetime.now())}"
+            + (f" &nbsp;·&nbsp; Woche vom {week_de}" if week_de else "")
+            + f" &nbsp;·&nbsp; live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: Meta Ad Library", sub),
+        Spacer(1, 9),
+        _scope_banner(filters, len(all_metrics), n_active, styles),
+        Spacer(1, 13),
+    ]
     story += _divergence_story(filters)
 
     if not top:
@@ -418,30 +519,32 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         cats = d.get("ads_by_category") or {}
         products = d.get("products") or []
         score_tag = f" &nbsp;·&nbsp; Score {d['score']:.0f}/100" if d.get("score") is not None else ""
-        story.append(Paragraph(f"{i}. {d['company']}{score_tag}", rank))
-        matched = f" &nbsp;·&nbsp; Seite: {d['page_name']}" if d.get("page_name") else ""
+        name = _company_link(d["company"], card_links.get(d["company_id"]))
+        story.append(Paragraph(f"{i}. {name}{score_tag}", rank))
+        matched = f" &nbsp;·&nbsp; Seite: {_esc(d['page_name'])}" if d.get("page_name") else ""
         story.append(Paragraph(
             f"<b>{d['total_active_ads']} aktive Anzeigen</b>"
             + (f" &nbsp;({'+' if (d.get('delta_ads') or 0) > 0 else ''}{d['delta_ads']} ggü. Vorwoche)"
                if d.get("delta_ads") not in (None, 0) else "")
             + matched, body))
-        story.append(Paragraph(f"<b>Signal:</b> {_signal(cats, products)}", body))
+        story.append(Paragraph(f"<b>Signal:</b> {_esc(_signal(cats, products))}", body))
         method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method"))
         story.append(Paragraph(
             f"<b>Aufschlüsselung:</b> Personalsuche {cats.get('recruitment', 0)} · "
             f"Verkauf {cats.get('product_sale', 0)} · Marke {cats.get('brand_awareness', 0)} · "
             f"Veranstaltungen {cats.get('event_promo', 0)}", body))
         if products:
-            story.append(Paragraph(f"<b>Beworbene Produkte:</b> {', '.join(products)}", body))
+            story.append(Paragraph(f"<b>Beworbene Produkte:</b> {_esc(', '.join(products))}", body))
         story.append(Paragraph(
             f"<b>Gesch. Ausgaben/Woche:</b> {_eur(d['spend_low'])}–{_eur(d['spend_high'])} "
             f"(geschätzt, {method_de})", body))
-        story.append(Spacer(1, 2))
+        story.append(Spacer(1, 4))
 
     story.append(Spacer(1, 10))
     story.append(Paragraph(
-        "Die Ausgaben sind ein <b>geschätzter Wert</b> (Intervall von–bis), nicht von Meta "
-        "veröffentlicht. Rangfolge nach Anzahl aktiver Anzeigen in der letzten wöchentlichen Erfassung.", note))
+        "<b>Firmennamen sind anklickbar</b> — sie öffnen die aktiven Anzeigen in der Meta Ad Library. "
+        "Ausgaben sind ein <b>geschätzter</b> Intervallwert (von–bis), nicht von Meta veröffentlicht. "
+        "Rangfolge nach Aktivität in der letzten wöchentlichen Erfassung.", note))
     doc.build(story)
     return path
 
