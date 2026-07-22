@@ -270,6 +270,10 @@ select { cursor: pointer; }
 }
 .card h2 { font-size: 15px; font-weight: 700; letter-spacing: -0.015em; margin: 0 0 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .hint { font-size: 12.5px; color: var(--muted); margin: 9px 0 0; line-height: 1.6; }
+/* report scope hint when a Companies filter will be applied — make it stand out */
+.hint.hint-scoped { color: var(--accent, #2b6cb0); font-weight: 600;
+  background: color-mix(in srgb, var(--accent, #2b6cb0) 8%, transparent);
+  border-radius: var(--radius-sm, 6px); padding: 6px 9px; }
 
 /* ============================== tables ============================== */
 /* .table-wrap is a CONTAINED scroll area (x and y): the sticky thead stays

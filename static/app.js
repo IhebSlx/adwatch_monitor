@@ -885,7 +885,13 @@
       $$(".tab").forEach(t => t.classList.toggle("active", t === btn));
       $$(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
       if (name === "customers") ensureCustomersLoaded();
-      if (name === "reports") updateReportFilterHint();
+      if (name === "reports") {
+        // If a Companies filter is active, default the report to use it — so
+        // "generate a report for the filtered companies" just works without
+        // having to remember the checkbox.
+        if (activeFilterSummary(currentCustomerFilters()).length) $("#reportUseFilter").checked = true;
+        updateReportFilterHint();
+      }
       if (name === "logs") ensureLogsLoaded();
       if (name === "settings") ensureSettingsLoaded();
     }
@@ -1139,14 +1145,16 @@
   function updateReportFilterHint() {
     const hint = $("#reportFilterHint");
     const parts = activeFilterSummary(currentCustomerFilters());
-    if (!$("#reportUseFilter").checked) {
+    const on = $("#reportUseFilter").checked;
+    hint.classList.toggle("hint-scoped", on && parts.length > 0);
+    if (!on) {
       hint.textContent = parts.length
-        ? `Companies filter is active (${parts.join(", ")}) but won't be applied — check the box to scope the report to it.`
-        : "";
+        ? `⚠ Companies filter is active (${parts.join(", ")}) but the box is unchecked — the report will cover ALL companies. Check the box to scope it.`
+        : "No Companies filter active — report covers all companies.";
     } else {
       hint.textContent = parts.length
-        ? `Report will be scoped to: ${parts.join(", ")}.`
-        : "No Companies filter is currently active — the report will cover all companies.";
+        ? `✓ Report scoped to your Companies filter: ${parts.join(", ")}. This appears in the report header.`
+        : "No Companies filter active — report covers all companies.";
     }
   }
 
