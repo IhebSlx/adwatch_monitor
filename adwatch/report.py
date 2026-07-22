@@ -245,6 +245,15 @@ def _company_link(name: str, info: dict | None) -> str:
     return _link(name, url)
 
 
+def _ads_cta(info: dict | None) -> str:
+    """German call-to-action link to a company's ACTIVE ads in the Meta Ad
+    Library — only when a numeric page id is resolved (otherwise ''). The link
+    TEXT is the CTA, not the company name/URL."""
+    info = info or {}
+    url = _ad_library_url(info.get("page_id"), info.get("country"))
+    return _link("» Aktive Anzeigen ansehen", url) if url else ""
+
+
 def _scope_banner(filters: dict | None, n_companies: int, n_active: int, styles) -> Table:
     """The explicit 'what this report covers' box — filter used + counts, shown
     prominently near the top so the reader always knows the scope."""
@@ -307,9 +316,11 @@ def _divergence_story(filters: dict | None = None, limit: int = 10, links: dict 
     header = ["#", "Firma", "Divergenz", "Typ", "Grund"]
     trows = [[Paragraph(h, cellh) for h in header]]
     for i, r in enumerate(rows, start=1):
+        cta = _ads_cta(links.get(r["company_id"]))
+        firma = _esc(r["company"]) + (f'<br/><font size="7.5">{cta}</font>' if cta else "")
         trows.append([
             Paragraph(str(i), cell),
-            Paragraph(_company_link(r["company"], links.get(r["company_id"])), cell),
+            Paragraph(firma, cell),
             Paragraph(f"<b>{r['divergence']}</b>/100", cell),
             Paragraph(_esc(r["label"] or "—"), cell),
             Paragraph(_esc(r["reason"]), cell),
@@ -332,11 +343,12 @@ def _divergence_story(filters: dict | None = None, limit: int = 10, links: dict 
 
 
 def _delta_frag(delta) -> str:
-    """'▲3' green / '▼2' muted, or '' when unchanged/unknown."""
+    """'(+3)' green / '(-2)' red vs last week, or '' when unchanged/unknown.
+    Plain ASCII +/- (the base PDF font has no ▲/▼ glyphs)."""
     if not delta:
         return ""
     up = delta > 0
-    return f' <font color="{"#2f855a" if up else "#b04a3a"}">{"▲" if up else "▼"}{abs(delta)}</font>'
+    return f' <font color="{"#2f855a" if up else "#b04a3a"}">({"+" if up else "-"}{abs(delta)})</font>'
 
 
 def build_report(path: str | None = None, filters: dict | None = None) -> str:
@@ -393,7 +405,7 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     rows = [[Paragraph(header[0], cellh)] + [Paragraph(h, cellhr) for h in header[1:]]]
     for d in data:
         cats = d.get("ads_by_category") or {}
-        name = Paragraph(_company_link(d["company"], links.get(d["company_id"])), cell)
+        name = Paragraph(_esc(d["company"]), cell)
         if not d.get("has_data"):
             dash = Paragraph("—", cellr)
             rows.append([name, dash, dash, dash, dash,
@@ -437,20 +449,24 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
             cat_str = " · ".join(f"{_CATEGORY_LABEL_DE.get(k, k)} {v}"
                                  for k, v in cats.items() if v) or "—"
             products = ", ".join(d.get("products") or [])
-            story.append(Paragraph(f'<b>{_company_link(d["company"], links.get(d["company_id"]))}</b>{page}', detail))
+            story.append(Paragraph(f'<b>{_esc(d["company"])}</b>{page}', detail))
             story.append(Paragraph(
                 f'{d["total_active_ads"]} aktive Anzeigen &nbsp;·&nbsp; {cat_str} &nbsp;·&nbsp; '
                 f'Ausgaben ~{_eur(d["spend_low"])}–{_eur(d["spend_high"])}/Wo. ({method_de})', detailm))
             if products:
                 story.append(Paragraph(f'Produkte: {_esc(products)}', detailm))
+            cta = _ads_cta(links.get(d["company_id"]))
+            if cta:
+                story.append(Paragraph(cta, detail))
             story.append(Spacer(1, 6))
 
     story.append(Spacer(1, 6))
     story.append(Paragraph(
-        "<b>Firmennamen sind anklickbar</b> — sie öffnen die aktiven Anzeigen der Firma direkt in der "
-        "Meta Ad Library. ▲/▼ = Veränderung ggü. Vorwoche. Ausgaben sind ein <b>geschätzter</b> "
-        "Intervallwert (von–bis), keine von Meta veröffentlichte Zahl — Meta legt Ausgaben nur für "
-        "regulierte Kategorien offen, sonst geschätzt aus EU-Reichweite/Anzeigenzahl "
+        "Der Link <b>„Aktive Anzeigen ansehen“</b> öffnet die aktuell laufenden Anzeigen der Firma "
+        "in der Meta Ad Library — verfügbar, sobald eine numerische Seiten-ID hinterlegt ist. "
+        "(+/-) = Veränderung ggü. Vorwoche. Ausgaben sind ein <b>geschätzter</b> Intervallwert "
+        "(von–bis), keine von Meta veröffentlichte Zahl — Meta legt Ausgaben nur für regulierte "
+        "Kategorien offen, sonst geschätzt aus EU-Reichweite/Anzeigenzahl "
         "(Annahmen: spend_assumptions.yaml).", note))
 
     doc.build(story)
@@ -519,14 +535,16 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         cats = d.get("ads_by_category") or {}
         products = d.get("products") or []
         score_tag = f" &nbsp;·&nbsp; Score {d['score']:.0f}/100" if d.get("score") is not None else ""
-        name = _company_link(d["company"], card_links.get(d["company_id"]))
-        story.append(Paragraph(f"{i}. {name}{score_tag}", rank))
+        story.append(Paragraph(f"{i}. {_esc(d['company'])}{score_tag}", rank))
         matched = f" &nbsp;·&nbsp; Seite: {_esc(d['page_name'])}" if d.get("page_name") else ""
         story.append(Paragraph(
             f"<b>{d['total_active_ads']} aktive Anzeigen</b>"
             + (f" &nbsp;({'+' if (d.get('delta_ads') or 0) > 0 else ''}{d['delta_ads']} ggü. Vorwoche)"
                if d.get("delta_ads") not in (None, 0) else "")
             + matched, body))
+        cta = _ads_cta(card_links.get(d["company_id"]))
+        if cta:
+            story.append(Paragraph(cta, body))
         story.append(Paragraph(f"<b>Signal:</b> {_esc(_signal(cats, products))}", body))
         method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method"))
         story.append(Paragraph(
@@ -542,9 +560,10 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
 
     story.append(Spacer(1, 10))
     story.append(Paragraph(
-        "<b>Firmennamen sind anklickbar</b> — sie öffnen die aktiven Anzeigen in der Meta Ad Library. "
-        "Ausgaben sind ein <b>geschätzter</b> Intervallwert (von–bis), nicht von Meta veröffentlicht. "
-        "Rangfolge nach Aktivität in der letzten wöchentlichen Erfassung.", note))
+        "Der Link <b>„Aktive Anzeigen ansehen“</b> öffnet die aktuell laufenden Anzeigen in der Meta "
+        "Ad Library (sobald eine numerische Seiten-ID vorliegt). Ausgaben sind ein <b>geschätzter</b> "
+        "Intervallwert (von–bis), nicht von Meta veröffentlicht. Rangfolge nach Aktivität in der "
+        "letzten wöchentlichen Erfassung.", note))
     doc.build(story)
     return path
 
