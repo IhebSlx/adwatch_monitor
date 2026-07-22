@@ -54,6 +54,7 @@ def _reach_for_country(region_stats, country: str) -> int | None:
 
 class GoogleAdSource(AdSource):
     name = "google"
+    backend = "apify"   # always Apify (google-ads-scraper); the pipeline reads this for progress/summary
 
     def __init__(self):
         self.token = config.APIFY_API_TOKEN

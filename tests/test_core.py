@@ -145,6 +145,14 @@ def test_apify_quota_error_detection(monkeypatch):
     assert not isinstance(ei.value, ApifyQuotaError)
 
 
+def test_google_source_has_backend():
+    """run_once_google reads source.backend for its progress/summary — the Google
+    source must define it (its absence failed every Google fetch with
+    'GoogleAdSource object has no attribute backend')."""
+    from adwatch.collect.google_source import GoogleAdSource
+    assert GoogleAdSource.backend == "apify"
+
+
 def test_report_ctas_and_source_label():
     """Report links are per-platform CTAs (Meta + Google), and the header source
     label credits Google only when Google ads are actually present."""
