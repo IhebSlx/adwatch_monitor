@@ -82,6 +82,9 @@ def _describe_filters_de(filters: dict | None) -> str | None:
         vals = filters["resolution_status"]
         vals = vals if isinstance(vals, list) else [vals]
         bits.append("Status: " + ", ".join(_STATUS_LABEL_DE.get(v, v) for v in vals))
+    if filters.get("ad_activity"):
+        bits.append({"active": "nur mit aktiven Anzeigen", "any": "nur je beworben",
+                     "none": "nur ohne aktive Anzeigen"}.get(filters["ad_activity"], filters["ad_activity"]))
     rmin, rmax = filters.get("revenue_min"), filters.get("revenue_max")
     if rmin is not None and rmax is not None:
         bits.append(f"Umsatz: {_eur(rmin)}–{_eur(rmax)}")

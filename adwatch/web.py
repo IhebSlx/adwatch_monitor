@@ -541,6 +541,7 @@ def list_customers_route(
     exclude_sub_segment: list[str] = Query(default=[]),
     resolution_status: list[str] = Query(default=[]),
     tracked: bool | None = None, page_id_state: str | None = None,
+    ad_activity: str | None = None,
     sort: str | None = None, direction: str = "asc", page: int = 1, page_size: int = 50,
 ):
     filters = {"q": q, "kv": kv, "segment": segment, "sub_segment": sub_segment,
@@ -550,7 +551,7 @@ def list_customers_route(
                "exclude_kv": exclude_kv, "exclude_segment": exclude_segment,
                "exclude_sub_segment": exclude_sub_segment,
                "resolution_status": resolution_status, "tracked": tracked,
-               "page_id_state": page_id_state}
+               "page_id_state": page_id_state, "ad_activity": ad_activity}
     return customers.query_companies(filters, sort, direction, page, page_size)
 
 

@@ -264,6 +264,34 @@ def _apply_filters(stmt, f: dict):
     if f.get("tracked") is not None:
         stmt = stmt.where(Company.resolution_status != "pending") if f["tracked"] \
             else stmt.where(Company.resolution_status == "pending")
+    # Ad activity — based on the LATEST fetched week:
+    #   active: latest week sums to >=1 active ad (the win-back signal)
+    #   any:    any real ad ever on record (active or ended)
+    #   none:   fetched at least once but no active ad in the latest week
+    # Companies never fetched have no metric, so they match none of these.
+    aa = f.get("ad_activity")
+    if aa in ("active", "any", "none"):
+        from sqlalchemy import and_ as _and
+        from .models import Ad as _Ad, CollectionRun as _CR, WeeklyCompanyMetric as _WCM
+        _latest = (select(_WCM.company_id, func.max(_WCM.week_start).label("wk"))
+                   .group_by(_WCM.company_id).subquery())
+        _running = (select(_WCM.company_id)
+                    .join(_latest, _and(_WCM.company_id == _latest.c.company_id,
+                                        _WCM.week_start == _latest.c.wk))
+                    .group_by(_WCM.company_id)
+                    .having(func.sum(_WCM.total_active_ads) > 0))
+        if aa == "active":
+            stmt = stmt.where(Company.id.in_(_running))
+        elif aa == "any":
+            # ever advertised: a real ad on record (incl. ended) OR any week with
+            # active ads. Union guarantees "any" is a superset of "active".
+            _real_ad = (select(_CR.company_id).join(_Ad, _Ad.run_id == _CR.id)
+                        .where(_Ad.external_ad_id.is_not(None)))
+            _ever_active = select(_WCM.company_id).where(_WCM.total_active_ads > 0)
+            stmt = stmt.where(or_(Company.id.in_(_real_ad), Company.id.in_(_ever_active)))
+        else:  # none — fetched but not currently advertising
+            stmt = stmt.where(Company.id.in_(select(_WCM.company_id)),
+                              Company.id.not_in(_running))
     if f.get("revenue_min") is not None:
         stmt = stmt.where(func.coalesce(Company.revenue_y0, 0) >= f["revenue_min"])
     if f.get("revenue_max") is not None:

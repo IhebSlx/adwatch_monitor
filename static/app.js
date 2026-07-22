@@ -1101,6 +1101,7 @@
       revenue_min: $("#custRevenueMin").value ? Number($("#custRevenueMin").value) : null,
       revenue_max: $("#custRevenueMax").value ? Number($("#custRevenueMax").value) : null,
       revenue_history: $("#custRevenueHistory").value || null,
+      ad_activity: $("#custAdActivity").value || null,
       exclude_kv: CUST_DROP.excludeKv.getSelected(),
       exclude_segment: CUST_DROP.excludeSegment.getSelected(),
       exclude_sub_segment: CUST_DROP.excludeSubSegment.getSelected(),
@@ -1123,6 +1124,7 @@
     else if (f.revenue_min != null) parts.push(`revenue ≥ €${f.revenue_min}`);
     else if (f.revenue_max != null) parts.push(`revenue ≤ €${f.revenue_max}`);
     if (f.revenue_history) parts.push(REVENUE_HISTORY_LABEL[f.revenue_history] || f.revenue_history);
+    if (f.ad_activity) parts.push({ active: "running ads", any: "any ads ever", none: "no active ads" }[f.ad_activity] || f.ad_activity);
     if (f.exclude_kv?.length) parts.push(`excl. KV: ${f.exclude_kv.join(", ")}`);
     if (f.exclude_segment?.length) parts.push(`excl. segment: ${f.exclude_segment.join(", ")}`);
     if (f.exclude_sub_segment?.length) parts.push(`excl. sub-segment: ${f.exclude_sub_segment.join(", ")}`);
@@ -1896,6 +1898,7 @@
     applyOnChange("#custRevenueHistory");
     applyOnChange("#custHasWebsite");
     applyOnChange("#custTracked");
+    applyOnChange("#custAdActivity");
 
     $("#custClearBtn").addEventListener("click", () => {
       $("#custSearch").value = "";
@@ -1905,6 +1908,7 @@
       CUST_DROP.excludeKv.clear(); CUST_DROP.excludeSegment.clear(); CUST_DROP.excludeSubSegment.clear();
       $("#custRevenueMin").value = ""; $("#custRevenueMax").value = ""; $("#custRevenueHistory").value = "";
       $("#custHasWebsite").checked = false; $("#custTracked").value = "";
+      $("#custAdActivity").value = "";
       CUST.page = 1; loadCustomers();
     });
 

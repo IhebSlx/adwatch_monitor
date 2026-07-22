@@ -196,6 +196,36 @@ def test_failed_fetch_does_not_zero_metrics(temp_db):
     s.close()
 
 
+def test_ad_activity_filter(temp_db):
+    """The explorer's 'is running ads' filter: active = latest week has active
+    ads; any = ever advertised (incl. ended, and a superset of active); none =
+    fetched but not active now. Never-fetched companies match none of them."""
+    from adwatch.customers import _apply_filters
+    from adwatch.models import Ad, CollectionRun, Company, WeeklyCompanyMetric
+    from sqlalchemy import select
+    s = temp_db.SessionLocal()
+    wk = dt.date(2026, 7, 6)
+    a = Company(name="A running", resolution_status="confirmed", country="DE"); s.add(a); s.flush()
+    s.add(WeeklyCompanyMetric(company_id=a.id, source="meta", week_start=wk, total_active_ads=3))
+    b = Company(name="B ended-only", resolution_status="confirmed", country="DE"); s.add(b); s.flush()
+    s.add(WeeklyCompanyMetric(company_id=b.id, source="meta", week_start=wk, total_active_ads=0))
+    run = CollectionRun(company_id=b.id, source="meta", week_start=wk, status="ok"); s.add(run); s.flush()
+    s.add(Ad(run_id=run.id, source="meta", external_ad_id="x1", is_active=False))
+    c = Company(name="C fetched-silent", resolution_status="confirmed", country="DE"); s.add(c); s.flush()
+    s.add(WeeklyCompanyMetric(company_id=c.id, source="meta", week_start=wk, total_active_ads=0))
+    d = Company(name="D never-fetched", resolution_status="confirmed", country="DE"); s.add(d)
+    s.commit()
+
+    def ids(f): return set(s.scalars(_apply_filters(select(Company.id), f)))
+    active, anyads, none = ids({"ad_activity": "active"}), ids({"ad_activity": "any"}), ids({"ad_activity": "none"})
+    assert active == {a.id}
+    assert anyads == {a.id, b.id}          # running now + ever-advertised; superset of active
+    assert active <= anyads
+    assert none == {b.id, c.id}            # fetched but not active now
+    assert d.id not in (active | anyads | none)   # never fetched -> matches none
+    s.close()
+
+
 def test_unlink_resets_collected_ads(temp_db):
     """Unlinking a wrong page must clear its collected ads/score — otherwise
     the wrong page's numbers linger on the company (the Bau-DL bug)."""
