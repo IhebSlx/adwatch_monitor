@@ -1595,18 +1595,12 @@
     loadState();   // dashboard table shares this data
   }
 
-  async function runReportForSelected() {
-    const ids = [...CUST.selected];
-    if (!ids.length) return;
-    const btn = $("#custReportBtn");
+  async function _generateReport(body, btn, successMsg) {
     const orig = btn.textContent;
     btn.disabled = true; btn.textContent = "Generating…";
     try {
-      // Reuses the standard report path, scoped to exactly these ids via the
-      // {ids:[…]} filter — same endpoint the Reports tab uses.
-      const { filename } = await api("/api/reports/generate", "POST",
-        { report: "full", filters: { ids } });
-      toast(`✓ Report generated for ${ids.length} ${ids.length === 1 ? "company" : "companies"} — also under Reports`, "info");
+      const { filename } = await api("/api/reports/generate", "POST", body);
+      toast(successMsg, "info");
       // Open the finished PDF (same behaviour as the Download links in history).
       const a = document.createElement("a");
       a.href = `/api/reports/${encodeURIComponent(filename)}`;
@@ -1618,6 +1612,22 @@
     } finally {
       btn.disabled = false; btn.textContent = orig;
     }
+  }
+
+  // Report for the hand-picked SELECTION (scoped by ids -> "Auswahl: N Firmen").
+  async function runReportForSelected() {
+    const ids = [...CUST.selected];
+    if (!ids.length) return;
+    await _generateReport({ report: "full", filters: { ids } }, $("#custReportBtn"),
+      `✓ Report generated for ${ids.length} ${ids.length === 1 ? "company" : "companies"} — also under Reports`);
+  }
+
+  // Report for the whole FILTERED set (scoped by the filter itself -> the
+  // "Gefiltert nach: …" scope banner shows the actual filter, no selection needed).
+  async function runReportForFilter() {
+    const n = CUST.total || 0;
+    await _generateReport({ report: "full", filters: currentCustomerFilters() }, $("#custReportAllBtn"),
+      `✓ Report generated for the current filter (${n} ${n === 1 ? "company" : "companies"}) — the filter is shown in the report header`);
   }
 
   // ---------------- company detail drawer ----------------
@@ -1999,6 +2009,13 @@
       downloadExport({ ids: [...CUST.selected] }));
     $("#custExportAllBtn").addEventListener("click", () =>
       downloadExport({ filters: currentCustomerFilters(), sort: CUST.sort, direction: CUST.direction }));
+
+    // Act on the WHOLE filtered set (no manual selection needed):
+    $("#custReportAllBtn").addEventListener("click", runReportForFilter);
+    $("#custFetchAllBtn").addEventListener("click", async () => {
+      await selectAllMatching();     // pull every filtered company id into the selection
+      openFetchPlan();               // pre-flight estimate + confirm before any Apify spend
+    });
 
     $("#custFetchBtn").addEventListener("click", openFetchPlan);
     $("#planRecalcBtn").addEventListener("click", refreshFetchPlan);
