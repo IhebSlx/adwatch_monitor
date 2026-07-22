@@ -217,6 +217,13 @@ def _ad_library_url(page_id: str | None, country: str | None = "DE") -> str | No
             f"&country={country or 'DE'}&view_all_page_id={page_id}&search_type=page&media_type=all")
 
 
+def _google_transparency_url(advertiser_id: str | None, country: str | None = "DE") -> str | None:
+    """Deep link to a company's ads in the Google Ads Transparency Center."""
+    if not advertiser_id:
+        return None
+    return f"https://adstransparency.google.com/advertiser/{advertiser_id}?region={country or 'DE'}"
+
+
 def _web_url(domain: str | None) -> str | None:
     if not domain:
         return None
@@ -224,17 +231,23 @@ def _web_url(domain: str | None) -> str | None:
 
 
 def _page_link_map(company_ids) -> dict:
-    """{company_id: {page_id, country, website}} for the given companies — used to
-    turn names into Ad-Library / website links without an extra query per row."""
+    """{company_id: {page_id, country, website, google_id}} for the given
+    companies — used to turn names into Ad-Library / Google-Transparency links
+    without an extra query per row. `page_id` is the Meta (Facebook) page id;
+    `google_id` is the Google advertiser id (from its source='google' page)."""
     if not company_ids:
         return {}
     from sqlalchemy import select as _select
     from .db import SessionLocal as _SessionLocal
-    from .models import Company as _Company
+    from .models import Company as _Company, CompanyPage as _CompanyPage
     with _SessionLocal() as s:
         rows = s.execute(_select(_Company.id, _Company.page_id, _Company.country,
                                  _Company.website_domain).where(_Company.id.in_(company_ids))).all()
-    return {cid: {"page_id": pid, "country": ctry, "website": web}
+        gp = s.execute(_select(_CompanyPage.company_id, _CompanyPage.page_id).where(
+            _CompanyPage.source == "google", _CompanyPage.active,
+            _CompanyPage.company_id.in_(company_ids))).all()
+    gmap = {cid: pid for cid, pid in gp}
+    return {cid: {"page_id": pid, "country": ctry, "website": web, "google_id": gmap.get(cid)}
             for cid, pid, ctry, web in rows}
 
 
@@ -246,12 +259,19 @@ def _company_link(name: str, info: dict | None) -> str:
 
 
 def _ads_cta(info: dict | None) -> str:
-    """German call-to-action link to a company's ACTIVE ads in the Meta Ad
-    Library — only when a numeric page id is resolved (otherwise ''). The link
-    TEXT is the CTA, not the company name/URL."""
+    """German call-to-action link(s) to a company's ACTIVE ads. The link TEXT is
+    the CTA, not the company name/URL. Adds a Meta link when a numeric page id is
+    resolved and a Google link when a Google advertiser id is resolved — so a
+    Google-only advertiser still gets a working link. '' when neither exists."""
     info = info or {}
-    url = _ad_library_url(info.get("page_id"), info.get("country"))
-    return _link("» Aktive Anzeigen ansehen", url) if url else ""
+    parts = []
+    meta = _ad_library_url(info.get("page_id"), info.get("country"))
+    if meta:
+        parts.append(_link("» Aktive Anzeigen ansehen", meta))
+    google = _google_transparency_url(info.get("google_id"), info.get("country"))
+    if google:
+        parts.append(_link("» Google-Anzeigen ansehen", google))
+    return " &nbsp;·&nbsp; ".join(parts)
 
 
 def _scope_banner(filters: dict | None, n_companies: int, n_active: int, styles) -> Table:
@@ -351,6 +371,14 @@ def _delta_frag(delta) -> str:
     return f' <font color="{"#2f855a" if up else "#b04a3a"}">({"+" if up else "-"}{abs(delta)})</font>'
 
 
+def _source_label(rows) -> str:
+    """Name the ad sources that actually contributed to this report — credit
+    Google only when Google ads are present, so a Meta-only report isn't
+    mislabelled as using Google."""
+    has_google = any((d.get("google_active_ads") or 0) > 0 for d in rows)
+    return "Meta Ad Library + Google Ads Transparency" if has_google else "Meta Ad Library"
+
+
 def build_report(path: str | None = None, filters: dict | None = None) -> str:
     if path is None:
         path = str(next_report_path("adwatch_report"))
@@ -359,6 +387,7 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     data = latest_metrics(_filtered_company_ids(filters))
     links = _page_link_map([d["company_id"] for d in data])
     n_active = sum(1 for d in data if d.get("has_data") and (d.get("total_active_ads") or 0) > 0)
+    source_label = _source_label(data)
 
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=21, spaceAfter=2, alignment=0)
@@ -380,7 +409,7 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     story = [
         Paragraph("Anzeigen-Aktivitätsbericht", h1),
         Paragraph(f"Erstellt am {_de_datetime(dt.datetime.now())} &nbsp;·&nbsp; "
-                  f"live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: Meta Ad Library", sub),
+                  f"live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: {source_label}", sub),
         Spacer(1, 9),
         _scope_banner(filters, len(data), n_active, styles),
         Spacer(1, 13),
@@ -462,12 +491,12 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
 
     story.append(Spacer(1, 6))
     story.append(Paragraph(
-        "Der Link <b>„Aktive Anzeigen ansehen“</b> öffnet die aktuell laufenden Anzeigen der Firma "
-        "in der Meta Ad Library — verfügbar, sobald eine numerische Seiten-ID hinterlegt ist. "
-        "(+/-) = Veränderung ggü. Vorwoche. Ausgaben sind ein <b>geschätzter</b> Intervallwert "
-        "(von–bis), keine von Meta veröffentlichte Zahl — Meta legt Ausgaben nur für regulierte "
-        "Kategorien offen, sonst geschätzt aus EU-Reichweite/Anzeigenzahl "
-        "(Annahmen: spend_assumptions.yaml).", note))
+        "Die Links <b>„Aktive Anzeigen ansehen“</b> (Meta Ad Library) und <b>„Google-Anzeigen "
+        "ansehen“</b> (Google Ads Transparency) öffnen die laufenden Anzeigen der Firma — sobald eine "
+        "Meta-Seiten- bzw. Google-Advertiser-ID hinterlegt ist. (+/-) = Veränderung ggü. Vorwoche. "
+        "Ausgaben sind ein <b>geschätzter</b> Intervallwert (von–bis), keine offiziell veröffentlichte "
+        "Zahl — nur regulierte Kategorien werden offengelegt, sonst geschätzt aus "
+        "EU-Reichweite/Anzeigenzahl (Annahmen: spend_assumptions.yaml).", note))
 
     doc.build(story)
     return path
@@ -501,6 +530,7 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
     top = data[:5]
     n_active = len(data)
     card_links = _page_link_map([d["company_id"] for d in top])
+    source_label = _source_label(all_metrics)
 
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=20, spaceAfter=2)
@@ -519,7 +549,7 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         Paragraph(
             f"Erstellt am {_de_datetime(dt.datetime.now())}"
             + (f" &nbsp;·&nbsp; Woche vom {week_de}" if week_de else "")
-            + f" &nbsp;·&nbsp; live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: Meta Ad Library", sub),
+            + f" &nbsp;·&nbsp; live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: {source_label}", sub),
         Spacer(1, 9),
         _scope_banner(filters, len(all_metrics), n_active, styles),
         Spacer(1, 13),
@@ -560,10 +590,10 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
 
     story.append(Spacer(1, 10))
     story.append(Paragraph(
-        "Der Link <b>„Aktive Anzeigen ansehen“</b> öffnet die aktuell laufenden Anzeigen in der Meta "
-        "Ad Library (sobald eine numerische Seiten-ID vorliegt). Ausgaben sind ein <b>geschätzter</b> "
-        "Intervallwert (von–bis), nicht von Meta veröffentlicht. Rangfolge nach Aktivität in der "
-        "letzten wöchentlichen Erfassung.", note))
+        "Die Links <b>„Aktive Anzeigen ansehen“</b> (Meta Ad Library) und <b>„Google-Anzeigen "
+        "ansehen“</b> (Google Ads Transparency) öffnen die laufenden Anzeigen der Firma. Ausgaben sind "
+        "ein <b>geschätzter</b> Intervallwert (von–bis), nicht offiziell veröffentlicht. Rangfolge "
+        "nach Aktivität in der letzten wöchentlichen Erfassung.", note))
     doc.build(story)
     return path
 

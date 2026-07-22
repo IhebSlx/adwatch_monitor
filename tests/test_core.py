@@ -145,6 +145,20 @@ def test_apify_quota_error_detection(monkeypatch):
     assert not isinstance(ei.value, ApifyQuotaError)
 
 
+def test_report_ctas_and_source_label():
+    """Report links are per-platform CTAs (Meta + Google), and the header source
+    label credits Google only when Google ads are actually present."""
+    from adwatch.report import _ads_cta, _google_transparency_url, _source_label
+    assert "ads/library" in _ads_cta({"page_id": "111", "country": "DE"})
+    assert "Google-Anzeigen" not in _ads_cta({"page_id": "111"})
+    assert "adstransparency.google.com/advertiser/AR9" in _ads_cta({"google_id": "AR9", "country": "DE"})
+    assert _ads_cta({"page_id": "111", "google_id": "AR9"}).count("<a ") == 2   # both platforms
+    assert _ads_cta({}) == ""
+    assert _source_label([{"meta_active_ads": 5, "google_active_ads": 0}]) == "Meta Ad Library"
+    assert "Google" in _source_label([{"google_active_ads": 2}])
+    assert _google_transparency_url(None) is None
+
+
 def test_company_score_zero_ads_is_zero():
     """A company running zero ads must score 0 — not ~12.5 off the neutral
     first-week momentum term (the phantom-ad fix exposed this)."""
