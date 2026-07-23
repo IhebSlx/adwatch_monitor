@@ -15,11 +15,14 @@ from .models import (
     Ad, CollectionRun, Company, CompanyPage, ReportRecipient, ScheduleConfig, WeeklyCompanyMetric,
 )
 
+# Meta/Facebook-page identity status only — never a whole-company verdict, and
+# unrelated to Google (which is linked separately by website domain).
 STATUS_LABELS = {
-    "pending": "Not fetched yet",
-    "confirmed": "Confirmed page",
-    "ambiguous": "Multiple matches — best guess used, please verify",
-    "no_ads_found": "No ads found under this name — check spelling or verify manually",
+    "pending": "Meta page not checked yet",
+    "confirmed": "Meta page found",
+    "ambiguous": "Meta page unclear — best guess used, please verify",
+    "no_ads_found": "No Meta page found under this name — check spelling or verify manually",
+    "locked": "Meta page locked",
 }
 
 PAGE_STATUS_LABELS = {"confirmed": "confirmed", "auto": "auto-linked", "manual": "manually set"}

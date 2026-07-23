@@ -269,15 +269,25 @@ def _apply_filters(stmt, f: dict):
     #   any:    any real ad ever on record (active or ended)
     #   none:   fetched at least once but no active ad in the latest week
     # Companies never fetched have no metric, so they match none of these.
+    # `ad_source` ("meta"/"google") narrows every part to one platform: the
+    # "latest week", the active-ad sum, and the ever-advertised check all look
+    # only at that source's rows — so active+meta = "running Meta ads now"
+    # irrespective of Google, and none+google = "fetched on Google but no live
+    # Google ad". No source (or an unknown one) keeps the all-platforms totals.
     aa = f.get("ad_activity")
     if aa in ("active", "any", "none"):
         from sqlalchemy import and_ as _and
         from .models import Ad as _Ad, CollectionRun as _CR, WeeklyCompanyMetric as _WCM
+        src = f.get("ad_source") if f.get("ad_source") in ("meta", "google") else None
+        _wcm_src = (_WCM.source == src,) if src else ()   # empty -> no-op .where(), all sources
+        _cr_src = (_CR.source == src,) if src else ()
         _latest = (select(_WCM.company_id, func.max(_WCM.week_start).label("wk"))
+                   .where(*_wcm_src)
                    .group_by(_WCM.company_id).subquery())
         _running = (select(_WCM.company_id)
                     .join(_latest, _and(_WCM.company_id == _latest.c.company_id,
                                         _WCM.week_start == _latest.c.wk))
+                    .where(*_wcm_src)
                     .group_by(_WCM.company_id)
                     .having(func.sum(_WCM.total_active_ads) > 0))
         if aa == "active":
@@ -286,11 +296,11 @@ def _apply_filters(stmt, f: dict):
             # ever advertised: a real ad on record (incl. ended) OR any week with
             # active ads. Union guarantees "any" is a superset of "active".
             _real_ad = (select(_CR.company_id).join(_Ad, _Ad.run_id == _CR.id)
-                        .where(_Ad.external_ad_id.is_not(None)))
-            _ever_active = select(_WCM.company_id).where(_WCM.total_active_ads > 0)
+                        .where(_Ad.external_ad_id.is_not(None), *_cr_src))
+            _ever_active = select(_WCM.company_id).where(_WCM.total_active_ads > 0, *_wcm_src)
             stmt = stmt.where(or_(Company.id.in_(_real_ad), Company.id.in_(_ever_active)))
         else:  # none — fetched but not currently advertising
-            stmt = stmt.where(Company.id.in_(select(_WCM.company_id)),
+            stmt = stmt.where(Company.id.in_(select(_WCM.company_id).where(*_wcm_src)),
                               Company.id.not_in(_running))
     if f.get("revenue_min") is not None:
         stmt = stmt.where(func.coalesce(Company.revenue_y0, 0) >= f["revenue_min"])

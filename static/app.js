@@ -38,8 +38,12 @@
 
   const CATEGORY_LABELS = { recruitment: "Hiring", product_sale: "Selling",
     brand_awareness: "Brand", event_promo: "Event", other: "Other" };
-  const STATUS_LABEL = { confirmed: "confirmed", ambiguous: "ambiguous",
-    no_ads_found: "no ads found", pending: "pending", locked: "locked" };
+  // These describe ONE thing only: whether we found the company's Meta/Facebook
+  // page. They say nothing about Google (a separate per-source link) — so the
+  // labels name Meta explicitly instead of a bare "confirmed" that reads like a
+  // whole-company verdict.
+  const STATUS_LABEL = { confirmed: "Meta page found", ambiguous: "Meta page unclear",
+    no_ads_found: "No Meta page found", pending: "Meta not checked yet", locked: "Meta page locked" };
   const RUN_STATUS_LABEL = { ok: "ok", no_active_ads: "no active ads",
     no_ads_found: "no ads found", ambiguous_match: "ambiguous", error: "error" };
   const FLAG_LABEL = { new_campaign: "New campaign", first_seen: "First activity",
@@ -135,7 +139,7 @@
     const isIG = href.includes("instagram.com");
     const platform = isIG ? ` <span class="role-badge" title="Instagram profile — same Meta ad identity as a Facebook page">IG</span>` : "";
     const needsId = (!r.page_id && r.resolution_status === "confirmed")
-      ? ` <span class="candidate-flag flag-warn" title="Identity confirmed, but the numeric page ID needed for Ad lookup isn't captured yet — Ad lookup will resolve it, or add it manually with ✎.">⚠ no id</span>`
+      ? ` <span class="candidate-flag flag-warn" title="Meta page confirmed, but the numeric page ID needed for Ad lookup isn't captured yet — Ad lookup will resolve it, or add it manually with ✎.">⚠ no id</span>`
       : "";
     return `<a class="link" href="${esc(href)}" target="_blank">${esc(label)}</a>${platform}${needsId} ${editBtn}`;
   }
@@ -853,13 +857,13 @@
 
   // ------------------------------------------------------------------ identity status labels + page cell (shared by filter + drawer)
   const ID_STATUS_ORDER = ["locked", "confirmed", "ambiguous", "no_ads_found", "pending"];
-  const ID_STATUS_LABEL = { locked: "Locked", confirmed: "Confirmed", ambiguous: "Ambiguous",
-    no_ads_found: "No page found", pending: "Not checked" };
+  const ID_STATUS_LABEL = { locked: "Meta page locked", confirmed: "Meta page found", ambiguous: "Meta page unclear",
+    no_ads_found: "No Meta page found", pending: "Meta not checked" };
   // The identity-status filter dropdown also carries two PSEUDO options that
   // filter on fetch-readiness (numeric page id present) rather than status —
   // they map to the separate page_id_state filter, never to resolution_status.
   const ID_FILTER_OPTIONS = [...ID_STATUS_ORDER, "with_id", "without_id"];
-  const ID_FILTER_LABEL = { ...ID_STATUS_LABEL, with_id: "Mit Page-ID", without_id: "Ohne Page-ID" };
+  const ID_FILTER_LABEL = { ...ID_STATUS_LABEL, with_id: "With Meta page ID", without_id: "Without Meta page ID" };
 
   function idFbCell(r) {
     // Prefer the explicit page_url (serper handle-only confirms have no numeric
@@ -870,7 +874,7 @@
     const isIG = href.includes("instagram.com");
     const platform = isIG ? ` <span class="role-badge" title="Instagram profile — same Meta ad identity as a Facebook page">Instagram</span>` : "";
     const needsId = !r.page_id && (r.resolution_status === "confirmed")
-      ? ` <span class="candidate-flag flag-warn" title="Identity known, but the numeric page ID needed for Ad lookup isn't captured yet — open the page and lock it with the ID, or Ad lookup will resolve it.">⚠ no page id</span>`
+      ? ` <span class="candidate-flag flag-warn" title="Meta page known, but the numeric page ID needed for Ad lookup isn't captured yet — open the page and lock it with the ID, or Ad lookup will resolve it.">⚠ no page id</span>`
       : "";
     return `<a class="link" href="${esc(href)}" target="_blank">${esc(label)}</a>${platform}${needsId}`;
   }
@@ -1094,6 +1098,9 @@
     // options — split them apart here (both/neither id option = no restriction)
     const idSel = CUST_DROP.status.getSelected();
     const withId = idSel.includes("with_id"), withoutId = idSel.includes("without_id");
+    // The ad-activity dropdown packs both dimensions into one value
+    // ("active:meta" = running ads, Meta only); split into orthogonal params.
+    const [adAct, adSrc] = ($("#custAdActivity").value || "").split(":");
     return {
       q: $("#custSearch").value.trim() || null,
       resolution_status: idSel.filter(v => v !== "with_id" && v !== "without_id"),
@@ -1107,7 +1114,8 @@
       revenue_min: $("#custRevenueMin").value ? Number($("#custRevenueMin").value) : null,
       revenue_max: $("#custRevenueMax").value ? Number($("#custRevenueMax").value) : null,
       revenue_history: $("#custRevenueHistory").value || null,
-      ad_activity: $("#custAdActivity").value || null,
+      ad_activity: adAct || null,
+      ad_source: adSrc || null,
       exclude_kv: CUST_DROP.excludeKv.getSelected(),
       exclude_segment: CUST_DROP.excludeSegment.getSelected(),
       exclude_sub_segment: CUST_DROP.excludeSubSegment.getSelected(),
@@ -1130,13 +1138,17 @@
     else if (f.revenue_min != null) parts.push(`revenue ≥ €${f.revenue_min}`);
     else if (f.revenue_max != null) parts.push(`revenue ≤ €${f.revenue_max}`);
     if (f.revenue_history) parts.push(REVENUE_HISTORY_LABEL[f.revenue_history] || f.revenue_history);
-    if (f.ad_activity) parts.push({ active: "running ads", any: "any ads ever", none: "no active ads" }[f.ad_activity] || f.ad_activity);
+    if (f.ad_activity) {
+      const base = { active: "running ads", any: "any ads ever", none: "no active ads" }[f.ad_activity] || f.ad_activity;
+      const src = { meta: "Meta", google: "Google" }[f.ad_source];
+      parts.push(src ? `${base} (${src})` : base);
+    }
     if (f.exclude_kv?.length) parts.push(`excl. KV: ${f.exclude_kv.join(", ")}`);
     if (f.exclude_segment?.length) parts.push(`excl. segment: ${f.exclude_segment.join(", ")}`);
     if (f.exclude_sub_segment?.length) parts.push(`excl. sub-segment: ${f.exclude_sub_segment.join(", ")}`);
     if (f.has_website) parts.push("has website");
-    if (f.page_id_state === "with") parts.push("with page ID");
-    if (f.page_id_state === "without") parts.push("without page ID");
+    if (f.page_id_state === "with") parts.push("with Meta page ID");
+    if (f.page_id_state === "without") parts.push("without Meta page ID");
     if (f.tracked === true) parts.push("tracked only");
     if (f.tracked === false) parts.push("untracked only");
     return parts;
@@ -1823,8 +1835,8 @@
       btn.disabled = true; btn.textContent = "Checking…";
       try {
         const r = await api(`/api/companies/${id}/identity-check`, "POST");
-        const label = { confirmed: "confirmed", locked: "locked", ambiguous: "still ambiguous",
-          no_ads_found: "no page found", skipped_locked: "locked (skipped)" }[r.status] || r.status;
+        const label = { confirmed: "Meta page found", locked: "Meta page locked", ambiguous: "Meta page still unclear",
+          no_ads_found: "no Meta page found", skipped_locked: "Meta page locked (skipped)" }[r.status] || r.status;
         toast(`Identity rechecked → ${label}${r.page_name ? " · " + r.page_name : ""}`, "info");
         await refresh();
       } catch (err) {
@@ -2060,24 +2072,32 @@
       return;
     }
     const est = await api("/api/fetch-jobs/estimate", "POST", { company_ids: PLAN_COMPANY_IDS, sources });
+    // Per-source routing: Meta runs only where a page was found, Google only
+    // where a website is set — so we show what will actually be fetched.
+    const routeStats = [];
+    if (est.meta_fetchable != null)
+      routeStats.push(`<div><div class="stat-label">Meta pages ready</div><div class="stat-value">${est.meta_fetchable}</div></div>`);
+    if (est.google_fetchable != null)
+      routeStats.push(`<div><div class="stat-label">Websites (Google)</div><div class="stat-value">${est.google_fetchable}</div></div>`);
     summaryBox.innerHTML = `
       <div><div class="stat-label">Companies</div><div class="stat-value">${est.company_count}</div></div>
-      ${est.meta_fetchable != null ? `
-      <div><div class="stat-label">Confirmed Meta pages</div><div class="stat-value">${est.meta_fetchable}</div></div>` : ""}
+      ${routeStats.join("")}
+      <div><div class="stat-label">Fetches to run</div><div class="stat-value">${est.total_units}</div></div>
       <div><div class="stat-label">Sources</div><div class="stat-value">${est.sources.join(" + ")}</div></div>
       <div><div class="stat-label">Est. time</div><div class="stat-value">${fmtDuration(est.est_seconds_low)}–${fmtDuration(est.est_seconds_high)}</div></div>
       <div><div class="stat-label">Est. Apify cost</div><div class="stat-value">$${est.est_cost_usd_low.toFixed(2)}–$${est.est_cost_usd_high.toFixed(2)}</div></div>
     `;
-    if (est.meta_skipped) {
-      summaryBox.innerHTML += `
-        <p class="hint" style="flex-basis:100%">⏭ ${est.meta_skipped} of the selected
-        compan${est.meta_skipped === 1 ? "y has" : "ies have"} no confirmed Meta page and will be
-        <b>skipped</b> — run the <b>Identity check</b> on them first.</p>`;
-    }
-    $("#planConfirmBtn").disabled = est.meta_fetchable === 0 && sources.length === 1 && sources[0] === "meta";
-    if ($("#planConfirmBtn").disabled) {
-      summaryBox.innerHTML += `<p class="hint" style="flex-basis:100%">Nothing to fetch —
-        none of the selection has a confirmed Meta page.</p>`;
+    const skips = [];
+    if (est.meta_skipped)
+      skips.push(`<b>${est.meta_skipped}</b> without a Meta page (Meta skipped — run the <b>Identity check</b> first)`);
+    if (est.google_skipped)
+      skips.push(`<b>${est.google_skipped}</b> without a website (Google skipped)`);
+    if (skips.length)
+      summaryBox.innerHTML += `<p class="hint" style="flex-basis:100%">⏭ ${skips.join("; ")}.</p>`;
+    $("#planConfirmBtn").disabled = est.total_units === 0;
+    if (est.total_units === 0) {
+      summaryBox.innerHTML += `<p class="hint" style="flex-basis:100%">Nothing to fetch — the selection
+        has no Meta page and no website for the chosen source${sources.length === 1 ? "" : "s"}.</p>`;
     }
   }
 

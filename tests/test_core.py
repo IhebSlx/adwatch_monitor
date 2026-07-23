@@ -248,6 +248,93 @@ def test_ad_activity_filter(temp_db):
     s.close()
 
 
+def test_ad_activity_source_filter(temp_db):
+    """`ad_source` narrows the ad-activity filter to one platform: a company
+    running only Meta ads must match active+meta but NOT active+google, and vice
+    versa — while the unscoped 'active' still catches both. 'none'/'any' are
+    scoped the same per-platform way."""
+    from adwatch.customers import _apply_filters
+    from adwatch.models import Ad, CollectionRun, Company, WeeklyCompanyMetric
+    from sqlalchemy import select
+    s = temp_db.SessionLocal()
+    wk = dt.date(2026, 7, 6)
+
+    def wcm(cid, src, n):
+        s.add(WeeklyCompanyMetric(company_id=cid, source=src, week_start=wk, total_active_ads=n))
+
+    m = Company(name="M meta-only", resolution_status="confirmed", country="DE"); s.add(m); s.flush()
+    wcm(m.id, "meta", 3); wcm(m.id, "google", 0)
+    g = Company(name="G google-only", resolution_status="confirmed", country="DE"); s.add(g); s.flush()
+    wcm(g.id, "meta", 0); wcm(g.id, "google", 2)
+    b = Company(name="B both-silent", resolution_status="confirmed", country="DE"); s.add(b); s.flush()
+    wcm(b.id, "meta", 0); wcm(b.id, "google", 0)
+    # B has one ENDED Meta ad on record (real ad, inactive) — so it counts as
+    # "ever advertised on Meta" but not "running Meta now".
+    run = CollectionRun(company_id=b.id, source="meta", week_start=wk, status="ok"); s.add(run); s.flush()
+    s.add(Ad(run_id=run.id, source="meta", external_ad_id="e1", is_active=False))
+    s.commit()
+
+    def ids(f): return set(s.scalars(_apply_filters(select(Company.id), f)))
+
+    assert ids({"ad_activity": "active"}) == {m.id, g.id}                        # either platform
+    assert ids({"ad_activity": "active", "ad_source": "meta"}) == {m.id}          # Meta only
+    assert ids({"ad_activity": "active", "ad_source": "google"}) == {g.id}        # Google only
+    # none = fetched on that platform but nothing live there now
+    assert ids({"ad_activity": "none", "ad_source": "meta"}) == {g.id, b.id}
+    assert ids({"ad_activity": "none", "ad_source": "google"}) == {m.id, b.id}
+    # any = ever advertised on that platform (incl. ended)
+    assert ids({"ad_activity": "any", "ad_source": "meta"}) == {m.id, b.id}
+    assert ids({"ad_activity": "any", "ad_source": "google"}) == {g.id}
+    # an unknown/blank source falls back to all-platforms (no crash, no over-filter)
+    assert ids({"ad_activity": "active", "ad_source": "linkedin"}) == {m.id, g.id}
+    s.close()
+
+
+def test_fetch_job_source_routing(temp_db):
+    """A fetch job routes sources per company: a Meta unit only where a page was
+    found, a Google unit only where a website is set, and a company with NEITHER
+    is dropped from the job entirely. The estimate + the job's `total` count only
+    the units that will really run — never the raw company × source product."""
+    from adwatch import jobs
+    from adwatch.jobs import _google_fetchable_ids, _plan_units
+    from adwatch.models import Company, CompanyPage
+    s = temp_db.SessionLocal()
+
+    def mk(name, website=None):
+        c = Company(name=name, resolution_status="pending", country="DE", website_domain=website)
+        s.add(c); s.flush()
+        return c
+
+    a = mk("A page+web", website="a.de")     # Meta page + website  -> both sources
+    s.add(CompanyPage(company_id=a.id, source="meta", page_id="111", page_name="A", role="main", active=True))
+    b = mk("B web only", website="b.de")     # website, no page     -> Google only
+    c = mk("C page only")                    # page, no website     -> Meta only
+    s.add(CompanyPage(company_id=c.id, source="meta", page_id="222", page_name="C", role="main", active=True))
+    d = mk("D neither")                      # neither              -> no units at all
+    s.commit()
+    ids = [a.id, b.id, c.id, d.id]
+
+    assert _google_fetchable_ids(s, ids) == {a.id, b.id}
+    # deterministic order: company order, Meta before Google
+    assert _plan_units(s, ids, ["meta", "google"]) == \
+        [(a.id, "meta"), (a.id, "google"), (b.id, "google"), (c.id, "meta")]
+    assert _plan_units(s, ids, ["meta"]) == [(a.id, "meta"), (c.id, "meta")]
+    assert _plan_units(s, ids, ["google"]) == [(a.id, "google"), (b.id, "google")]
+    s.close()
+
+    est = jobs.estimate(ids, ["meta", "google"])
+    assert est["total_units"] == 4              # not 4 companies × 2 sources = 8
+    assert est["meta_fetchable"] == 2 and est["meta_skipped"] == 2
+    assert est["google_fetchable"] == 2 and est["google_skipped"] == 2
+
+    job = jobs.create_job(ids, ["meta", "google"], label="t")
+    assert job["total"] == 4                     # job sized to the routed plan
+
+    # a selection with no fetchable source at all is refused, not created empty
+    with pytest.raises(ValueError):
+        jobs.create_job([d.id], ["meta", "google"])
+
+
 def test_downgrade_resets_collected_ads(temp_db):
     """A recheck that DOWNGRADES an auto-confirmed page (page before, none now)
     must clear that page's collected ads/metric at the point the page is dropped

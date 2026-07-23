@@ -112,11 +112,11 @@
         <div class="filter-bar">
           <input type="text" id="compSearch" placeholder="Search company…" style="flex:2;min-width:160px">
           <select id="compStatus">
-            <option value="">All statuses</option>
-            <option value="confirmed">Confirmed</option>
-            <option value="ambiguous">Ambiguous</option>
-            <option value="no_ads_found">No ads found</option>
-            <option value="pending">Pending</option>
+            <option value="">All Meta-page statuses</option>
+            <option value="confirmed">Meta page found</option>
+            <option value="ambiguous">Meta page unclear</option>
+            <option value="no_ads_found">No Meta page found</option>
+            <option value="pending">Meta not checked</option>
           </select>
           <input type="number" id="compMinTotal" placeholder="Min total ads" style="width:110px">
           <input type="number" id="compMinMeta" placeholder="Min Meta ads" style="width:110px">
@@ -222,9 +222,11 @@
             <option value="true">Tracked only</option>
             <option value="false">Untracked only</option>
           </select>
-          <select id="custAdActivity" title="Filter by advertising activity (based on the latest ad fetch)">
+          <select id="custAdActivity" title="Filter by advertising activity (based on the latest ad fetch). The indented options limit 'running now' to one platform.">
             <option value="">Ad activity: all</option>
             <option value="active">Running ads (active now)</option>
+            <option value="active:meta">↳ Running Meta ads</option>
+            <option value="active:google">↳ Running Google ads</option>
             <option value="any">Any ads (ever)</option>
             <option value="none">No active ads</option>
           </select>
@@ -544,17 +546,20 @@
       </div>
 
       <div class="card">
-        <h2>Resolution status — is "0 ads" real, or a wrong name?</h2>
+        <h2>Meta-page status — is "0 ads" real, or a wrong name?</h2>
+        <p class="hint">This dot only tracks whether we found the company's <b>Meta / Facebook page</b>.
+          It says nothing about Google — a Google advertiser is linked separately (by website domain)
+          and never changes this dot.</p>
         <table class="info-table">
           <tr><th></th><th>Status</th><th>Meaning</th></tr>
-          <tr><td><span class="dot dot-confirmed"></span></td><td><b>confirmed</b></td>
-              <td>Page locked in. Future fetches hit that exact page — <code>0 active ads</code> is a real fact.</td></tr>
-          <tr><td><span class="dot dot-ambiguous"></span></td><td><b>ambiguous</b></td>
-              <td>Several pages matched about equally; best guess used, flagged for review.</td></tr>
-          <tr><td><span class="dot dot-no_ads_found"></span></td><td><b>no ads found</b></td>
-              <td>Name search returned nothing — wrong name or genuinely no ads. Verify manually.</td></tr>
-          <tr><td><span class="dot dot-pending"></span></td><td><b>pending</b></td>
-              <td>Not fetched yet.</td></tr>
+          <tr><td><span class="dot dot-confirmed"></span></td><td><b>Meta page found</b></td>
+              <td>A Facebook page is linked. Future fetches hit that exact page — <code>0 active ads</code> is a real fact.</td></tr>
+          <tr><td><span class="dot dot-ambiguous"></span></td><td><b>Meta page unclear</b></td>
+              <td>Several Facebook pages matched about equally; best guess used, flagged for review.</td></tr>
+          <tr><td><span class="dot dot-no_ads_found"></span></td><td><b>No Meta page found</b></td>
+              <td>The Facebook name search returned nothing — wrong name or no FB page. Verify manually. (Google may still work if the company has a website.)</td></tr>
+          <tr><td><span class="dot dot-pending"></span></td><td><b>Meta not checked</b></td>
+              <td>No Meta identity check has run for this company yet.</td></tr>
         </table>
       </div>
 

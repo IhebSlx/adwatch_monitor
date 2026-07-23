@@ -90,7 +90,8 @@ def _meta_fetchable_ids(s, company_ids: list[int]) -> set[int]:
     """Which of these companies the Meta ad lookup will actually fetch: a
     confirmed Meta identity — either a linked meta CompanyPage (numeric id) or
     a confirmed handle-only row (exact page name known). Everything else is
-    skipped by the pipeline, never name-searched."""
+    skipped by the pipeline, never name-searched. A company with no Meta page
+    found therefore never runs a Meta fetch."""
     from .models import CompanyPage
     with_pages = set(s.scalars(select(CompanyPage.company_id).where(
         CompanyPage.company_id.in_(company_ids), CompanyPage.active,
@@ -102,17 +103,52 @@ def _meta_fetchable_ids(s, company_ids: list[int]) -> set[int]:
     return with_pages | handle_only
 
 
+def _google_fetchable_ids(s, company_ids: list[int]) -> set[int]:
+    """Which of these companies the Google ad lookup will actually fetch: any
+    with a website domain set. Google resolves the advertiser straight from the
+    domain (no name search), so a website is both necessary and sufficient to
+    try; a company without one is skipped by the pipeline (status='no_domain')."""
+    return set(s.scalars(select(Company.id).where(
+        Company.id.in_(company_ids),
+        Company.website_domain.is_not(None), Company.website_domain != "")))
+
+
+def _plan_units(s, company_ids: list[int], sources: list[str]) -> list[tuple[int, str]]:
+    """The ordered (company, source) work units for a fetch job, routed per
+    company by what is actually fetchable:
+      - a Meta unit only where a Meta page has been found,
+      - a Google unit only where a website is set,
+      - a company that qualifies for NEITHER contributes no units at all
+        (it drops out of the job — nothing is fetched for it).
+    Order is deterministic — company_ids order, Meta before Google — so a
+    resumed job's `completed` cursor still lines up with the same unit list."""
+    want_meta, want_google = "meta" in sources, "google" in sources
+    meta_ok = _meta_fetchable_ids(s, company_ids) if want_meta else set()
+    google_ok = _google_fetchable_ids(s, company_ids) if want_google else set()
+    units: list[tuple[int, str]] = []
+    for cid in company_ids:
+        if want_meta and cid in meta_ok:
+            units.append((cid, "meta"))
+        if want_google and cid in google_ok:
+            units.append((cid, "google"))
+    return units
+
+
 def estimate(company_ids: list[int], sources: list[str]) -> dict:
     """Pre-flight numbers shown before a job is created — count, rough time,
     rough cost range. Uses each company's own last known ad count per source
-    when available, else the dataset's average for that source. For Meta, only
-    companies with a confirmed identity count (the rest will be skipped)."""
+    when available, else the dataset's average for that source. Only the units
+    that will actually run are counted (see `_plan_units`): Meta only where a
+    page was found, Google only where a website is set — so the numbers match
+    what the job really does, never the raw company × source product."""
     with SessionLocal() as s:
         rows = s.execute(select(WeeklyCompanyMetric.company_id, WeeklyCompanyMetric.source,
                                 WeeklyCompanyMetric.total_active_ads,
                                 WeeklyCompanyMetric.week_start)
                          .where(WeeklyCompanyMetric.company_id.in_(company_ids))).all()
         meta_fetchable = _meta_fetchable_ids(s, company_ids) if "meta" in sources else set()
+        google_fetchable = _google_fetchable_ids(s, company_ids) if "google" in sources else set()
+        units = _plan_units(s, company_ids, sources)
     latest: dict[tuple[int, str], tuple[dt.date, int]] = {}
     for cid, src, total, week in rows:
         key = (cid, src)
@@ -122,23 +158,22 @@ def estimate(company_ids: list[int], sources: list[str]) -> dict:
     avg_by_source = {src: _historical_avg_ads(src) for src in sources}
     est_seconds = 0.0
     cost_low = cost_high = 0.0
-    for cid in company_ids:
-        for src in sources:
-            if src == "meta" and cid not in meta_fetchable:
-                continue   # skipped by the pipeline — no time, no cost
-            known = latest.get((cid, src))
-            expected = known[1] if known else avg_by_source[src]
-            price = _PRICE_PER_AD_USD.get(src, 0.001)
-            cost_low += expected * 0.6 * price    # ± spread since this is inherently approximate
-            cost_high += expected * 1.4 * price
-            est_seconds += _SECONDS_PER_COMPANY.get(src, 30)
+    for cid, src in units:
+        known = latest.get((cid, src))
+        expected = known[1] if known else avg_by_source[src]
+        price = _PRICE_PER_AD_USD.get(src, 0.001)
+        cost_low += expected * 0.6 * price    # ± spread since this is inherently approximate
+        cost_high += expected * 1.4 * price
+        est_seconds += _SECONDS_PER_COMPANY.get(src, 30)
 
     return {
         "company_count": len(company_ids),
         "sources": sources,
-        "total_units": len(company_ids) * len(sources),
+        "total_units": len(units),
         "meta_fetchable": len(meta_fetchable) if "meta" in sources else None,
         "meta_skipped": (len(company_ids) - len(meta_fetchable)) if "meta" in sources else None,
+        "google_fetchable": len(google_fetchable) if "google" in sources else None,
+        "google_skipped": (len(company_ids) - len(google_fetchable)) if "google" in sources else None,
         "est_seconds_low": round(est_seconds * 0.7),
         "est_seconds_high": round(est_seconds * 1.3),
         "est_cost_usd_low": round(cost_low, 2),
@@ -166,17 +201,23 @@ def create_job(company_ids: list[int], sources: list[str], label: str | None = N
                kind: str = "fetch") -> dict:
     if not company_ids:
         raise ValueError("No companies selected")
-    if kind == "identity":
-        # Identity resolution is Meta-only (Google has no name search) and is one
-        # unit of work per company — no per-source fan-out.
-        sources = ["meta"]
-        total = len(company_ids)
-    else:
-        bad = [s for s in sources if s not in ("meta", "google")]
-        if bad or not sources:
-            raise ValueError("sources must be a non-empty list of 'meta'/'google'")
-        total = len(company_ids) * len(sources)
     with SessionLocal() as s:
+        if kind == "identity":
+            # Identity resolution is Meta-only (Google has no name search) and is
+            # one unit of work per company — no per-source fan-out, and no
+            # page/website gate (its whole job is to FIND the page).
+            sources = ["meta"]
+            total = len(company_ids)
+        else:
+            bad = [x for x in sources if x not in ("meta", "google")]
+            if bad or not sources:
+                raise ValueError("sources must be a non-empty list of 'meta'/'google'")
+            # total counts only units that will actually run (Meta needs a page,
+            # Google needs a website) — never the raw company × source product.
+            total = len(_plan_units(s, company_ids, sources))
+            if total == 0:
+                raise ValueError("Nothing to fetch — none of the selected companies has a "
+                                 "fetchable source (a Meta page for Meta, a website for Google).")
         job = FetchJob(sources=sources, company_ids=company_ids, label=label, kind=kind,
                        total=total, status="queued")
         s.add(job)
@@ -226,9 +267,15 @@ def _run_body(job_id: int, runners: dict) -> None:
         company_ids, sources, kind = job.company_ids, job.sources, getattr(job, "kind", "fetch") or "fetch"
 
     # Identity jobs are one unit per company (Meta only, no ad fetch); fetch
-    # jobs fan out per (company, source).
-    units = [(cid, "meta") for cid in company_ids] if kind == "identity" \
-        else [(cid, src) for cid in company_ids for src in sources]
+    # jobs fan out per (company, source) but ROUTED — a Meta unit only where a
+    # page was found, a Google unit only where a website is set, nothing for a
+    # company with neither. Recomputed from the same stored inputs as at create
+    # time, so a resumed job lines up with its `completed` cursor.
+    if kind == "identity":
+        units = [(cid, "meta") for cid in company_ids]
+    else:
+        with SessionLocal() as s:
+            units = _plan_units(s, company_ids, sources)
 
     for idx, (cid, src) in enumerate(units):
         with SessionLocal() as s:

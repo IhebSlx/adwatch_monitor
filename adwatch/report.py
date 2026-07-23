@@ -55,8 +55,8 @@ _FILTER_FIELD_LABEL_DE = {
     "sales_channel": "Vertriebsweg", "country": "Land",
 }
 _STATUS_LABEL_DE = {
-    "locked": "gesperrt", "confirmed": "bestätigt", "ambiguous": "mehrdeutig",
-    "no_ads_found": "keine Seite gefunden", "pending": "nicht geprüft",
+    "locked": "Meta-Seite gesperrt", "confirmed": "Meta-Seite gefunden", "ambiguous": "Meta-Seite unklar",
+    "no_ads_found": "keine Meta-Seite gefunden", "pending": "Meta nicht geprüft",
 }
 
 
@@ -83,8 +83,10 @@ def _describe_filters_de(filters: dict | None) -> str | None:
         vals = vals if isinstance(vals, list) else [vals]
         bits.append("Status: " + ", ".join(_STATUS_LABEL_DE.get(v, v) for v in vals))
     if filters.get("ad_activity"):
-        bits.append({"active": "nur mit aktiven Anzeigen", "any": "nur je beworben",
-                     "none": "nur ohne aktive Anzeigen"}.get(filters["ad_activity"], filters["ad_activity"]))
+        _aa = {"active": "nur mit aktiven Anzeigen", "any": "nur je beworben",
+               "none": "nur ohne aktive Anzeigen"}.get(filters["ad_activity"], filters["ad_activity"])
+        _src = {"meta": "Meta", "google": "Google"}.get(filters.get("ad_source"))
+        bits.append(f"{_aa} ({_src})" if _src else _aa)
     rmin, rmax = filters.get("revenue_min"), filters.get("revenue_max")
     if rmin is not None and rmax is not None:
         bits.append(f"Umsatz: {_eur(rmin)}–{_eur(rmax)}")
@@ -103,9 +105,9 @@ def _describe_filters_de(filters: dict | None) -> str | None:
     if filters.get("has_website"):
         bits.append("nur mit Website")
     if filters.get("page_id_state") == "with":
-        bits.append("nur mit Page-ID")
+        bits.append("nur mit Meta-Page-ID")
     elif filters.get("page_id_state") == "without":
-        bits.append("nur ohne Page-ID")
+        bits.append("nur ohne Meta-Page-ID")
     if filters.get("tracked") is not None:
         bits.append("nur getrackte Firmen" if filters["tracked"] else "nur ungetrackte Firmen")
     return "Gefiltert nach: " + "; ".join(bits) if bits else None
