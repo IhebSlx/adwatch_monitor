@@ -73,6 +73,18 @@ class Company(Base):
     # candidate website failed deterministic validation (a human decides)
     # no_website_found = searched, nothing credible found | error
 
+    # ---- Scoring (see insights/icp.py + insights/divergence.py) ----
+    # customer_state: lifecycle derived from the imported Umsatz columns at
+    # import time — active (buys now, bought before) | new (first revenue this
+    # year) | lapsed (bought before, nothing this year) | never (no revenue on
+    # record). Stored so the Explorer can filter/sort on it directly.
+    customer_state: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    fit_score: Mapped[float | None] = mapped_column(Float, nullable=True)          # 0-100 vs the applied ICP
+    opportunity_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-100, Divergenz (needs ad data)
+    target_score: Mapped[float | None] = mapped_column(Float, nullable=True)       # combined priority (see icp.apply)
+    fit_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True)        # per-feature 'Warum' for the drawer
+    scores_updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
     page_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     page_name: Mapped[str | None] = mapped_column(String(300), nullable=True)   # matched Facebook page name
     page_url: Mapped[str | None] = mapped_column(String(400), nullable=True)
@@ -294,6 +306,24 @@ class CompanyEnrichment(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     llm_model: Mapped[str | None] = mapped_column(String(60), nullable=True)   # which model produced `fields`
     enriched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class IcpProfile(Base):
+    """A computed Ideal-Customer-Profile: WHICH companies defined it (the
+    winners filter), what their feature distributions look like, and when it was
+    applied to score the whole base. Kept as rows (not a single config) so a
+    score on a company is always traceable to the exact profile that produced
+    it — same auditability rule as enrichment provenance."""
+    __tablename__ = "icp_profiles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), default="ICP")
+    winners_filter: Mapped[dict] = mapped_column(JSON, default=dict)   # the Explorer filter that selected the winners
+    winners_count: Mapped[int] = mapped_column(Integer, default=0)
+    features: Mapped[dict] = mapped_column(JSON, default=dict)         # per-feature value distributions of the winners
+    weights: Mapped[dict] = mapped_column(JSON, default=dict)          # feature weights used when scoring
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    applied_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ReportDefinition(Base):

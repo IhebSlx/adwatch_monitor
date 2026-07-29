@@ -682,6 +682,90 @@ def test_enrich_status_never_leaks_ok(temp_db, monkeypatch):
     s.close()
 
 
+def test_customer_state_derivation():
+    """Lifecycle from the Umsatz columns: active = buys now AND before, new =
+    first revenue this year, lapsed = bought before not now, never = nothing."""
+    from adwatch.customers import derive_customer_state as d
+    assert d(50000, 80000, 0, 0, 0) == "active"
+    assert d(50000, None, None, None, None) == "new"
+    assert d(0, 80000, 0, 0, 0) == "lapsed"
+    assert d(None, None, None, None, 100) == "lapsed"
+    assert d(None, None, None, None, None) == "never"
+    assert d(0, 0, 0, 0, 0) == "never"
+
+
+def test_icp_parsers():
+    from adwatch.insights.icp import parse_employee_count, size_bucket, age_bucket, plz_zone
+    import datetime as dt
+    assert parse_employee_count("15 Mitarbeiter") == 15
+    assert parse_employee_count("drei Angestellten") == 3
+    assert parse_employee_count("10-15 Mann") == 12
+    assert parse_employee_count("Familienbetrieb") is None
+    assert size_bucket("15 Mitarbeiter") == "10-19"
+    assert size_bucket(None) is None
+    today = dt.date(2026, 7, 29)
+    assert age_bucket(2020, today) == "<10 Jahre"
+    assert age_bucket(1955, today) == "50+ Jahre"
+    assert age_bucket(None) is None
+    assert plz_zone("49134") == "PLZ 4x"
+    assert plz_zone("123") is None
+
+
+def test_icp_profile_and_fit(temp_db):
+    """The heart: the profile counts winner distributions; fit scores a company
+    by how typical its values are (modal winner value = 1.0); unknown values are
+    skipped with weight renormalisation; near-uniform features are excluded;
+    apply writes scores + breakdown to every company."""
+    from adwatch import customers
+    from adwatch.insights import icp
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    # 6 winners: 4× Metallbau in PLZ 4x, 2× Tischler in PLZ 8x; ALL share the
+    # same Vertriebsweg (non-discriminating -> must be excluded from scoring)
+    for i in range(4):
+        s.add(Company(name=f"W Metall {i}", country="DE", segment="Verarbeiter",
+                      sub_segment="Metallbau-Schlosser", sales_channel="Fachhandelsvertrieb",
+                      postal_code="49134", revenue_y0=50000, revenue_y1=40000))
+    for i in range(2):
+        s.add(Company(name=f"W Tisch {i}", country="DE", segment="Verarbeiter",
+                      sub_segment="Tischler", sales_channel="Fachhandelsvertrieb",
+                      postal_code="80331", revenue_y0=50000, revenue_y1=40000))
+    # candidates: a look-alike (Metallbau, PLZ 4x), a partial match, a blank
+    lookalike = Company(name="K Passt", country="DE", segment="Verarbeiter",
+                        sub_segment="Metallbau-Schlosser", sales_channel="Fachhandelsvertrieb",
+                        postal_code="49076")
+    partial = Company(name="K Halb", country="DE", segment="Verarbeiter",
+                      sub_segment="Tischler", postal_code="80000")
+    blank = Company(name="K Leer", country="DE")
+    s.add_all([lookalike, partial, blank]); s.commit()
+    # derive states so the default winners filter (active+new) finds the six
+    for c in s.scalars(select(Company)):
+        c.customer_state = customers.derive_customer_state(
+            c.revenue_y0, c.revenue_y1, c.revenue_y2, c.revenue_y3, c.revenue_y4)
+    s.commit()
+    la_id, pa_id, bl_id = lookalike.id, partial.id, blank.id
+    s.close()
+
+    p = icp.build_profile(None)
+    assert p["winners_count"] == 6
+    assert dict(p["features"]["sub_segment"]["shares"])["Metallbau-Schlosser"] == pytest.approx(4 / 6)
+
+    res = icp.apply_profile(None, name="test")
+    assert res["companies_scored"] >= 8   # everyone with any comparable value
+
+    s = temp_db.SessionLocal()
+    la, pa, bl = s.get(Company, la_id), s.get(Company, pa_id), s.get(Company, bl_id)
+    assert la.fit_score == 100.0                       # modal value on every scored feature
+    assert pa.fit_score is not None and pa.fit_score < la.fit_score
+    assert bl.fit_score is None and bl.target_score is None   # nothing comparable -> unrated, not 0
+    feats = {f["feature"] for f in la.fit_breakdown["features"]}
+    assert "sales_channel" not in feats               # 100%-uniform -> excluded
+    assert "sub_segment" in feats
+    s.close()
+
+
 def test_downgrade_resets_collected_ads(temp_db):
     """A recheck that DOWNGRADES an auto-confirmed page (page before, none now)
     must clear that page's collected ads/metric at the point the page is dropped

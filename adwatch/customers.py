@@ -61,7 +61,22 @@ SORTABLE = {
     "revenue_y2": Company.revenue_y2, "revenue_y3": Company.revenue_y3,
     "revenue_y4": Company.revenue_y4, "imported_at": Company.imported_at,
     "resolution_status": Company.resolution_status,
+    "customer_state": Company.customer_state, "fit_score": Company.fit_score,
+    "opportunity_score": Company.opportunity_score, "target_score": Company.target_score,
 }
+
+
+def derive_customer_state(y0, y1, y2, y3, y4) -> str:
+    """Customer lifecycle from the imported Umsatz columns (NULL counts as €0):
+    active = buys now AND bought before | new = first revenue this year |
+    lapsed = bought before, nothing this year | never = no revenue on record."""
+    now = (y0 or 0) > 0
+    before = any((v or 0) > 0 for v in (y1, y2, y3, y4))
+    if now and before:
+        return "active"
+    if now:
+        return "new"
+    return "lapsed" if before else "never"
 
 
 def _norm(s) -> str:
@@ -210,6 +225,10 @@ def upsert_companies(records: list[dict]) -> dict:
                     continue
                 setattr(row, field, value)
             row.imported_at = now
+            # lifecycle is pure derived data — recomputed on every import so a
+            # partner whose revenue reappears flips lapsed -> active by itself
+            row.customer_state = derive_customer_state(
+                row.revenue_y0, row.revenue_y1, row.revenue_y2, row.revenue_y3, row.revenue_y4)
         s.commit()
     return {"received": len(records), "inserted": inserted, "updated": updated,
            "skipped_no_name": skipped_no_name, "name_collisions": name_collisions}
@@ -263,6 +282,12 @@ def _apply_filters(stmt, f: dict):
         values = f["enrichment_status"]
         stmt = stmt.where(Company.enrichment_status.in_(values) if isinstance(values, list)
                           else Company.enrichment_status == values)
+    if f.get("customer_state"):
+        values = f["customer_state"]
+        stmt = stmt.where(Company.customer_state.in_(values) if isinstance(values, list)
+                          else Company.customer_state == values)
+    if f.get("fit_min") is not None:
+        stmt = stmt.where(Company.fit_score >= float(f["fit_min"]))
     # Identity fetch-readiness: a numeric page_id is what the Ad Library scrape
     # needs — "without" surfaces the ⚠ no-id rows (confirmed but not fetch-ready).
     if f.get("page_id_state") == "with":
@@ -356,6 +381,12 @@ def _to_dict(c: Company) -> dict:
         "revenue_y3": c.revenue_y3, "revenue_y4": c.revenue_y4,
         "resolution_status": c.resolution_status, "tracked": c.resolution_status != "pending",
         "page_id": c.page_id, "page_name": c.page_name, "page_url": c.page_url,
+        "customer_state": c.customer_state,
+        "fit_score": c.fit_score, "opportunity_score": c.opportunity_score,
+        "target_score": c.target_score,
+        "description": c.description, "products": c.products,
+        "founded_year": c.founded_year, "employee_hint": c.employee_hint,
+        "enrichment_status": c.enrichment_status,
     }
 
 
@@ -371,6 +402,7 @@ def get_company(company_id: int) -> dict | None:
             return None
         d = _to_dict(c)
         d["candidates"] = c.candidates or []
+        d["fit_breakdown"] = c.fit_breakdown   # per-feature 'Warum' for the drawer (single-fetch only)
         return d
 
 

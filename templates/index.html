@@ -34,6 +34,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4v18"/><path d="M19 21V11l-7-4"/><path d="M9 9v.01M9 12v.01M9 15v.01M9 18v.01"/></svg>
         Companies
       </button>
+      <button class="tab" data-tab="profil">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+        Profil
+      </button>
       <button class="tab" data-tab="reports">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15h6M9 11h2"/></svg>
         Reports
@@ -218,6 +222,13 @@
           </select>
           <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="custHasWebsite"> Has website</label>
           <label style="display:flex;align-items:center;gap:5px" title="Firmen ohne Website — die Zielgruppe für die Anreicherung"><input type="checkbox" id="custNoWebsite"> Ohne Website</label>
+          <select id="custCustomerState" title="Kundenstatus aus den Umsatzspalten: aktiv = kauft jetzt und kaufte zuvor · neu = erster Umsatz dieses Jahr · ehemalig = früher gekauft, dieses Jahr nichts · nie = kein Umsatz erfasst">
+            <option value="">Kundenstatus: alle</option>
+            <option value="active">Aktiver Kunde</option>
+            <option value="new">Neukunde</option>
+            <option value="lapsed">Ehemaliger Kunde</option>
+            <option value="never">Nie gekauft</option>
+          </select>
           <select id="custEnrichStatus" title="Status der Datenanreicherung">
             <option value="">Anreicherung: alle</option>
             <option value="none">noch nicht angereichert</option>
@@ -348,6 +359,8 @@
               <th data-sort="name">Firmenname</th>
               <th>Facebook Seite</th>
               <th class="num" title="Aktive Anzeigen beim letzten Abruf">Aktive Anzeigen</th>
+              <th data-sort="customer_state" title="Kundenstatus aus den Umsatzspalten">Kunde</th>
+              <th class="num" data-sort="fit_score" title="Fit-Score 0–100: wie sehr diese Firma dem idealen Kundenprofil entspricht (Profil-Tab)">Fit</th>
               <th>KV</th>
               <th data-sort="segment">Segment</th>
               <th data-sort="sub_segment">Untersegment</th>
@@ -383,6 +396,42 @@
     </section>
 
     <!-- ================= TAB: Reports ================= -->
+    <!-- ================= TAB: Profil (ICP) ================= -->
+    <section id="tab-profil" class="tab-panel">
+      <header class="page-head">
+        <h1>Ideales Kundenprofil</h1>
+        <p>Wie sehen die Firmen aus, die bei uns kaufen — und welche der übrigen passen am besten dazu?</p>
+      </header>
+
+      <div class="card">
+        <h2>Gewinner-Definition</h2>
+        <p class="hint">Aus welchen Firmen soll das Profil gebildet werden? Standard: alle, die
+          <b>aktuell kaufen</b> (aktiv + neu). Alternativ zählt der gerade gesetzte Companies-Filter.</p>
+        <div class="inline-form">
+          <select id="icpWinnersMode" style="flex:0 0 auto">
+            <option value="default">Aktive Käufer (aktiv + neu)</option>
+            <option value="filter">Aktueller Companies-Filter</option>
+          </select>
+          <button id="icpPreviewBtn" class="btn btn-primary">Profil berechnen</button>
+          <button id="icpApplyBtn" class="btn hidden" title="Speichert das Profil und bewertet ALLE Firmen (Fit-Score 0–100) — reine lokale Berechnung, keine Kosten">✓ Anwenden &amp; alle Firmen bewerten</button>
+        </div>
+        <p class="hint" id="icpWinnersHint"></p>
+      </div>
+
+      <div class="card hidden" id="icpProfileCard">
+        <h2 id="icpProfileTitle">Profil</h2>
+        <p class="hint">Je Merkmal: wie verteilen sich die Gewinner? Der Fit-Score einer Firma misst,
+          wie typisch ihre Werte unter den Gewinnern sind — fehlende Angaben zählen nicht negativ.
+          Merkmale, bei denen fast alle Gewinner denselben Wert haben, fließen nicht in den Score ein.</p>
+        <div id="icpFeatures"></div>
+      </div>
+
+      <div class="card" id="icpStatusCard">
+        <h2>Aktueller Stand</h2>
+        <div id="icpStatus"><p class="hint">Lade…</p></div>
+      </div>
+    </section>
+
     <section id="tab-reports" class="tab-panel">
       <header class="page-head">
         <h1>Reports</h1>

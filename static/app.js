@@ -50,6 +50,22 @@
     needs_review: "Website-Vorschlag prüfen", no_website_found: "keine Website gefunden",
     error: "Fehler",
   };
+  // Customer lifecycle (derived from the Umsatz columns — see customers.py).
+  const CUSTOMER_STATE_LABEL = { active: "Aktiver Kunde", new: "Neukunde",
+    lapsed: "Ehemaliger Kunde", never: "Nie gekauft" };
+  const CUSTOMER_STATE_SHORT = { active: "aktiv", new: "neu", lapsed: "ehemalig", never: "nie" };
+
+  function customerStateChip(state) {
+    if (!state) return '<span class="muted">—</span>';
+    return `<span class="state-chip state-${esc(state)}" title="${esc(CUSTOMER_STATE_LABEL[state] || state)}">${esc(CUSTOMER_STATE_SHORT[state] || state)}</span>`;
+  }
+
+  function fitCell(fit) {
+    if (fit == null) return '<span class="muted">—</span>';
+    const cls = fit >= 85 ? "fit-high" : (fit >= 60 ? "fit-mid" : "fit-low");
+    return `<span class="fit-badge ${cls}">${Math.round(fit)}</span>`;
+  }
+
   const RUN_STATUS_LABEL = { ok: "ok", no_active_ads: "no active ads",
     no_ads_found: "no ads found", ambiguous_match: "ambiguous", error: "error" };
   const FLAG_LABEL = { new_campaign: "New campaign", first_seen: "First activity",
@@ -895,6 +911,7 @@
       $$(".tab").forEach(t => t.classList.toggle("active", t === btn));
       $$(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
       if (name === "customers") ensureCustomersLoaded();
+      if (name === "profil") loadIcpStatus();
       if (name === "reports") {
         // If a Companies filter is active, default the report to use it — so
         // "generate a report for the filtered companies" just works without
@@ -1264,6 +1281,88 @@
     });
   }
 
+  // ---------------- Profil tab (Ideal Customer Profile) ----------------
+  let ICP_FILTERS = null;   // the winners filter behind the current preview
+
+  function icpWinnersFilters() {
+    return $("#icpWinnersMode").value === "filter" ? currentCustomerFilters() : {};
+  }
+
+  function renderIcpFeatures(p) {
+    $("#icpProfileTitle").textContent =
+      `Profil aus ${p.winners_count.toLocaleString("de-DE")} Gewinnern`;
+    $("#icpFeatures").innerHTML = Object.entries(p.features).map(([key, d]) => {
+      const maxShare = d.top.length ? d.top[0][1] : 0;
+      const excluded = maxShare >= 0.9 && key !== "products";
+      const rows = d.top.slice(0, 5).map(([v, share]) => `
+        <div class="fit-row">
+          <span class="fit-row-label">${esc(v)}</span>
+          <span class="fit-bar"><span class="fit-bar-fill" style="width:${Math.round(share * 100)}%"></span></span>
+          <span class="fit-row-pct">${Math.round(share * 100)}%</span>
+        </div>`).join("");
+      return `<div class="icp-feature${excluded ? " icp-feature-excluded" : ""}">
+        <div class="icp-feature-head"><b>${esc(d.label)}</b>
+          <span class="muted small">bekannt bei ${Math.round(d.coverage * 100)}% der Gewinner</span>
+          ${excluded ? `<span class="tag" title="Fast alle Gewinner haben denselben Wert — trennt nicht, fließt nicht in den Score ein">nicht trennscharf</span>` : ""}
+        </div>
+        ${rows || '<p class="hint">keine Daten — Anreicherung erhöht die Abdeckung</p>'}
+      </div>`;
+    }).join("");
+    $("#icpProfileCard").classList.remove("hidden");
+    $("#icpApplyBtn").classList.remove("hidden");
+  }
+
+  async function icpPreview() {
+    const btn = $("#icpPreviewBtn");
+    btn.disabled = true; btn.textContent = "Berechne…";
+    try {
+      ICP_FILTERS = icpWinnersFilters();
+      const p = await api("/api/icp/preview", "POST", { filters: ICP_FILTERS });
+      if (p.winners_count < 5) {
+        $("#icpWinnersHint").textContent =
+          `Nur ${p.winners_count} Firmen im Gewinner-Filter — zu wenige für ein belastbares Profil.`;
+        $("#icpApplyBtn").classList.add("hidden");
+        return;
+      }
+      $("#icpWinnersHint").textContent = "";
+      renderIcpFeatures(p);
+    } catch (e) {
+      toast(`Profil fehlgeschlagen: ${e.message}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "Profil berechnen"; }
+  }
+
+  async function icpApply() {
+    const btn = $("#icpApplyBtn");
+    btn.disabled = true; btn.textContent = "Bewerte alle Firmen…";
+    try {
+      const res = await api("/api/icp/apply", "POST", { filters: ICP_FILTERS || {} });
+      toast(`✓ ${res.companies_scored.toLocaleString("de-DE")} Firmen bewertet `
+        + `(${res.with_target_score} mit Ziel-Score).`, "info");
+      await loadIcpStatus();
+      loadCustomers().catch(() => {});   // Fit column may have changed
+    } catch (e) {
+      toast(`Anwenden fehlgeschlagen: ${e.message}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "✓ Anwenden & alle Firmen bewerten"; }
+  }
+
+  async function loadIcpStatus() {
+    const box = $("#icpStatus");
+    try {
+      const p = await api("/api/icp/latest");
+      if (!p.id) {
+        box.innerHTML = `<p class="hint">Noch kein Profil angewendet — oben berechnen &amp; anwenden.
+          Danach hat jede Firma einen <b>Fit</b>-Wert (Spalte im Companies-Tab, sortierbar).</p>`;
+        return;
+      }
+      box.innerHTML = `<p><b>${esc(p.name)}</b> · aus ${p.winners_count.toLocaleString("de-DE")} Gewinnern
+        · angewendet ${esc(p.applied_at || p.created_at)}</p>
+        <p class="hint">Beste Ziele finden: im Companies-Tab nach <b>Fit</b> sortieren und z. B. auf
+        „Ehemaliger Kunde" filtern — oder nach dem Ziel-Score (Fit × Chance) in der Firmenakte schauen.</p>`;
+    } catch (e) {
+      box.innerHTML = `<p class="hint status-error">${esc(e.message)}</p>`;
+    }
+  }
+
   // ------------------------------------------------------------------ Companies tab (Explorer)
   const CUST = {
     loaded: false,
@@ -1297,6 +1396,7 @@
       has_website: $("#custHasWebsite").checked,
       no_website: $("#custNoWebsite").checked,
       enrichment_status: $("#custEnrichStatus").value ? [$("#custEnrichStatus").value] : [],
+      customer_state: $("#custCustomerState").value ? [$("#custCustomerState").value] : [],
       revenue_min: $("#custRevenueMin").value ? Number($("#custRevenueMin").value) : null,
       revenue_max: $("#custRevenueMax").value ? Number($("#custRevenueMax").value) : null,
       revenue_history: $("#custRevenueHistory").value || null,
@@ -1336,6 +1436,8 @@
     if (f.no_website) parts.push("without website");
     if (f.enrichment_status?.length)
       parts.push(`enrichment: ${f.enrichment_status.map(s => ENRICH_STATUS_LABEL[s] || s).join(", ")}`);
+    if (f.customer_state?.length)
+      parts.push(f.customer_state.map(s => CUSTOMER_STATE_LABEL[s] || s).join(", "));
     if (f.page_id_state === "with") parts.push("with Meta page ID");
     if (f.page_id_state === "without") parts.push("without Meta page ID");
     if (f.tracked === true) parts.push("tracked only");
@@ -1645,6 +1747,8 @@
         <td>${esc(r.name)}</td>
         <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
         <td class="num">${r.active_ads == null ? '<span class="muted">—</span>' : (r.active_ads > 0 ? `<strong>${r.active_ads}</strong>` : '<span class="muted">0</span>')}</td>
+        <td>${customerStateChip(r.customer_state)}</td>
+        <td class="num">${fitCell(r.fit_score)}</td>
         <td>${esc(r.kv || "")}</td>
         <td>${esc(r.segment || "")}</td>
         <td>${esc(r.sub_segment || "")}</td>
@@ -2072,6 +2176,16 @@
           <h3>Current ads (${weekAds.length})</h3>
           ${adListHtml}
         </div>` : ""}
+        <div class="drawer-section">
+          <h3>Score</h3>
+          <dl class="drawer-grid">
+            ${drawerKv("Kundenstatus", customerStateChip(row.customer_state))}
+            ${drawerKv("Fit zum Kundenprofil", row.fit_score != null ? fitCell(row.fit_score) : "")}
+            ${drawerKv("Chance (Divergenz)", row.opportunity_score != null ? String(Math.round(row.opportunity_score)) : "")}
+            ${drawerKv("Ziel-Score", row.target_score != null ? `<b>${Math.round(row.target_score)}</b>` : "")}
+          </dl>
+          <div id="drawerFitBreakdown"></div>
+        </div>
         <div class="drawer-section" id="drawerEnrichSection">
           <div class="drawer-section-head">
             <h3>Firmeninfos (angereichert)</h3>
@@ -2153,6 +2267,24 @@
         alert(err.message);
       }
     });
+
+    // Score breakdown ("Warum dieser Fit?") — per-feature bars from the applied profile.
+    (async () => {
+      const box = $("#drawerFitBreakdown");
+      if (!box || row.fit_score == null) return;
+      try {
+        const full = await api(`/api/companies/${id}`);
+        const feats = full?.fit_breakdown?.features || [];
+        if (!feats.length) return;
+        box.innerHTML = `<p class="hint" style="margin:8px 0 4px"><b>Warum dieser Fit?</b> (Übereinstimmung mit den Gewinnern je Merkmal)</p>`
+          + feats.map(f => `
+            <div class="fit-row" title="Gewicht ${f.weight}">
+              <span class="fit-row-label">${esc(f.label)}: ${esc(String(f.value))}</span>
+              <span class="fit-bar"><span class="fit-bar-fill" style="width:${Math.round(f.points * 100)}%"></span></span>
+              <span class="fit-row-pct">${Math.round(f.points * 100)}%</span>
+            </div>`).join("");
+      } catch { /* breakdown is optional */ }
+    })();
 
     // Enrichment: load this company's enriched facts, and allow a manual re-run.
     loadDrawerEnrichment(id);
@@ -2258,6 +2390,7 @@
     applyOnChange("#custAdActivity");
     applyOnChange("#custNoWebsite");
     applyOnChange("#custEnrichStatus");
+    applyOnChange("#custCustomerState");
 
     $("#custClearBtn").addEventListener("click", () => {
       $("#custSearch").value = "";
@@ -2269,6 +2402,7 @@
       $("#custHasWebsite").checked = false; $("#custTracked").value = "";
       $("#custAdActivity").value = "";
       $("#custNoWebsite").checked = false; $("#custEnrichStatus").value = "";
+      $("#custCustomerState").value = "";
       CUST.page = 1; loadCustomers();
     });
 
@@ -2374,6 +2508,10 @@
     $("#reportReadyCloseBtn").addEventListener("click", () => $("#reportReadyPanel").classList.add("hidden"));
     $("#saveReportSaveBtn").addEventListener("click", saveReportDef);
     $("#saveReportCancelBtn").addEventListener("click", () => $("#saveReportPanel").classList.add("hidden"));
+
+    // Profil (ICP) tab
+    $("#icpPreviewBtn").addEventListener("click", icpPreview);
+    $("#icpApplyBtn").addEventListener("click", icpApply);
 
     // selection actions + drawer chrome
     $("#custIdentityBtn").addEventListener("click", runIdentityAction);

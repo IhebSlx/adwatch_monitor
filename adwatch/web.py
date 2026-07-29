@@ -344,6 +344,15 @@ def remove_company(cid: int):
     return {"ok": True}
 
 
+@app.get("/api/companies/{cid}")
+def get_company_route(cid: int):
+    """Full master-data row incl. candidates + fit_breakdown (drawer only)."""
+    d = customers.get_company(cid)
+    if not d:
+        raise HTTPException(404, "Company not found")
+    return d
+
+
 @app.get("/api/companies/{cid}/detail")
 def company_detail(cid: int):
     metrics = services.latest_metrics([cid])   # scoped — not the whole base
@@ -603,6 +612,30 @@ def customer_export_route(payload: CustomerExportIn):
     )
 
 
+# --- ICP: build the Ideal-Customer-Profile from a winners filter, preview it,
+# --- apply it to score the whole base (fit/opportunity/target). Local compute,
+# --- no API cost.
+@app.post("/api/icp/preview")
+def icp_preview_route(payload: SelectTopIn):
+    from .insights import icp
+    return icp.build_profile(payload.filters or None)
+
+
+@app.post("/api/icp/apply")
+def icp_apply_route(payload: SelectTopIn):
+    from .insights import icp
+    try:
+        return icp.apply_profile(payload.filters or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/icp/latest")
+def icp_latest_route():
+    from .insights import icp
+    return icp.latest_profile() or {"id": None}
+
+
 @app.get("/api/customers")
 def list_customers_route(
     q: str | None = None,
@@ -617,6 +650,7 @@ def list_customers_route(
     tracked: bool | None = None, page_id_state: str | None = None,
     ad_activity: str | None = None, ad_source: str | None = None,
     no_website: bool = False, enrichment_status: list[str] = Query(default=[]),
+    customer_state: list[str] = Query(default=[]), fit_min: float | None = None,
     sort: str | None = None, direction: str = "asc", page: int = 1, page_size: int = 50,
 ):
     filters = {"q": q, "kv": kv, "segment": segment, "sub_segment": sub_segment,
@@ -628,7 +662,8 @@ def list_customers_route(
                "resolution_status": resolution_status, "tracked": tracked,
                "page_id_state": page_id_state, "ad_activity": ad_activity,
                "ad_source": ad_source, "no_website": no_website,
-               "enrichment_status": enrichment_status}
+               "enrichment_status": enrichment_status,
+               "customer_state": customer_state, "fit_min": fit_min}
     return customers.query_companies(filters, sort, direction, page, page_size)
 
 

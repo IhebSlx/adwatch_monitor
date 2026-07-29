@@ -190,6 +190,28 @@ def _migrate(engine) -> None:
                     conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
             conn.execute(text("UPDATE companies SET enrichment_status = 'none' "
                               "WHERE enrichment_status IS NULL"))
+        # companies: scoring columns (customer lifecycle + ICP fit) — additive.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("customer_state", "VARCHAR(12)"), ("fit_score", "FLOAT"),
+                ("opportunity_score", "FLOAT"), ("target_score", "FLOAT"),
+                ("fit_breakdown", "JSON"), ("scores_updated_at", "DATETIME"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            # backfill customer_state from the revenue columns (same derivation
+            # as customers.derive_customer_state, inlined as SQL for the one-off)
+            conn.execute(text("""
+                UPDATE companies SET customer_state = CASE
+                  WHEN COALESCE(revenue_y0,0) > 0 AND (COALESCE(revenue_y1,0) > 0 OR COALESCE(revenue_y2,0) > 0
+                       OR COALESCE(revenue_y3,0) > 0 OR COALESCE(revenue_y4,0) > 0) THEN 'active'
+                  WHEN COALESCE(revenue_y0,0) > 0 THEN 'new'
+                  WHEN COALESCE(revenue_y1,0) > 0 OR COALESCE(revenue_y2,0) > 0
+                       OR COALESCE(revenue_y3,0) > 0 OR COALESCE(revenue_y4,0) > 0 THEN 'lapsed'
+                  ELSE 'never' END
+                WHERE customer_state IS NULL
+            """))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
         cols = _existing_columns(conn, "fetch_jobs")
         if cols and "kind" not in cols:
