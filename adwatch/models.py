@@ -245,3 +245,25 @@ class ScheduleConfig(Base):
     send_day: Mapped[int] = mapped_column(Integer, default=0)    # Monday
     send_time: Mapped[str] = mapped_column(String(5), default="07:00")
     send_report: Mapped[str] = mapped_column(String(10), default="top5")  # top5 | full
+
+
+class ReportDefinition(Base):
+    """A saved, re-runnable (and optionally scheduled) report over a custom
+    Companies-Explorer filter: a name + the exact filter blob + which recipients
+    to email + an optional weekly cron. It turns 'filter → report → send' into a
+    one-click action or a hands-off automatic one, so a BD user never has to
+    re-filter and hand-mail a PDF for a recurring custom scope. Independent of
+    ScheduleConfig, which still drives the single standard weekly report."""
+    __tablename__ = "report_definitions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    report_type: Mapped[str] = mapped_column(String(10), default="full")   # full | top5
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)               # a currentCustomerFilters() blob
+    recipient_ids: Mapped[list] = mapped_column(JSON, default=list)         # ReportRecipient ids to email
+    schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    schedule_day: Mapped[int] = mapped_column(Integer, default=0)           # 0=Mon .. 6=Sun
+    schedule_time: Mapped[str] = mapped_column(String(5), default="07:00")  # 'HH:MM'
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    last_run_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(300), nullable=True)

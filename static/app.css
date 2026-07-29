@@ -723,6 +723,23 @@ a.link:hover { text-decoration: underline; }
   color: var(--muted); font-size: 13px;
 }
 
+/* ============================== saved reports + recipient checklists ============================== */
+.recipient-checks { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 4px 0 2px; }
+.recipient-check-row { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
+.small { font-size: 12px; }
+.tag {
+  display: inline-block; font-size: 10.5px; font-weight: 650; padding: 1px 7px; border-radius: 999px;
+  background: var(--bg-subtle); color: var(--accent); border: 1px solid var(--border); vertical-align: middle;
+}
+.tag-saved { background: #e9f7ef; color: #1e8f57; border-color: #bfe6cf; }
+.saved-report {
+  display: flex; justify-content: space-between; align-items: center; gap: 14px;
+  padding: 11px 0; border-bottom: 1px solid var(--border);
+}
+.saved-report:last-child { border-bottom: none; }
+.saved-report-main { min-width: 0; }
+.saved-report-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+
 /* ============================== responsive ============================== */
 @media (max-width: 960px) {
   .sidebar {

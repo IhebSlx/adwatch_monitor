@@ -335,6 +335,52 @@ def test_fetch_job_source_routing(temp_db):
         jobs.create_job([d.id], ["meta", "google"])
 
 
+def test_report_def_crud_and_run(temp_db, monkeypatch):
+    """Saved report definitions: create/list/update/delete + validation, and
+    run_definition builds over the saved filter and emails only the ACTIVE saved
+    recipients (build + email mocked so no PDF/network in the test)."""
+    from adwatch import report_defs
+    import adwatch.report as report_mod
+    import adwatch.emailer as emailer_mod
+    from adwatch.models import ReportRecipient
+
+    s = temp_db.SessionLocal()
+    r1 = ReportRecipient(name="BD One", email="one@x.de", active=True)
+    r2 = ReportRecipient(name="BD Two", email="two@x.de", active=False)   # inactive -> skipped
+    s.add_all([r1, r2]); s.commit()
+    rid1, rid2 = r1.id, r2.id
+    s.close()
+
+    d = report_defs.create_definition(
+        name="Google Winback DE", filters={"ad_activity": "active", "ad_source": "google"},
+        report_type="full", recipient_ids=[rid1, rid2],
+        schedule_enabled=True, schedule_day=0, schedule_time="07:30")
+    assert d["id"] and d["schedule_enabled"] is True
+    assert len(report_defs.list_definitions()) == 1
+
+    with pytest.raises(ValueError):
+        report_defs.create_definition(name="  ", filters={})          # empty name
+    with pytest.raises(ValueError):
+        report_defs.create_definition(name="x", filters={}, schedule_time="99:99")  # bad time
+
+    sent = {}
+    monkeypatch.setattr(report_mod, "build_report",
+                        lambda filters=None: "output/adwatch_report_KW30_2026.pdf")
+    monkeypatch.setattr(report_mod, "write_report_meta", lambda *a, **k: None)
+    monkeypatch.setattr(emailer_mod, "send_report_email",
+                        lambda path, recipient=None, subject=None: sent.update(
+                            path=path, recipient=recipient, subject=subject))
+    res = report_defs.run_definition(d["id"], send=True)
+    assert res["sent"] is True
+    assert sent["recipient"] == ["one@x.de"]                          # inactive recipient excluded
+    assert "sent to 1" in report_defs.get_definition(d["id"])["last_status"]
+
+    report_defs.update_definition(d["id"], schedule_enabled=False)
+    assert report_defs.get_definition(d["id"])["schedule_enabled"] is False
+    report_defs.delete_definition(d["id"])
+    assert report_defs.list_definitions() == []
+
+
 def test_downgrade_resets_collected_ads(temp_db):
     """A recheck that DOWNGRADES an auto-confirmed page (page before, none now)
     must clear that page's collected ads/metric at the point the page is dropped

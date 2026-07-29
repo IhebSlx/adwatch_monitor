@@ -110,6 +110,20 @@ class ScheduleIn(BaseModel):
     send_report: str | None = None    # top5 | full
 
 
+class ReportDefIn(BaseModel):
+    name: str | None = None
+    report_type: str | None = None          # full | top5
+    filters: dict | None = None             # a Companies-Explorer filter blob
+    recipient_ids: list[int] | None = None
+    schedule_enabled: bool | None = None
+    schedule_day: int | None = None         # 0=Mon .. 6=Sun
+    schedule_time: str | None = None        # 'HH:MM'
+
+
+class RunReportDefIn(BaseModel):
+    send: bool = True
+
+
 class ConfirmIn(BaseModel):
     page_id: str
     page_name: str | None = None
@@ -442,10 +456,70 @@ def list_reports():
 
 @app.post("/api/reports/generate")
 def generate_report(payload: EmailReportIn = EmailReportIn()):
-    from .report import build_report, build_top5_report
+    from .report import build_report, build_top5_report, write_report_meta
     path = build_report(filters=payload.filters) if payload.report == "full" \
         else build_top5_report(filters=payload.filters)
+    write_report_meta(path, filters=payload.filters)   # so the Reports list can show the filter used
     return {"filename": Path(path).name}
+
+
+# --- Saved report definitions: a named filter + recipients + optional weekly
+# --- schedule, so a custom filtered report is one-click (or automatic) to send.
+@app.get("/api/report-defs")
+def list_report_defs():
+    from . import report_defs
+    return {"definitions": report_defs.list_definitions(),
+            "recipients": services.list_recipients()}
+
+
+@app.post("/api/report-defs")
+def create_report_def(payload: ReportDefIn):
+    from . import report_defs, scheduler
+    try:
+        d = report_defs.create_definition(
+            name=payload.name, filters=payload.filters or {},
+            report_type=payload.report_type or "full",
+            recipient_ids=payload.recipient_ids or [],
+            schedule_enabled=bool(payload.schedule_enabled),
+            schedule_day=payload.schedule_day or 0,
+            schedule_time=payload.schedule_time or "07:00")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    scheduler.apply_schedule()   # register/refresh this definition's cron if scheduled
+    return d
+
+
+@app.put("/api/report-defs/{def_id}")
+def update_report_def(def_id: int, payload: ReportDefIn):
+    from . import report_defs, scheduler
+    try:
+        d = report_defs.update_definition(def_id, **payload.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    scheduler.apply_schedule()
+    return d
+
+
+@app.delete("/api/report-defs/{def_id}")
+def delete_report_def(def_id: int):
+    from . import report_defs, scheduler
+    report_defs.delete_definition(def_id)
+    scheduler.apply_schedule()
+    return {"ok": True}
+
+
+@app.post("/api/report-defs/{def_id}/run")
+def run_report_def(def_id: int, payload: RunReportDefIn = RunReportDefIn()):
+    from . import report_defs
+    if payload.send and not config.POWER_AUTOMATE_WEBHOOK_URL:
+        raise HTTPException(400, "Email isn't configured (POWER_AUTOMATE_WEBHOOK_URL). "
+                                 "Generate without sending, or set it in Settings.")
+    try:
+        return report_defs.run_definition(def_id, send=payload.send)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/reports/{filename}")

@@ -245,6 +245,7 @@
           </span>
           <button id="custFetchAllBtn" class="btn btn-sm" title="Anzeigen für ALLE gefilterten Firmen abrufen (keine Auswahl nötig)">📣 Ad lookup (gefiltert)</button>
           <button id="custReportAllBtn" class="btn btn-sm" title="PDF-Bericht über ALLE gefilterten Firmen — der verwendete Filter steht im Berichtskopf">📄 Report (gefiltert)</button>
+          <button id="custSaveReportBtn" class="btn btn-sm" title="Diesen Filter als wiederkehrenden Bericht speichern (Empfänger + optionaler Zeitplan)">💾 Als Bericht speichern</button>
           <button id="custExportAllBtn" class="btn btn-sm">Export filtered</button>
         </div>
 
@@ -272,6 +273,48 @@
           <div class="inline-form" style="margin-top:10px">
             <button id="planConfirmBtn" class="btn btn-primary">Start fetch</button>
             <button id="planCancelBtn" class="btn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- After a report is generated: download it and/or email it right here,
+             without switching to the Reports tab. -->
+        <div id="reportReadyPanel" class="fetch-plan hidden">
+          <h3>Bericht erstellt ✓</h3>
+          <p class="hint" id="reportReadyInfo"></p>
+          <div class="inline-form" style="margin-bottom:8px">
+            <a id="reportReadyDownload" class="btn btn-sm" href="#" target="_blank" rel="noopener">⬇ Herunterladen</a>
+          </div>
+          <div style="margin-bottom:4px"><b>Per E-Mail senden an:</b></div>
+          <div id="reportReadyRecipients" class="recipient-checks"></div>
+          <div class="inline-form" style="margin-top:10px">
+            <button id="reportReadySendBtn" class="btn btn-primary">Senden</button>
+            <button id="reportReadySaveBtn" class="btn" title="Diesen Filter als wiederkehrenden Bericht speichern">Als Bericht speichern…</button>
+            <button id="reportReadyCloseBtn" class="btn btn-ghost">Schließen</button>
+          </div>
+        </div>
+
+        <!-- Save the current filter as a named, re-runnable (optionally scheduled) report. -->
+        <div id="saveReportPanel" class="fetch-plan hidden">
+          <h3 id="saveReportTitle">Als wiederkehrenden Bericht speichern</h3>
+          <p class="hint" id="saveReportScope"></p>
+          <div class="inline-form" style="margin-bottom:8px">
+            <input id="saveReportName" placeholder="Name, z. B. „Google-Winback DE“" autocomplete="off" style="flex:2;min-width:200px">
+            <select id="saveReportType" style="flex:0 0 auto">
+              <option value="full">Vollständiger Bericht</option>
+              <option value="top5">Top 5</option>
+            </select>
+          </div>
+          <div style="margin-bottom:4px"><b>Empfänger:</b></div>
+          <div id="saveReportRecipients" class="recipient-checks"></div>
+          <div class="inline-form" style="margin-top:8px">
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="saveReportSchedule"> Automatisch senden am</label>
+            <select id="saveReportDay" style="flex:0 0 auto"></select>
+            <span>um</span>
+            <input id="saveReportTime" type="time" value="07:00" style="flex:0 0 auto">
+          </div>
+          <div class="inline-form" style="margin-top:10px">
+            <button id="saveReportSaveBtn" class="btn btn-primary">Speichern</button>
+            <button id="saveReportCancelBtn" class="btn btn-ghost">Abbrechen</button>
           </div>
         </div>
 
@@ -387,6 +430,14 @@
         <p class="hint" id="reportFilterHint"></p>
         <p class="hint">Each generated report is named after the ISO week (e.g. <code>KW29_2026</code>) and
           never overwrites a previous one — generating again in the same week adds <code>_01</code>, <code>_02</code>, etc.</p>
+      </div>
+
+      <div class="card">
+        <h2>Gespeicherte Berichte</h2>
+        <p class="hint">Gespeicherte Filter als wiederkehrende Berichte — sofort erstellen &amp; senden,
+          oder automatisch nach Zeitplan. Anlegen über „💾 Als Bericht speichern" im Companies-Tab.</p>
+        <div id="savedReportsList"></div>
+        <p class="hint hidden" id="savedReportsEmpty">Noch keine gespeicherten Berichte.</p>
       </div>
 
       <div class="card">

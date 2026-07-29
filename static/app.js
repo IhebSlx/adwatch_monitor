@@ -1046,16 +1046,22 @@
   function renderReportsTable() {
     const reports = REPORTS_STATE.reports;
     $("#reportsEmptyHint").classList.toggle("hidden", reports.length > 0);
-    $("#reportsTableBody").innerHTML = reports.map(r => `
+    $("#reportsTableBody").innerHTML = reports.map(r => {
+      // ② make filtered/saved reports identifiable instead of an anonymous "Report — KW30".
+      const tag = r.definition ? `<span class="tag tag-saved">gespeichert</span>`
+                : (r.filter_label ? `<span class="tag tag-filtered">gefiltert</span>` : "");
+      const scope = r.definition ? `„${esc(r.definition)}"` : (r.filter_label ? esc(r.filter_label) : "");
+      return `
       <tr data-filename="${esc(r.filename)}">
-        <td>${esc(r.label)}</td>
+        <td>${esc(r.label)} ${tag}${scope ? `<div class="muted small">${scope}</div>` : ""}</td>
         <td>${esc(r.created_at)}</td>
         <td class="num">${fmtSize(r.size_bytes)}</td>
         <td style="white-space:nowrap">
           <a class="btn btn-sm" href="/api/reports/${encodeURIComponent(r.filename)}" target="_blank">Download</a>
           <button class="btn btn-sm send-report-btn">Send</button>
         </td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
     $$(".send-report-btn", $("#reportsTableBody")).forEach(btn => {
       btn.addEventListener("click", async () => {
         const filename = btn.closest("tr").dataset.filename;
@@ -1076,6 +1082,178 @@
           alert(`Send failed: ${e.message}`);
           btn.textContent = "Send"; btn.disabled = false;
         }
+      });
+    });
+  }
+
+  // ---------------- Saved reports + inline send (Companies-tab report flow) ----------
+  // These let a filtered report be emailed right after generating (no tab hop),
+  // and let a filter be saved as a named, re-runnable, optionally-scheduled report.
+  let SAVED_STATE = null;        // { definitions, recipients } from /api/report-defs
+  let LAST_REPORT = null;        // { filename, filters, reportType } of the just-generated report
+  let SAVE_FILTERS = null;       // the filter blob currently being saved
+  let EDIT_DEF_ID = null;        // non-null while editing an existing definition
+
+  async function ensureRecipients() {
+    if (!SAVED_STATE) { try { await loadSavedReports(); } catch { SAVED_STATE = { definitions: [], recipients: [] }; } }
+    return (SAVED_STATE && SAVED_STATE.recipients) || [];
+  }
+
+  // Human-readable scope for a saved/loaded filter (reuses the Explorer summary,
+  // plus the explicit-selection case the summary doesn't cover).
+  function describeScope(filters) {
+    if (!filters || !Object.keys(filters).length) return "";
+    if (filters.ids && filters.ids.length) return `${filters.ids.length} ausgewählte Firmen`;
+    return activeFilterSummary(filters).join(" · ");
+  }
+
+  function renderRecipientChecks(container, recipients, preselected) {
+    const pre = new Set(preselected != null ? preselected : recipients.filter(r => r.active).map(r => r.id));
+    if (!recipients.length) {
+      container.innerHTML = `<p class="hint">Keine Empfänger — im Reports-Tab unter „Recipients" anlegen.</p>`;
+      return;
+    }
+    container.innerHTML = recipients.map(r => `
+      <label class="recipient-check-row">
+        <input type="checkbox" class="rc-check" data-rid="${r.id}" ${pre.has(r.id) ? "checked" : ""}>
+        <span>${esc(r.name || r.email)}${r.name ? ` <span class="muted">${esc(r.email)}</span>` : ""}${r.active ? "" : ` <span class="muted">(inaktiv)</span>`}</span>
+      </label>`).join("");
+  }
+
+  function checkedRecipientIds(container) {
+    return [...container.querySelectorAll(".rc-check:checked")].map(cb => Number(cb.dataset.rid));
+  }
+
+  function hideCompanyPanels() {
+    ["#fetchPlanPanel", "#reportReadyPanel", "#saveReportPanel"].forEach(s => { const el = $(s); if (el) el.classList.add("hidden"); });
+  }
+
+  // ① After a report is generated (Companies tab): show download + inline send.
+  async function showReportReadyPanel(filename, infoText) {
+    const recipients = await ensureRecipients();
+    $("#reportReadyInfo").textContent = infoText || "";
+    $("#reportReadyDownload").href = `/api/reports/${encodeURIComponent(filename)}`;
+    renderRecipientChecks($("#reportReadyRecipients"), recipients);
+    // "Save as report" only makes sense for a reusable filter, not a one-off id selection.
+    const savable = !(LAST_REPORT && LAST_REPORT.filters && LAST_REPORT.filters.ids);
+    $("#reportReadySaveBtn").classList.toggle("hidden", !savable);
+    hideCompanyPanels();
+    const p = $("#reportReadyPanel");
+    p.classList.remove("hidden");
+    p.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  async function sendReportReady() {
+    if (!LAST_REPORT) return;
+    const ids = checkedRecipientIds($("#reportReadyRecipients"));
+    if (!ids.length) { toast("Mindestens einen Empfänger auswählen.", "error"); return; }
+    const btn = $("#reportReadySendBtn"); btn.disabled = true; btn.textContent = "Senden…";
+    try {
+      await api(`/api/reports/${encodeURIComponent(LAST_REPORT.filename)}/send-email`, "POST", { recipient_ids: ids });
+      toast(`✓ Bericht an ${ids.length} Empfänger gesendet.`, "info");
+      $("#reportReadyPanel").classList.add("hidden");
+    } catch (e) {
+      toast(`Senden fehlgeschlagen: ${e.message}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "Senden"; }
+  }
+
+  // ③ Save-as-report panel (create from current filter, or edit an existing def).
+  async function openSaveReportPanel({ filters, reportType, def } = {}) {
+    const recipients = await ensureRecipients();
+    EDIT_DEF_ID = def ? def.id : null;
+    SAVE_FILTERS = def ? (def.filters || {}) : (filters || currentCustomerFilters());
+    $("#saveReportTitle").textContent = def ? "Bericht bearbeiten" : "Als wiederkehrenden Bericht speichern";
+    $("#saveReportName").value = def ? def.name : "";
+    $("#saveReportType").value = def ? def.report_type : (reportType || "full");
+    $("#saveReportScope").textContent = "Umfang: " + (describeScope(SAVE_FILTERS) || "alle Firmen");
+    renderRecipientChecks($("#saveReportRecipients"), recipients, def ? def.recipient_ids : undefined);
+    $("#saveReportSchedule").checked = def ? def.schedule_enabled : false;
+    $("#saveReportDay").value = def ? def.schedule_day : 0;
+    $("#saveReportTime").value = def ? def.schedule_time : "07:00";
+    // the panel lives in the Companies (customers) tab — make sure it's showing
+    // (matters when editing from the Reports tab). Clicking the tab button reuses
+    // the app's own tab-switch logic.
+    const custTab = $$(".tab").find(t => t.dataset.tab === "customers");
+    if (custTab && !custTab.classList.contains("active")) custTab.click();
+    hideCompanyPanels();
+    const p = $("#saveReportPanel");
+    p.classList.remove("hidden");
+    p.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    $("#saveReportName").focus();
+  }
+
+  async function saveReportDef() {
+    const name = $("#saveReportName").value.trim();
+    if (!name) { toast("Bitte einen Namen eingeben.", "error"); return; }
+    const payload = {
+      name,
+      report_type: $("#saveReportType").value,
+      filters: SAVE_FILTERS || {},
+      recipient_ids: checkedRecipientIds($("#saveReportRecipients")),
+      schedule_enabled: $("#saveReportSchedule").checked,
+      schedule_day: Number($("#saveReportDay").value),
+      schedule_time: $("#saveReportTime").value || "07:00",
+    };
+    const btn = $("#saveReportSaveBtn"); btn.disabled = true; btn.textContent = "Speichern…";
+    try {
+      if (EDIT_DEF_ID) await api(`/api/report-defs/${EDIT_DEF_ID}`, "PUT", payload);
+      else await api("/api/report-defs", "POST", payload);
+      toast(`✓ Bericht „${name}" gespeichert${payload.schedule_enabled ? " (mit Zeitplan)" : ""}.`, "info");
+      $("#saveReportPanel").classList.add("hidden");
+      await loadSavedReports();
+    } catch (e) {
+      toast(`Speichern fehlgeschlagen: ${e.message}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "Speichern"; }
+  }
+
+  async function loadSavedReports() {
+    SAVED_STATE = await api("/api/report-defs");
+    renderSavedReports();
+  }
+
+  function renderSavedReports() {
+    const defs = (SAVED_STATE && SAVED_STATE.definitions) || [];
+    const recips = (SAVED_STATE && SAVED_STATE.recipients) || [];
+    const byId = Object.fromEntries(recips.map(r => [r.id, r]));
+    const empty = $("#savedReportsEmpty"), list = $("#savedReportsList");
+    if (empty) empty.classList.toggle("hidden", defs.length > 0);
+    if (!list) return;
+    list.innerHTML = defs.map(d => {
+      const rnames = (d.recipient_ids || []).map(id => byId[id] ? (byId[id].name || byId[id].email) : `#${id}`).join(", ") || "—";
+      const sched = d.schedule_enabled ? `${DAY_NAMES[d.schedule_day]} ${d.schedule_time}` : "manuell";
+      const scope = describeScope(d.filters) || "alle Firmen";
+      return `<div class="saved-report" data-id="${d.id}">
+        <div class="saved-report-main">
+          <b>${esc(d.name)}</b> <span class="muted">· ${d.report_type === "full" ? "Voll" : "Top 5"} · ${esc(scope)}</span>
+          <div class="muted small">Empfänger: ${esc(rnames)} · Zeitplan: ${esc(sched)}${d.last_status ? ` · zuletzt: ${esc(d.last_status)}` : ""}</div>
+        </div>
+        <div class="saved-report-actions">
+          <button class="btn btn-sm sr-run" title="Jetzt erstellen und an die Empfänger senden">▶ Jetzt senden</button>
+          <button class="btn btn-sm sr-edit">Bearbeiten</button>
+          <button class="btn btn-sm btn-danger sr-del">Löschen</button>
+        </div>
+      </div>`;
+    }).join("");
+    $$(".saved-report", list).forEach(row => {
+      const id = Number(row.dataset.id);
+      const def = defs.find(d => d.id === id);
+      $(".sr-run", row).addEventListener("click", async (e) => {
+        const btn = e.currentTarget; btn.disabled = true; btn.textContent = "Senden…";
+        try {
+          const res = await api(`/api/report-defs/${id}/run`, "POST", { send: true });
+          toast(res.sent ? `✓ „${def.name}" an ${res.recipients.length} gesendet.`
+                         : `Bericht erstellt, nicht gesendet (${res.reason || "keine Empfänger"}).`,
+                res.sent ? "info" : "error");
+          await loadReports();
+        } catch (err) { toast(`Fehlgeschlagen: ${err.message}`, "error"); }
+        finally { btn.disabled = false; btn.textContent = "▶ Jetzt senden"; await loadSavedReports(); }
+      });
+      $(".sr-edit", row).addEventListener("click", () => openSaveReportPanel({ def }));
+      $(".sr-del", row).addEventListener("click", async () => {
+        if (!confirm(`Bericht „${def.name}" löschen?`)) return;
+        await api(`/api/report-defs/${id}`, "DELETE");
+        toast("Bericht gelöscht.", "info");
+        await loadSavedReports();
       });
     });
   }
@@ -1613,11 +1791,9 @@
     try {
       const { filename } = await api("/api/reports/generate", "POST", body);
       toast(successMsg, "info");
-      // Open the finished PDF (same behaviour as the Download links in history).
-      const a = document.createElement("a");
-      a.href = `/api/reports/${encodeURIComponent(filename)}`;
-      a.target = "_blank"; a.rel = "noopener";
-      document.body.appendChild(a); a.click(); a.remove();
+      LAST_REPORT = { filename, filters: body.filters || {}, reportType: body.report || "full" };
+      // Inline panel: download AND email it right here — no hop to the Reports tab.
+      await showReportReadyPanel(filename, successMsg);
       try { await loadReports(); } catch { /* Reports tab refresh is best-effort */ }
     } catch (e) {
       toast(`Report failed: ${e.message}`, "error");
@@ -2034,6 +2210,18 @@
     $("#planCancelBtn").addEventListener("click", () => $("#fetchPlanPanel").classList.add("hidden"));
     $("#planConfirmBtn").addEventListener("click", confirmFetchPlan);
 
+    // Save-as-report + inline send-after-generate wiring
+    fillDaySelect($("#saveReportDay"));
+    $("#custSaveReportBtn").addEventListener("click",
+      () => openSaveReportPanel({ filters: currentCustomerFilters(), reportType: "full" }));
+    $("#reportReadySendBtn").addEventListener("click", sendReportReady);
+    $("#reportReadySaveBtn").addEventListener("click",
+      () => openSaveReportPanel({ filters: (LAST_REPORT && LAST_REPORT.filters) || currentCustomerFilters(),
+                                  reportType: (LAST_REPORT && LAST_REPORT.reportType) || "full" }));
+    $("#reportReadyCloseBtn").addEventListener("click", () => $("#reportReadyPanel").classList.add("hidden"));
+    $("#saveReportSaveBtn").addEventListener("click", saveReportDef);
+    $("#saveReportCancelBtn").addEventListener("click", () => $("#saveReportPanel").classList.add("hidden"));
+
     // selection actions + drawer chrome
     $("#custIdentityBtn").addEventListener("click", runIdentityAction);
     $("#custReportBtn").addEventListener("click", runReportForSelected);
@@ -2314,6 +2502,7 @@
   wireStatic();
   loadState();
   loadReports();
+  loadSavedReports().catch(() => { /* saved-reports list is best-effort at boot */ });
   loadSchedule();
   loadCustomerFilterOptions();
 })();

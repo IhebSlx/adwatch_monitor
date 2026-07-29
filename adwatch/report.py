@@ -8,6 +8,7 @@ stays available in output/."""
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from pathlib import Path
 from xml.sax.saxutils import escape as _xml_escape
@@ -603,6 +604,36 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
 REPORT_TYPE_LABEL = {"top5": "Top 5", "full": "Full report"}
 
 
+def _meta_path(pdf_path) -> Path:
+    """Sidecar file that records WHY a report looks the way it does (the filter
+    scope, and the saved-definition name if any) — a plain `<pdf>.meta.json`
+    next to the PDF, so it never matches the `adwatch_*.pdf` report glob."""
+    return Path(str(pdf_path) + ".meta.json")
+
+
+def write_report_meta(pdf_path, filters: dict | None = None,
+                      definition_name: str | None = None) -> None:
+    """Persist the filter scope of a just-generated report so the Reports list
+    can label it (e.g. 'Gefiltert nach: …') instead of an indistinguishable
+    'Report — KW30'. Best-effort: a failure here must never break generation."""
+    try:
+        meta = {"filter_label": _describe_filters_de(filters),
+                "definition": definition_name}
+        _meta_path(pdf_path).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    except Exception:  # noqa: BLE001 — labelling is cosmetic, never fatal
+        pass
+
+
+def _read_report_meta(pdf_path) -> dict:
+    try:
+        p = _meta_path(pdf_path)
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
 def list_reports() -> list[dict]:
     """Every generated report still on disk, newest first."""
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -615,10 +646,13 @@ def list_reports() -> list[dict]:
         label = f"{REPORT_TYPE_LABEL.get((parsed or {}).get('report_type'), 'Report')} — {week or f.stem}"
         if version:
             label += f" (v{version})"
+        meta = _read_report_meta(f)
         out.append({
             "filename": f.name,
             "report_type": (parsed or {}).get("report_type", "unknown"),
             "label": label,
+            "filter_label": meta.get("filter_label"),   # None -> a plain, unfiltered report
+            "definition": meta.get("definition"),       # set when produced by a saved ReportDefinition
             "size_bytes": stat.st_size,
             "created_at": dt.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="minutes"),
         })
