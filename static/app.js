@@ -212,6 +212,11 @@
       $$("input[type=checkbox]", listEl).forEach(cb => { cb.checked = false; });
       updateLabel();
     }
+    function setSelected(values) {
+      const want = new Set(values || []);
+      $$("input[type=checkbox]", listEl).forEach(cb => { cb.checked = want.has(cb.value); });
+      updateLabel();
+    }
 
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -232,7 +237,7 @@
     listEl.addEventListener("change", () => { updateLabel(); onChange(); });
 
     updateLabel();
-    return { setOptions, getSelected, clear };
+    return { setOptions, getSelected, clear, setSelected };
   }
   document.addEventListener("click", () => $$(".checkdrop-panel").forEach(p => p.classList.add("hidden")));
 
@@ -1388,6 +1393,7 @@
       no_website: $("#custNoWebsite").checked,
       enrichment_status: $("#custEnrichStatus").value ? [$("#custEnrichStatus").value] : [],
       customer_state: $("#custCustomerState").value ? [$("#custCustomerState").value] : [],
+      fit_min: $("#custFitMin").value ? Number($("#custFitMin").value) : null,
       revenue_min: $("#custRevenueMin").value ? Number($("#custRevenueMin").value) : null,
       revenue_max: $("#custRevenueMax").value ? Number($("#custRevenueMax").value) : null,
       revenue_history: $("#custRevenueHistory").value || null,
@@ -1429,6 +1435,7 @@
       parts.push(`enrichment: ${f.enrichment_status.map(s => ENRICH_STATUS_LABEL[s] || s).join(", ")}`);
     if (f.customer_state?.length)
       parts.push(f.customer_state.map(s => CUSTOMER_STATE_LABEL[s] || s).join(", "));
+    if (f.fit_min != null) parts.push(`Fit ≥ ${f.fit_min}`);
     if (f.page_id_state === "with") parts.push("with Meta page ID");
     if (f.page_id_state === "without") parts.push("without Meta page ID");
     if (f.tracked === true) parts.push("tracked only");
@@ -1678,19 +1685,35 @@
     $$(".settings-save-btn").forEach(b => b.classList.add("has-changes"));
   }
 
+  // DEFAULT FILTER: "Private Endkunden" is excluded from the start — BD hunts
+  // trade partners, not consumers. Undoable in the Segment column menu
+  // ("Ausschließen" abhaken); Zurücksetzen restores this default.
+  const DEFAULT_EXCLUDE_SEGMENTS = ["Private Endkunden"];
+  function applyDefaultExclusion() {
+    const available = new Set(CUST_OPTS.segment || []);
+    const wanted = DEFAULT_EXCLUDE_SEGMENTS.filter(s => available.has(s));
+    if (wanted.length) CUST_DROP.excludeSegment.setSelected(wanted);
+  }
+
   function ensureCustomersLoaded() {
     if (CUST.loaded) return;
     CUST.loaded = true;
-    loadCustomerFilterOptions();
-    loadCustomers();
+    loadCustomerFilterOptions().then(() => {
+      applyDefaultExclusion();          // options must exist before they can be checked
+      loadCustomers();
+    });
     loadJobs().then(jobs => {
       if (jobs.some(j => j.status === "running" || j.status === "queued")) startJobPolling();
     });
   }
 
+  // distinct filter values, cached for the column-header menus
+  let CUST_OPTS = { kv: [], segment: [], sub_segment: [], sales_channel: [], country: [] };
+
   async function loadCustomerFilterOptions() {
     try {
       const opts = await api("/api/customers/filter-options");
+      CUST_OPTS = opts;
       CUST_DROP.kv.setOptions(opts.kv);
       CUST_DROP.segment.setOptions(opts.segment);
       CUST_DROP.subSegment.setOptions(opts.sub_segment);
@@ -1735,12 +1758,32 @@
     finally { _custLoadingMore = false; }
   }
 
+  // which header owns which filter keys — powers the per-column active marker
+  const _COL_FILTER_KEYS = {
+    name: ["q"], kunde: ["customer_state"], fit: ["fit_min"], anzeigen: ["ad_activity"],
+    fb: ["resolution_status", "page_id_state", "tracked"],
+    website: ["has_website", "no_website", "enrichment_status"],
+    umsatz: ["revenue_min", "revenue_max", "revenue_history"],
+    kv: ["kv", "exclude_kv"], segment: ["segment", "exclude_segment"],
+    subseg: ["sub_segment", "exclude_sub_segment"], kanal: ["sales_channel"], land: ["country"],
+  };
+  function _filterActive(f, key) {
+    const v = f[key];
+    return Array.isArray(v) ? v.length > 0 : (v !== null && v !== undefined && v !== "" && v !== false);
+  }
+
   function updateFilterBadge() {
-    const badge = $("#custFilterBadge");
-    if (!badge) return;
-    const n = activeFilterSummary(currentCustomerFilters()).length;
-    badge.textContent = n || "";
-    badge.classList.toggle("hidden", !n);
+    const f = currentCustomerFilters();
+    const parts = activeFilterSummary(f);
+    const info = $("#custFilterInfo");
+    if (info) info.textContent = parts.length
+      ? `${parts.length} Filter aktiv: ${parts.join(" · ").slice(0, 90)}${parts.join(" · ").length > 90 ? "…" : ""}`
+      : "";
+    // mark filtered columns in the header (little dot via CSS)
+    $$("#customersTable thead th[data-col]").forEach(th => {
+      const keys = _COL_FILTER_KEYS[th.dataset.col] || [];
+      th.classList.toggle("th-filtered", keys.some(k => _filterActive(f, k)));
+    });
   }
 
   function renderCustomers(data, append = false) {
@@ -2407,6 +2450,7 @@
     applyOnChange("#custNoWebsite");
     applyOnChange("#custEnrichStatus");
     applyOnChange("#custCustomerState");
+    applyOnChange("#custFitMin");
 
     $("#custClearBtn").addEventListener("click", () => {
       $("#custSearch").value = "";
@@ -2418,7 +2462,8 @@
       $("#custHasWebsite").checked = false; $("#custTracked").value = "";
       $("#custAdActivity").value = "";
       $("#custNoWebsite").checked = false; $("#custEnrichStatus").value = "";
-      $("#custCustomerState").value = "";
+      $("#custCustomerState").value = ""; $("#custFitMin").value = "";
+      applyDefaultExclusion();   // Zurücksetzen = back to DEFAULT, incl. "ohne Private Endkunden"
       CUST.page = 1; loadCustomers();
     });
 
@@ -2441,22 +2486,143 @@
       setTimeout(() => { _scrollTick = false; if (_sentinelNear()) loadMoreCustomers(); }, 150);
     }, { passive: true });
 
-    // advanced-filter panel + secondary-columns toggles
-    $("#custMoreFiltersBtn").addEventListener("click", () => {
-      const nowHidden = $("#custMoreFilters").classList.toggle("hidden");
-      $("#custMoreFiltersBtn").firstChild.textContent = nowHidden ? "Mehr Filter ▾ " : "Mehr Filter ▴ ";
-    });
     $("#custColsBtn").addEventListener("click", () => {
       const on = $("#customersTable").classList.toggle("show-extra");
       $("#custColsBtn").textContent = on ? "Weniger Spalten ▴" : "Mehr Spalten ▾";
     });
 
-    $$("#customersTable th[data-sort]").forEach(th => th.addEventListener("click", () => {
-      const key = th.dataset.sort;
-      if (CUST.sort === key) CUST.direction = CUST.direction === "asc" ? "desc" : "asc";
-      else { CUST.sort = key; CUST.direction = key.startsWith("revenue") ? "desc" : "asc"; }
-      CUST.page = 1; loadCustomers();
-    }));
+    // ---------------- column-header menus: click a header -> sort + THAT
+    // column's filter, Excel-style. The controls proxy into the hidden
+    // state-holders (#custFilterState), so currentCustomerFilters() and all
+    // report/export/job flows keep working unchanged. ----------------
+    const _setVal = (sel, v) => { const el = $(sel); el.value = v; el.dispatchEvent(new Event("change", { bubbles: true })); };
+    const _chk = (sel, on) => { $(sel).checked = on; };
+
+    function _optionsHtml(el) {
+      return [...$(el).options].map(o => `<option value="${esc(o.value)}"${$(el).value === o.value ? " selected" : ""}>${esc(o.textContent)}</option>`).join("");
+    }
+    function _checkListHtml(values, selected, cls) {
+      const sel = new Set(selected);
+      return `<div class="thm-list">` + values.map(v => `
+        <label class="thm-item"><input type="checkbox" class="${cls}" value="${esc(v)}" ${sel.has(v) ? "checked" : ""}> <span>${esc(v)}</span></label>`).join("") + `</div>`;
+    }
+    function _incExcSection(title, dropGetter, values, cls) {
+      return `<div class="thm-sec"><div class="thm-sec-title">${title}</div>${_checkListHtml(values, dropGetter().getSelected(), cls)}</div>`;
+    }
+
+    const COL_MENUS = {
+      name: () => `<div class="thm-sec"><div class="thm-sec-title">Suche</div>
+        <input type="text" class="thm-input" id="thmSearch" value="${esc($("#custSearch").value)}" placeholder="Name oder SAP…"></div>`,
+      kunde: () => `<div class="thm-sec"><div class="thm-sec-title">Kundenstatus</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custCustomerState">${_optionsHtml("#custCustomerState")}</select></div>`,
+      fit: () => `<div class="thm-sec"><div class="thm-sec-title">Fit mindestens (0–100)</div>
+        <input type="number" min="0" max="100" class="thm-input" id="thmFitMin" value="${esc($("#custFitMin").value)}"></div>`,
+      anzeigen: () => `<div class="thm-sec"><div class="thm-sec-title">Anzeigen-Aktivität</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custAdActivity">${_optionsHtml("#custAdActivity")}</select></div>`,
+      fb: () => _incExcSection("Meta-Identität", () => CUST_DROP.status,
+            ID_FILTER_OPTIONS, "thm-inc-status")
+        + `<div class="thm-sec"><div class="thm-sec-title">Tracking</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custTracked">${_optionsHtml("#custTracked")}</select></div>`,
+      website: () => `<div class="thm-sec"><div class="thm-sec-title">Website</div>
+        <select class="thm-input" id="thmWebsite">
+          <option value="">alle</option>
+          <option value="with"${$("#custHasWebsite").checked ? " selected" : ""}>nur mit Website</option>
+          <option value="without"${$("#custNoWebsite").checked ? " selected" : ""}>nur ohne Website</option>
+        </select></div>
+        <div class="thm-sec"><div class="thm-sec-title">Anreicherung</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custEnrichStatus">${_optionsHtml("#custEnrichStatus")}</select></div>`,
+      umsatz: () => `<div class="thm-sec"><div class="thm-sec-title">Umsatz akt. Jahr (€)</div>
+        <div class="thm-row"><input type="number" class="thm-input" id="thmRevMin" placeholder="von" value="${esc($("#custRevenueMin").value)}">
+        <input type="number" class="thm-input" id="thmRevMax" placeholder="bis" value="${esc($("#custRevenueMax").value)}"></div></div>
+        <div class="thm-sec"><div class="thm-sec-title">Umsatz-Historie</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custRevenueHistory">${_optionsHtml("#custRevenueHistory")}</select></div>`,
+      kv: () => _incExcSection("Nur diese KV", () => CUST_DROP.kv, CUST_OPTS.kv, "thm-inc-kv")
+        + _incExcSection("Ausschließen", () => CUST_DROP.excludeKv, CUST_OPTS.kv, "thm-exc-kv"),
+      segment: () => _incExcSection("Nur diese Segmente", () => CUST_DROP.segment, CUST_OPTS.segment, "thm-inc-seg")
+        + _incExcSection("Ausschließen", () => CUST_DROP.excludeSegment, CUST_OPTS.segment, "thm-exc-seg"),
+      subseg: () => _incExcSection("Nur diese Untersegmente", () => CUST_DROP.subSegment, CUST_OPTS.sub_segment, "thm-inc-sub")
+        + _incExcSection("Ausschließen", () => CUST_DROP.excludeSubSegment, CUST_OPTS.sub_segment, "thm-exc-sub"),
+      kanal: () => _incExcSection("Nur diese Vertriebswege", () => CUST_DROP.salesChannel, CUST_OPTS.sales_channel, "thm-inc-chan"),
+      land: () => _incExcSection("Nur diese Länder", () => CUST_DROP.country, CUST_OPTS.country, "thm-inc-land"),
+    };
+    const _CHECK_BINDINGS = {
+      "thm-inc-status": () => CUST_DROP.status, "thm-inc-kv": () => CUST_DROP.kv,
+      "thm-exc-kv": () => CUST_DROP.excludeKv, "thm-inc-seg": () => CUST_DROP.segment,
+      "thm-exc-seg": () => CUST_DROP.excludeSegment, "thm-inc-sub": () => CUST_DROP.subSegment,
+      "thm-exc-sub": () => CUST_DROP.excludeSubSegment, "thm-inc-chan": () => CUST_DROP.salesChannel,
+      "thm-inc-land": () => CUST_DROP.country,
+    };
+
+    const thMenu = document.createElement("div");
+    thMenu.id = "thMenu"; thMenu.className = "th-menu hidden";
+    document.body.appendChild(thMenu);
+    thMenu.addEventListener("click", e => e.stopPropagation());
+    const closeThMenu = () => thMenu.classList.add("hidden");
+    document.addEventListener("click", closeThMenu);
+    document.addEventListener("keydown", e => { if (e.key === "Escape") closeThMenu(); });
+
+    function openThMenu(th) {
+      const col = th.dataset.col;
+      const sortKey = th.dataset.sort;
+      const label = ID_FILTER_LABEL;   // ensure closure keeps labels for status list
+      let html = `<div class="thm-head">${esc(th.textContent.replace("▾", "").trim())}</div>`;
+      if (sortKey) {
+        html += `<div class="thm-sec thm-sort">
+          <button class="btn btn-sm thm-sort-btn${CUST.sort === sortKey && CUST.direction === "asc" ? " btn-primary" : ""}" data-dir="asc">↑ Aufsteigend</button>
+          <button class="btn btn-sm thm-sort-btn${CUST.sort === sortKey && CUST.direction === "desc" ? " btn-primary" : ""}" data-dir="desc">↓ Absteigend</button>
+        </div>`;
+      }
+      if (COL_MENUS[col]) html += COL_MENUS[col]();
+      thMenu.innerHTML = html;
+
+      // position under the header, clamped to the viewport
+      const r = th.getBoundingClientRect();
+      thMenu.classList.remove("hidden");
+      const w = Math.min(300, window.innerWidth - 24);
+      thMenu.style.width = w + "px";
+      thMenu.style.top = Math.round(r.bottom + 4) + "px";
+      thMenu.style.left = Math.round(Math.min(r.left, window.innerWidth - w - 12)) + "px";
+
+      // wiring — everything applies live via the hidden state-holders
+      $$(".thm-sort-btn", thMenu).forEach(b => b.addEventListener("click", () => {
+        CUST.sort = sortKey; CUST.direction = b.dataset.dir;
+        closeThMenu(); loadCustomers();
+      }));
+      $$("#thmProxySel", thMenu).forEach(sel => sel.addEventListener("change",
+        () => _setVal(sel.dataset.target, sel.value)));
+      $("#thmSearch", thMenu)?.addEventListener("keydown", e => {
+        if (e.key === "Enter") { $("#custSearch").value = e.target.value; closeThMenu(); applyNow(); }
+      });
+      $("#thmFitMin", thMenu)?.addEventListener("change", e => _setVal("#custFitMin", e.target.value));
+      $("#thmWebsite", thMenu)?.addEventListener("change", e => {
+        _chk("#custHasWebsite", e.target.value === "with");
+        _chk("#custNoWebsite", e.target.value === "without");
+        applyNow();
+      });
+      $("#thmRevMin", thMenu)?.addEventListener("change", e => { $("#custRevenueMin").value = e.target.value; applyNow(); });
+      $("#thmRevMax", thMenu)?.addEventListener("change", e => { $("#custRevenueMax").value = e.target.value; applyNow(); });
+      Object.entries(_CHECK_BINDINGS).forEach(([cls, getDrop]) => {
+        const boxes = $$(`.${cls}`, thMenu);
+        if (!boxes.length) return;
+        boxes.forEach(cb => cb.addEventListener("change", () => {
+          getDrop().setSelected($$(`.${cls}:checked`, thMenu).map(x => x.value));
+          applyNow();
+        }));
+      });
+    }
+
+    // decorate headers: caret + click-to-open (replaces sort-on-click)
+    $$("#customersTable thead th[data-col]").forEach(th => {
+      th.classList.add("th-has-menu");
+      th.insertAdjacentHTML("beforeend", ` <span class="th-caret">▾</span>`);
+      th.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = !thMenu.classList.contains("hidden") && thMenu.dataset.col === th.dataset.col;
+        closeThMenu();
+        if (!open) { thMenu.dataset.col = th.dataset.col; openThMenu(th); }
+      });
+    });
+    $(".table-wrap", $("#tab-customers"))?.addEventListener("scroll", closeThMenu, { passive: true });
 
     // Select every row currently rendered on this page (in-memory, instant).
     function selectPage(checked) {

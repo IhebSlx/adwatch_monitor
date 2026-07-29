@@ -255,7 +255,16 @@
       <div class="card">
         <h2>Explorer</h2>
         <div class="filter-bar">
-          <input type="text" id="custSearch" placeholder="Suche Name oder SAP…" style="flex:2;min-width:180px">
+          <input type="text" id="custSearch" placeholder="Suche Name oder SAP…" style="flex:2;min-width:220px">
+          <span class="muted" id="custFilterInfo" title="Aktive Filter — per Klick auf die Spaltenköpfe setzen/ändern"></span>
+          <span class="spacer"></span>
+          <button id="custClearBtn" class="btn btn-sm" title="Alle Filter auf den Standard zurücksetzen (Private Endkunden bleiben ausgeschlossen)">Zurücksetzen</button>
+        </div>
+        <p class="hint">Sortieren &amp; filtern direkt über die Spaltenköpfe (▾). Standard: <b>Private Endkunden ausgeschlossen</b> — aufhebbar im Spaltenmenü „Segment“.</p>
+
+        <!-- Hidden STATE HOLDERS: every filter control keeps its id + wiring; the
+             column-header menus write into these. Never shown directly. -->
+        <div id="custFilterState" style="display:none">
           <select id="custCustomerState" title="Kundenstatus aus den Umsatzspalten: aktiv = kauft jetzt und kaufte zuvor · neu = erster Umsatz dieses Jahr · ehemalig = früher gekauft, dieses Jahr nichts · nie = kein Umsatz erfasst">
             <option value="">Kundenstatus: alle</option>
             <option value="active">Aktiver Kunde</option>
@@ -271,18 +280,14 @@
             <option value="any">Jemals Anzeigen</option>
             <option value="none">Keine aktiven Anzeigen</option>
           </select>
-          <button id="custMoreFiltersBtn" class="btn btn-sm" type="button">Mehr Filter ▾ <span id="custFilterBadge" class="filter-badge hidden"></span></button>
-          <button id="custClearBtn" class="btn btn-sm">Zurücksetzen</button>
-        </div>
-        <div class="filter-bar hidden" id="custMoreFilters" style="margin-top:8px">
           <div id="custStatusDrop"></div>
           <div id="custKvDrop"></div>
           <div id="custSegmentDrop"></div>
           <div id="custSubSegmentDrop"></div>
           <div id="custChannelDrop"></div>
           <div id="custCountryDrop"></div>
-          <input type="number" id="custRevenueMin" placeholder="Umsatz von €" style="width:120px">
-          <input type="number" id="custRevenueMax" placeholder="Umsatz bis €" style="width:120px">
+          <input type="number" id="custRevenueMin">
+          <input type="number" id="custRevenueMax">
           <select id="custRevenueHistory" style="width:200px">
             <option value="">Umsatz-Historie: alle</option>
             <option value="lapsed">Ehemalige Käufer (nicht akt. Jahr)</option>
@@ -290,8 +295,9 @@
             <option value="any">Jemals Umsatz</option>
             <option value="never">Nie Umsatz</option>
           </select>
-          <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="custHasWebsite"> Mit Website</label>
-          <label style="display:flex;align-items:center;gap:5px" title="Zielgruppe für die Anreicherung"><input type="checkbox" id="custNoWebsite"> Ohne Website</label>
+          <input type="checkbox" id="custHasWebsite">
+          <input type="checkbox" id="custNoWebsite">
+          <input type="number" id="custFitMin">
           <select id="custEnrichStatus" title="Status der Datenanreicherung">
             <option value="">Anreicherung: alle</option>
             <option value="none">noch nicht angereichert</option>
@@ -410,24 +416,24 @@
                 </div>
               </th>
               <th class="col-dot"></th>
-              <th data-sort="name">Firmenname</th>
-              <th data-sort="customer_state" title="Kundenstatus aus den Umsatzspalten">Kunde</th>
-              <th class="num" data-sort="fit_score" title="Fit-Score 0–100: wie sehr diese Firma dem idealen Kundenprofil entspricht (ICP-Tab)">Fit</th>
-              <th class="num" title="Aktive Anzeigen beim letzten Abruf">Anzeigen</th>
-              <th>Facebook Seite</th>
-              <th>Website</th>
-              <th data-sort="city">Ort</th>
-              <th class="num" data-sort="revenue_y0">Umsatz akt.</th>
-              <th class="col-extra" data-sort="sap_number">SAP</th>
-              <th class="col-extra">KV</th>
-              <th class="col-extra" data-sort="segment">Segment</th>
-              <th class="col-extra" data-sort="sub_segment">Untersegment</th>
-              <th class="col-extra" data-sort="sales_channel">Vertriebsweg</th>
-              <th class="col-extra" data-sort="country">Land</th>
-              <th class="col-extra num" data-sort="revenue_y1">Umsatz -1</th>
-              <th class="col-extra num" data-sort="revenue_y2">Umsatz -2</th>
-              <th class="col-extra num" data-sort="revenue_y3">Umsatz -3</th>
-              <th class="col-extra num" data-sort="revenue_y4">Umsatz -4</th>
+              <th data-col="name" data-sort="name">Firmenname</th>
+              <th data-col="kunde" data-sort="customer_state">Kunde</th>
+              <th class="num" data-sort="fit_score" title="Fit-Score 0–100: wie sehr diese Firma dem idealen Kundenprofil entspricht (ICP-Tab)" data-col="fit">Fit</th>
+              <th class="num" data-col="anzeigen" title="Aktive Anzeigen beim letzten Abruf">Anzeigen</th>
+              <th data-col="fb">Facebook Seite</th>
+              <th data-col="website">Website</th>
+              <th data-col="ort" data-sort="city">Ort</th>
+              <th class="num" data-col="umsatz" data-sort="revenue_y0">Umsatz akt.</th>
+              <th class="col-extra" data-col="sap" data-sort="sap_number">SAP</th>
+              <th class="col-extra" data-col="kv">KV</th>
+              <th class="col-extra" data-col="segment" data-sort="segment">Segment</th>
+              <th class="col-extra" data-col="subseg" data-sort="sub_segment">Untersegment</th>
+              <th class="col-extra" data-col="kanal" data-sort="sales_channel">Vertriebsweg</th>
+              <th class="col-extra" data-col="land" data-sort="country">Land</th>
+              <th class="col-extra num" data-col="u1" data-sort="revenue_y1">Umsatz -1</th>
+              <th class="col-extra num" data-col="u2" data-sort="revenue_y2">Umsatz -2</th>
+              <th class="col-extra num" data-col="u3" data-sort="revenue_y3">Umsatz -3</th>
+              <th class="col-extra num" data-col="u4" data-sort="revenue_y4">Umsatz -4</th>
               <th></th>
             </tr></thead>
             <tbody id="customersTableBody"></tbody>

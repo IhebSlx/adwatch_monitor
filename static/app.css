@@ -788,6 +788,33 @@ a.link:hover { text-decoration: underline; }
 #customersTable .cell-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .scroll-sentinel { text-align: center; padding: 14px 0 6px; color: var(--muted); font-size: 12.5px; }
 
+/* ---- column-header menus (sort + per-column filter) ---- */
+.th-has-menu { cursor: pointer; user-select: none; }
+.th-has-menu:hover { color: var(--accent-ink); }
+.th-caret { font-size: 9px; color: var(--muted-soft); }
+.th-filtered .th-caret { color: var(--accent); }
+.th-filtered::after {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 4px;
+  border-radius: 99px; background: var(--accent); vertical-align: middle;
+}
+.th-menu {
+  position: fixed; z-index: 90; max-height: 420px; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--border-strong);
+  border-radius: 12px; box-shadow: var(--shadow-lg); padding: 10px 12px 12px;
+}
+.thm-head { font-weight: 700; font-size: 12.5px; margin-bottom: 6px; }
+.thm-sec { padding: 8px 0 2px; border-top: 1px solid var(--border); }
+.thm-sec-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-weight: 650; margin-bottom: 5px; }
+.thm-sort { display: flex; gap: 6px; }
+.thm-input { width: 100%; font: inherit; font-size: 13px; padding: 6px 9px;
+  border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-subtle); }
+.thm-row { display: flex; gap: 6px; }
+.thm-list { max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.thm-item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; padding: 2.5px 2px;
+  cursor: pointer; border-radius: 6px; }
+.thm-item:hover { background: var(--bg-subtle); }
+
 /* ============================== responsive ============================== */
 @media (max-width: 960px) {
   .sidebar {
