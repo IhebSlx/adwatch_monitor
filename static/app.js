@@ -44,6 +44,12 @@
   // whole-company verdict.
   const STATUS_LABEL = { confirmed: "Meta page found", ambiguous: "Meta page unclear",
     no_ads_found: "No Meta page found", pending: "Meta not checked yet", locked: "Meta page locked" };
+  // Enrichment status (see enrich/service.py) — German, user-facing.
+  const ENRICH_STATUS_LABEL = {
+    none: "noch nicht angereichert", enriched: "angereichert",
+    needs_review: "Website-Vorschlag prüfen", no_website_found: "keine Website gefunden",
+    error: "Fehler",
+  };
   const RUN_STATUS_LABEL = { ok: "ok", no_active_ads: "no active ads",
     no_ads_found: "no ads found", ambiguous_match: "ambiguous", error: "error" };
   const FLAG_LABEL = { new_campaign: "New campaign", first_seen: "First activity",
@@ -1289,6 +1295,8 @@
       sales_channel: CUST_DROP.salesChannel.getSelected(),
       country: CUST_DROP.country.getSelected(),
       has_website: $("#custHasWebsite").checked,
+      no_website: $("#custNoWebsite").checked,
+      enrichment_status: $("#custEnrichStatus").value ? [$("#custEnrichStatus").value] : [],
       revenue_min: $("#custRevenueMin").value ? Number($("#custRevenueMin").value) : null,
       revenue_max: $("#custRevenueMax").value ? Number($("#custRevenueMax").value) : null,
       revenue_history: $("#custRevenueHistory").value || null,
@@ -1325,6 +1333,9 @@
     if (f.exclude_segment?.length) parts.push(`excl. segment: ${f.exclude_segment.join(", ")}`);
     if (f.exclude_sub_segment?.length) parts.push(`excl. sub-segment: ${f.exclude_sub_segment.join(", ")}`);
     if (f.has_website) parts.push("has website");
+    if (f.no_website) parts.push("without website");
+    if (f.enrichment_status?.length)
+      parts.push(`enrichment: ${f.enrichment_status.map(s => ENRICH_STATUS_LABEL[s] || s).join(", ")}`);
     if (f.page_id_state === "with") parts.push("with Meta page ID");
     if (f.page_id_state === "without") parts.push("without Meta page ID");
     if (f.tracked === true) parts.push("tracked only");
@@ -1760,6 +1771,40 @@
     } catch (e) { alert(`Could not start identity check: ${e.message}`); }
   }
 
+  // Enrichment for a set of companies: find the missing website, then read facts
+  // off the company's own site. Costs ~$0.001 (search) + ~$0.003 (LLM) each, so
+  // the confirm states the rough total rather than hiding it.
+  async function runEnrichForIds(ids) {
+    if (!ids.length) return;
+    const est = (ids.length * 0.004).toFixed(2);
+    if (!await appConfirm(
+      `Daten für ${ids.length} Firma/Firmen anreichern?\n\n`
+      + `• Fehlende Website: erst aus der E-Mail-Domain (kostenlos), sonst per Websuche\n`
+      + `• Danach werden Beschreibung, Produkte, Gründungsjahr, Größe und genannte `
+      + `Marken (Solarlux/Wettbewerber) von der eigenen Website gelesen\n`
+      + `• Eine gefundene Website wird nur automatisch übernommen, wenn Telefon/PLZ/Straße `
+      + `auf der Seite bestätigt werden — sonst landet sie zur Prüfung in der Warteschlange\n`
+      + `• Vorhandene Websites und Stammdaten werden nie überschrieben\n\n`
+      + `Geschätzte Kosten: ca. $${est}. Läuft im Hintergrund (abbrechbar).`,
+      { title: "Daten anreichern", confirmText: "Anreichern" })) return;
+    try {
+      await api("/api/enrich-jobs", "POST", { company_ids: ids });
+      CUST.selected.clear();
+      await loadCustomers();
+      await loadJobs();
+      startJobPolling();
+    } catch (e) { alert(`Anreicherung konnte nicht gestartet werden: ${e.message}`); }
+  }
+
+  async function runEnrichAction() {
+    await runEnrichForIds([...CUST.selected]);
+  }
+
+  async function runEnrichForFilter() {
+    await selectAllMatching();                 // every company under the current filter
+    await runEnrichForIds([...CUST.selected]);
+  }
+
   async function runDeleteAction() {
     const ids = [...CUST.selected];
     if (!ids.length) return;
@@ -1827,6 +1872,81 @@
   function closeCompanyDrawer() {
     $("#companyDrawer").classList.add("hidden");
     $("#drawerBackdrop").classList.add("hidden");
+  }
+
+  // ---------------- enrichment (drawer section + review queue) ----------------
+  function enrichFieldsHtml(e) {
+    const f = e.fields || {};
+    const prov = e.provenance || {};
+    // every value shows WHERE it came from — hover gives the source + the quote
+    const kv = (label, value, key) => {
+      if (value === undefined || value === null || value === "" ||
+          (Array.isArray(value) && !value.length)) return "";
+      const p = prov[key];
+      const tip = p ? `${p.source}${p.confidence ? ` · ${Math.round(p.confidence * 100)}%` : ""}${p.evidence ? ` · „${p.evidence}"` : ""}` : "";
+      const shown = Array.isArray(value) ? value.join(", ") : value;
+      return `<div class="drawer-kv"><dt>${esc(label)}</dt><dd${tip ? ` title="${esc(tip)}"` : ""}>${esc(String(shown))}${p ? ` <span class="tag">${esc(p.source)}</span>` : ""}</dd></div>`;
+    };
+    const solarlux = f.mentions_solarlux === true
+      ? `<span class="tag tag-saved">nennt Solarlux</span>`
+      : (f.mentions_solarlux === false ? `<span class="tag">nennt Solarlux nicht</span>` : "");
+    const comps = (f.competitor_brands || []).length
+      ? `<span class="tag tag-filtered">Wettbewerber: ${esc(f.competitor_brands.join(", "))}</span>` : "";
+    const body = [
+      kv("Beschreibung", f.description_de, "description_de"),
+      kv("Produkte", f.products, "products"),
+      kv("Gegründet", f.founded_year, "founded_year"),
+      kv("Größe", f.employee_hint, "employee_hint"),
+      kv("Rechtsform", f.legal_form, "legal_form"),
+      kv("Einsatzgebiet", f.service_area, "service_area"),
+    ].join("");
+    return `${solarlux || comps ? `<p style="margin:0 0 8px">${solarlux} ${comps}</p>` : ""}
+      ${body ? `<dl class="drawer-grid">${body}</dl>` : `<p class="hint">Noch keine Felder extrahiert.</p>`}
+      <p class="hint" style="margin-top:6px">Status: <b>${esc(ENRICH_STATUS_LABEL[e.status] || e.status || "—")}</b>${
+        e.website_source ? ` · Website-Quelle: ${esc(e.website_source)}${e.website_validated_by ? ` (${esc(e.website_validated_by)})` : ""}` : ""}${
+        e.enriched_at ? ` · ${esc(e.enriched_at)}` : ""}${e.error ? ` · <span class="status-error">${esc(e.error)}</span>` : ""}</p>`;
+  }
+
+  // needs_review: show each unproven candidate with why it failed + accept/reject
+  function enrichCandidatesHtml(e) {
+    const cands = (e.website_candidates || []).filter(c => c && c.domain);
+    if (e.status !== "needs_review" || !cands.length) return "";
+    return `<div class="enrich-review">
+      <p class="hint"><b>Website-Vorschläge</b> — nicht automatisch bestätigt, weil Telefon/PLZ/Straße auf der Seite nicht gefunden wurden. Bitte prüfen:</p>
+      ${cands.map(c => `
+        <div class="page-item" data-domain="${esc(c.domain)}">
+          <span><a class="link" href="https://${esc(c.domain)}" target="_blank" rel="noopener">${esc(c.domain)}</a>
+            <span class="muted small">${esc(c.origin || "")}${c.reachable === false ? " · nicht erreichbar" : ""}</span></span>
+          <button class="btn btn-sm enrich-accept">Das ist die richtige</button>
+        </div>`).join("")}
+      <button class="btn btn-sm btn-ghost enrich-reject" style="margin-top:6px">Keine davon</button>
+    </div>`;
+  }
+
+  async function loadDrawerEnrichment(id) {
+    const box = $("#drawerEnrichBody");
+    if (!box) return;
+    try {
+      const e = await api(`/api/companies/${id}/enrichment`);
+      box.innerHTML = enrichFieldsHtml(e) + enrichCandidatesHtml(e);
+      $$(".enrich-accept", box).forEach(btn => btn.addEventListener("click", async () => {
+        const domain = btn.closest("[data-domain]").dataset.domain;
+        btn.disabled = true; btn.textContent = "Übernehme…";
+        try {
+          await api(`/api/companies/${id}/enrichment/accept`, "POST", { page_id: domain });
+          toast(`✓ ${domain} übernommen.`, "info");
+          await loadDrawerEnrichment(id); await loadCustomers();
+        } catch (err) { toast(`Fehlgeschlagen: ${err.message}`, "error"); btn.disabled = false; btn.textContent = "Das ist die richtige"; }
+      }));
+      const rej = $(".enrich-reject", box);
+      if (rej) rej.addEventListener("click", async () => {
+        await api(`/api/companies/${id}/enrichment/reject`, "POST");
+        toast("Vorschläge verworfen.", "info");
+        await loadDrawerEnrichment(id); await loadCustomers();
+      });
+    } catch (e) {
+      box.innerHTML = `<p class="hint status-error">Konnte Firmeninfos nicht laden: ${esc(e.message)}</p>`;
+    }
   }
 
   async function openCompanyDrawer(id) {
@@ -1946,6 +2066,13 @@
           <h3>Current ads (${weekAds.length})</h3>
           ${adListHtml}
         </div>` : ""}
+        <div class="drawer-section" id="drawerEnrichSection">
+          <div class="drawer-section-head">
+            <h3>Firmeninfos (angereichert)</h3>
+            <button id="drawerEnrichBtn" class="btn btn-sm" title="Website finden (falls fehlend) und Firmeninfos von der eigenen Website lesen">✨ Anreichern</button>
+          </div>
+          <div id="drawerEnrichBody"><p class="hint">Lade…</p></div>
+        </div>
         <div class="drawer-section">
           <h3>Master data</h3>
           <dl class="drawer-grid">
@@ -2019,6 +2146,23 @@
         btn.disabled = false; btn.textContent = "↻ Recheck";
         alert(err.message);
       }
+    });
+
+    // Enrichment: load this company's enriched facts, and allow a manual re-run.
+    loadDrawerEnrichment(id);
+    $("#drawerEnrichBtn", drawer)?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true; btn.textContent = "Anreichern…";
+      try {
+        const r = await api(`/api/companies/${id}/enrich`, "POST");
+        toast(r.website ? `✓ ${r.website} (${r.validated_by}) · ${r.fields_found} Felder`
+                        : `${ENRICH_STATUS_LABEL[r.status] || r.status}`,
+              r.status === "enriched" ? "info" : "error");
+        await loadDrawerEnrichment(id);
+        await loadCustomers();
+      } catch (err) {
+        toast(`Anreichern fehlgeschlagen: ${err.message}`, "error");
+      } finally { btn.disabled = false; btn.textContent = "✨ Anreichern"; }
     });
 
     // Use a candidate — set it as the verified (human-confirmed) page.
@@ -2106,6 +2250,8 @@
     applyOnChange("#custHasWebsite");
     applyOnChange("#custTracked");
     applyOnChange("#custAdActivity");
+    applyOnChange("#custNoWebsite");
+    applyOnChange("#custEnrichStatus");
 
     $("#custClearBtn").addEventListener("click", () => {
       $("#custSearch").value = "";
@@ -2116,6 +2262,7 @@
       $("#custRevenueMin").value = ""; $("#custRevenueMax").value = ""; $("#custRevenueHistory").value = "";
       $("#custHasWebsite").checked = false; $("#custTracked").value = "";
       $("#custAdActivity").value = "";
+      $("#custNoWebsite").checked = false; $("#custEnrichStatus").value = "";
       CUST.page = 1; loadCustomers();
     });
 
@@ -2224,6 +2371,8 @@
 
     // selection actions + drawer chrome
     $("#custIdentityBtn").addEventListener("click", runIdentityAction);
+    $("#custEnrichBtn").addEventListener("click", runEnrichAction);
+    $("#custEnrichAllBtn").addEventListener("click", runEnrichForFilter);
     $("#custReportBtn").addEventListener("click", runReportForSelected);
     $("#custDeleteBtn").addEventListener("click", runDeleteAction);
     $("#custEditBtn").addEventListener("click", () => {
@@ -2349,7 +2498,9 @@
   let _stripHiddenJobId = null;     // job the user hid while it runs
   const _cancelRequestedJobs = new Set();  // jobs the user asked to cancel — toast once cancelled
 
-  function jobKindLabel(j) { return j.kind === "identity" ? "Identity check" : "Ad lookup"; }
+  function jobKindLabel(j) {
+    return { identity: "Identity check", enrich: "Datenanreicherung" }[j.kind] || "Ad lookup";
+  }
 
   function hideJobStrip() { $("#jobStrip").classList.add("hidden"); }
 
@@ -2439,7 +2590,7 @@
           <div class="job-modal job-modal-result">
             <div class="result-icon">${ok ? "✓" : "⚠"}</div>
             <b>${jobKindLabel(j)} ${esc(JOB_STATUS_LABEL[j.status] || j.status).toLowerCase()}</b>
-            <span class="job-strip-note">${j.completed}/${j.total} processed · ${j.errors} error(s)${j.kind !== "identity" ? ` · ${j.ads_collected} ads` : ""}</span>
+            <span class="job-strip-note">${j.completed}/${j.total} processed · ${j.errors} error(s)${j.kind === "fetch" ? ` · ${j.ads_collected} ads` : ""}</span>
             <div class="job-modal-actions"><button class="btn btn-sm btn-primary job-strip-dismiss">Done</button></div>
           </div>`;
         const jid = j.id;
@@ -2464,8 +2615,12 @@
       const canCancel = j.status === "running" || j.status === "queued";
       const logTail = (j.log || []).slice(-8);
       const isIdentity = j.kind === "identity";
-      const what = isIdentity ? "identity check" : `ad lookup · ${j.sources.join(" + ")}`;
-      const stats = `${j.completed}/${j.total} · ${j.errors} error(s)` + (isIdentity ? "" : ` · ${j.ads_collected} ads`);
+      const isFetch = j.kind === "fetch" || !j.kind;
+      const what = isIdentity ? "identity check"
+                 : (j.kind === "enrich" ? "Datenanreicherung · Website + Firmeninfos"
+                                        : `ad lookup · ${j.sources.join(" + ")}`);
+      // an ad count is only meaningful for a real ad fetch
+      const stats = `${j.completed}/${j.total} · ${j.errors} error(s)` + (isFetch ? ` · ${j.ads_collected} ads` : "");
       return `<div class="job-item" data-job="${j.id}">
         <div class="job-item-head">
           <span class="job-status job-status-${j.status}">${esc(JOB_STATUS_LABEL[j.status] || j.status)}</span>

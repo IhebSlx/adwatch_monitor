@@ -616,6 +616,7 @@ def list_customers_route(
     resolution_status: list[str] = Query(default=[]),
     tracked: bool | None = None, page_id_state: str | None = None,
     ad_activity: str | None = None, ad_source: str | None = None,
+    no_website: bool = False, enrichment_status: list[str] = Query(default=[]),
     sort: str | None = None, direction: str = "asc", page: int = 1, page_size: int = 50,
 ):
     filters = {"q": q, "kv": kv, "segment": segment, "sub_segment": sub_segment,
@@ -626,7 +627,8 @@ def list_customers_route(
                "exclude_sub_segment": exclude_sub_segment,
                "resolution_status": resolution_status, "tracked": tracked,
                "page_id_state": page_id_state, "ad_activity": ad_activity,
-               "ad_source": ad_source}
+               "ad_source": ad_source, "no_website": no_website,
+               "enrichment_status": enrichment_status}
     return customers.query_companies(filters, sort, direction, page, page_size)
 
 
@@ -663,6 +665,58 @@ def create_job_route(payload: JobCreateIn):
 @app.get("/api/fetch-jobs")
 def list_jobs_route(kind: str | None = None):
     return jobs.list_jobs(kind=kind)
+
+
+# --- Enrichment: find the missing website + pull useful facts off the company's
+# --- own site (see enrich/). Costs ~$0.001 search + ~$0.003 LLM per company.
+@app.post("/api/enrich-jobs")
+def create_enrich_job_route(payload: IdentityJobIn):
+    if not config.ANTHROPIC_API_KEY:
+        raise HTTPException(400, "ANTHROPIC_API_KEY is not set — needed to extract company facts")
+    try:
+        job = jobs.create_job(payload.company_ids, ["web"], payload.label, kind="enrich")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        return jobs.start_job(job["id"])
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/companies/{company_id}/enrichment")
+def get_enrichment_route(company_id: int):
+    from .enrich import service as enrich_service
+    return enrich_service.get_enrichment(company_id) or {"company_id": company_id, "status": "none"}
+
+
+@app.post("/api/companies/{company_id}/enrich")
+def enrich_one_route(company_id: int):
+    """Enrich a single company on demand (the drawer's button)."""
+    from .enrich import service as enrich_service
+    try:
+        return enrich_service.enrich_company(company_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/companies/{company_id}/enrichment/accept")
+def accept_website_route(company_id: int, payload: PageIn):
+    """Human approves a review-queue website candidate (payload.page_id carries
+    the domain), then re-enriches from it."""
+    from .enrich import service as enrich_service
+    try:
+        return enrich_service.accept_candidate(company_id, payload.page_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/companies/{company_id}/enrichment/reject")
+def reject_website_route(company_id: int):
+    from .enrich import service as enrich_service
+    enrich_service.reject_candidates(company_id)
+    return {"ok": True}
 
 
 @app.post("/api/identity-jobs")

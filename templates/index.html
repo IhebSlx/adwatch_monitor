@@ -217,6 +217,15 @@
             <option value="never">Nie Umsatz</option>
           </select>
           <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="custHasWebsite"> Has website</label>
+          <label style="display:flex;align-items:center;gap:5px" title="Firmen ohne Website — die Zielgruppe für die Anreicherung"><input type="checkbox" id="custNoWebsite"> Ohne Website</label>
+          <select id="custEnrichStatus" title="Status der Datenanreicherung">
+            <option value="">Anreicherung: alle</option>
+            <option value="none">noch nicht angereichert</option>
+            <option value="enriched">angereichert</option>
+            <option value="needs_review">Website-Vorschlag prüfen</option>
+            <option value="no_website_found">keine Website gefunden</option>
+            <option value="error">Fehler</option>
+          </select>
           <select id="custTracked">
             <option value="">Tracked + untracked</option>
             <option value="true">Tracked only</option>
@@ -245,6 +254,7 @@
           </span>
           <button id="custFetchAllBtn" class="btn btn-sm" title="Anzeigen für ALLE gefilterten Firmen abrufen (keine Auswahl nötig)">📣 Ad lookup (gefiltert)</button>
           <button id="custReportAllBtn" class="btn btn-sm" title="PDF-Bericht über ALLE gefilterten Firmen — der verwendete Filter steht im Berichtskopf">📄 Report (gefiltert)</button>
+          <button id="custEnrichAllBtn" class="btn btn-sm" title="Für ALLE gefilterten Firmen: fehlende Website finden + Firmeninfos von der eigenen Website lesen">✨ Daten anreichern (gefiltert)</button>
           <button id="custSaveReportBtn" class="btn btn-sm" title="Diesen Filter als wiederkehrenden Bericht speichern (Empfänger + optionaler Zeitplan)">💾 Als Bericht speichern</button>
           <button id="custExportAllBtn" class="btn btn-sm">Export filtered</button>
         </div>
@@ -253,6 +263,7 @@
         <div class="action-bar hidden" id="custActionBar">
           <span class="action-count" id="custSelCount"></span>
           <button id="custIdentityBtn" class="btn btn-sm">🔍 Identity check</button>
+          <button id="custEnrichBtn" class="btn btn-sm" title="Fehlende Website finden + Firmeninfos von der eigenen Website lesen">✨ Anreichern</button>
           <button id="custFetchBtn" class="btn btn-sm">📣 Ad lookup…</button>
           <button id="custEditBtn" class="btn btn-sm" title="Select exactly one company to edit">✎ Edit</button>
           <button id="custReportBtn" class="btn btn-sm" title="Generate a PDF report covering exactly the selected companies">📄 Report</button>

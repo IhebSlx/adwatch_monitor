@@ -740,6 +740,13 @@ a.link:hover { text-decoration: underline; }
 .saved-report-main { min-width: 0; }
 .saved-report-actions { display: flex; gap: 6px; flex: 0 0 auto; }
 
+/* ---- enrichment review queue (drawer) ---- */
+.enrich-review {
+  margin-top: 10px; padding: 10px 12px; background: var(--bg);
+  border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px;
+}
+.enrich-review .page-item { padding: 7px 0; }
+
 /* ============================== responsive ============================== */
 @media (max-width: 960px) {
   .sidebar {

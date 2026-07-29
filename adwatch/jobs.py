@@ -208,6 +208,12 @@ def create_job(company_ids: list[int], sources: list[str], label: str | None = N
             # page/website gate (its whole job is to FIND the page).
             sources = ["meta"]
             total = len(company_ids)
+        elif kind == "enrich":
+            # Enrichment is one unit per company and platform-agnostic: it works
+            # on the company's OWN website (finding it first if needed), so no
+            # Meta page / existing website is required to queue it.
+            sources = ["web"]
+            total = len(company_ids)
         else:
             bad = [x for x in sources if x not in ("meta", "google")]
             if bad or not sources:
@@ -273,6 +279,8 @@ def _run_body(job_id: int, runners: dict) -> None:
     # time, so a resumed job lines up with its `completed` cursor.
     if kind == "identity":
         units = [(cid, "meta") for cid in company_ids]
+    elif kind == "enrich":
+        units = [(cid, "enrich") for cid in company_ids]
     else:
         with SessionLocal() as s:
             units = _plan_units(s, company_ids, sources)
@@ -298,6 +306,8 @@ def _run_body(job_id: int, runners: dict) -> None:
 
         if kind == "identity":
             _run_identity_unit(job_id, idx, cid, company_name)
+        elif kind == "enrich":
+            _run_enrich_unit(job_id, idx, cid, company_name)
         else:
             _run_fetch_unit(job_id, idx, cid, src, company_name, runners)
 
@@ -373,6 +383,40 @@ def _run_identity_unit(job_id: int, idx: int, cid: int, company_name: str) -> No
             _append_log(s, job, f"[identity] ✗ {company_name} — {exc}")
             s.commit()
         logger.exception("Identity job %s: %s failed", job_id, company_name)
+
+
+# Human-readable one-liners per enrichment outcome (see enrich/service.py).
+_ENRICH_LOG = {
+    "enriched": lambda r: (f"✓ {r['website']} ({r['website_source']}/{r['validated_by']})"
+                           f" · {r['fields_found']} Felder"),
+    "needs_review": lambda r: f"? {r['candidates']} Website-Vorschlag/-Vorschläge — bitte prüfen",
+    "no_website_found": lambda r: "✗ keine Website gefunden",
+    "error": lambda r: f"✗ {r.get('error') or 'Fehler'}",
+}
+
+
+def _run_enrich_unit(job_id: int, idx: int, cid: int, company_name: str) -> None:
+    """One company's enrichment (website + facts). A single company failing must
+    never kill the job — it's logged and the run moves on."""
+    from .enrich import service as enrich_service
+    try:
+        result = enrich_service.enrich_company(cid)
+        line = _ENRICH_LOG.get(result["status"], lambda r: r["status"])(result)
+        with SessionLocal() as s:
+            job = s.get(FetchJob, job_id)
+            job.completed = idx + 1
+            if result["status"] == "error":
+                job.errors = (job.errors or 0) + 1
+            _append_log(s, job, f"[enrich] {company_name} — {line}")
+            s.commit()
+    except Exception as exc:  # noqa: BLE001
+        with SessionLocal() as s:
+            job = s.get(FetchJob, job_id)
+            job.completed = idx + 1
+            job.errors = (job.errors or 0) + 1
+            _append_log(s, job, f"[enrich] ✗ {company_name} — {exc}")
+            s.commit()
+        logger.exception("Enrich job %s: %s failed", job_id, company_name)
 
 
 def start_job(job_id: int) -> dict:

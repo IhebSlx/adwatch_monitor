@@ -381,6 +381,130 @@ def test_report_def_crud_and_run(temp_db, monkeypatch):
     assert report_defs.list_definitions() == []
 
 
+def test_enrich_domain_derivation_and_salvage():
+    """Tier 0: a website derived from the SAP email, with the guards that keep
+    freemail/portal domains out — plus salvage of the malformed values that are
+    genuinely present in this dataset."""
+    from adwatch.enrich.domains import domain_from_email, normalize_domain, salvage_domain
+
+    assert domain_from_email("info@sf-mitschele.de") == "sf-mitschele.de"
+    for bad in ("x@gmail.com", "y@t-online.de", "z@web.de",      # freemail
+                "a@gelbeseiten.de", "b@facebook.com",             # portals/social
+                "nope", "", None):
+        assert domain_from_email(bad) is None, bad
+    # a competitor's domain is still *derivable* — validation is what rejects it
+    assert domain_from_email("kontakt@warema.de") == "warema.de"
+
+    assert normalize_domain("https://WWW.Foo.de/kontakt?a=1") == "foo.de"
+    assert normalize_domain("foo") is None
+    # real malformed master-data values
+    assert salvage_domain("https://http: //www.tischlerei-tieste.de") == "tischlerei-tieste.de"
+    assert salvage_domain("http;//www.thalhammer-bau.com") == "thalhammer-bau.com"
+    assert salvage_domain("www.bauelemente-thoms .de") == "bauelemente-thoms.de"
+    assert salvage_domain("http./ www.alubau.org") == "alubau.org"
+    assert salvage_domain("http://www.kurzbach-sonnenschutz.") is None   # no TLD, unrecoverable
+    assert salvage_domain("https://foo.de/index.html") == "foo.de"       # not the file name
+
+
+def test_enrich_validation_gate():
+    """The safety gate: a website is only auto-accepted on hard SAP evidence.
+    The `warema.de` case (a competitor's domain sitting in a contact email) must
+    NOT validate — that is the wrong-page lesson applied to websites."""
+    from adwatch.enrich.validate import validate_site, phone_matches, national_phone_digits
+
+    comp = {"name": "Fensterbau Mitschele", "phone": "+49 5405 1234-0",
+            "postal_code": "49134", "street": "Industriestr. 5", "city": "Wallenhorst"}
+
+    # phone: same number formatted differently, and a different Durchwahl, match
+    assert national_phone_digits("+49 5405 1234-0") == national_phone_digits("05405/1234-0")
+    assert phone_matches("+49 5405 1234-0", "Tel. 05405 / 1234-20 · Fax ...")
+    assert not phone_matches("+49 5405 1234-0", "Tel. 0221 / 9876543")
+    assert not phone_matches("12345", "kurze nummer 12345")     # too few digits to be evidence
+
+    assert validate_site(comp, "sf-mitschele.de", "Rufen Sie an: 05405 1234-0")["matched_by"] == "phone"
+    assert validate_site(comp, "x.de", "49134 Wallenhorst, Industriestr. 5")["matched_by"] == "plz_street"
+    assert validate_site(comp, "x.de", "49134 Wallenhorst — Mitschele")["matched_by"] == "plz_name"
+    assert validate_site(comp, "sf-mitschele.de", "Willkommen bei Mitschele")["matched_by"] == "domain_plus_name"
+
+    # the competitor domain: its site carries WAREMA's own address, not the dealer's
+    warema = validate_site(comp, "warema.de",
+                           "WAREMA Renkhoff SE, 97828 Marktheidenfeld, Tel 09391 20-0")
+    assert warema["ok"] is False and warema["matched_by"] is None
+    # a lone name mention is NOT enough to auto-accept
+    weak = validate_site(comp, "irgendwas.de", "… Mitschele …")
+    assert weak["ok"] is False
+
+
+def test_enrich_extract_coercion():
+    """extract.py must not let a stray year or an off-vocabulary product through
+    (the LLM is told to extract, but the parser still enforces it)."""
+    from adwatch.enrich.extract import _clean_list, _coerce_year, PRODUCT_VOCAB, COMPETITOR_BRANDS
+
+    assert _coerce_year("1952") == 1952 and _coerce_year(1978) == 1978
+    assert _coerce_year("keine Angabe") is None
+    assert _coerce_year(12) is None and _coerce_year("905405") is None   # phone fragment
+    assert _clean_list(["Fenster", "fenster", "Raumschiffe"], PRODUCT_VOCAB, 6) == ["Fenster"]
+    assert _clean_list(["warema", "Sunflex"], COMPETITOR_BRANDS, 12) == ["WAREMA", "Sunflex"]
+    assert _clean_list("not a list", PRODUCT_VOCAB, 6) == []
+
+
+def test_enrich_never_overwrites_sap_website(temp_db, monkeypatch):
+    """The hard rule: an existing (SAP) website is authoritative — enrichment
+    fills blanks only. It must also still extract facts for such a company, and
+    park an unprovable candidate as needs_review instead of writing it."""
+    from adwatch.enrich import service
+    import adwatch.enrich.fetchpage as fetchpage
+    import adwatch.enrich.extract as extract_mod
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    known = Company(name="Hat Website GmbH", country="DE", website_domain="echte-firma.de",
+                    phone="05405 1234-0", postal_code="49134", street="Industriestr. 5")
+    blank = Company(name="Ohne Website GmbH", country="DE", email="info@fremde-domain.de",
+                    phone="0221 999888", postal_code="50667", street="Domplatz 1")
+    s.add_all([known, blank]); s.commit()
+    kid, bid = known.id, blank.id
+    s.close()
+
+    monkeypatch.setattr(fetchpage, "page_bundle",
+                        lambda domain, total_chars=9000: {
+                            "domain": domain, "home_url": f"https://{domain}",
+                            "text": "Wir bauen Fenster. Tel. 05405 1234-0", "pages": [], "chars": 36})
+    monkeypatch.setattr(extract_mod, "extract_facts", lambda text, model=None: {
+        "description_de": "Baut Fenster.", "products": ["Fenster"], "founded_year": 1952,
+        "employee_hint": None, "legal_form": "GmbH", "service_area": None,
+        "mentions_solarlux": True, "competitor_brands": [],
+        "evidence": {"description_de": "Wir bauen Fenster."}, "llm_model": "test-model"})
+
+    # (a) company that already has a website: kept, and facts extracted
+    res = service.enrich_company(kid, allow_search=False)
+    assert res["status"] == "enriched" and res["website_source"] == "sap"
+    s = temp_db.SessionLocal()
+    c = s.get(Company, kid)
+    assert c.website_domain == "echte-firma.de"          # untouched
+    assert c.description == "Baut Fenster." and c.founded_year == 1952
+    assert c.products == ["Fenster"]
+    s.close()
+    assert service.get_enrichment(kid)["fields"]["mentions_solarlux"] is True
+
+    # (b) blank company whose email domain canNOT be proven (page shows another
+    #     company's phone) -> parked for review, website NOT written
+    res_b = service.enrich_company(bid, allow_search=False)
+    assert res_b["status"] == "needs_review" and res_b["website"] is None
+    s = temp_db.SessionLocal()
+    assert not (s.get(Company, bid).website_domain or "")   # still blank
+    s.close()
+
+    # (c) a human approves it -> stored as manual, confidence 1.0
+    service.accept_candidate(bid, "fremde-domain.de")
+    s = temp_db.SessionLocal()
+    assert s.get(Company, bid).website_domain == "fremde-domain.de"
+    s.close()
+    enr = service.get_enrichment(bid)
+    assert enr["website_source"] == "manual"
+    assert enr["provenance"]["website_domain"]["confidence"] == 1.0
+
+
 def test_downgrade_resets_collected_ads(temp_db):
     """A recheck that DOWNGRADES an auto-confirmed page (page before, none now)
     must clear that page's collected ads/metric at the point the page is dropped

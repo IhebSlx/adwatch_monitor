@@ -255,6 +255,14 @@ def _apply_filters(stmt, f: dict):
                           if isinstance(values, list) else Company.resolution_status == values)
     if f.get("has_website"):
         stmt = stmt.where(Company.website_domain.is_not(None), Company.website_domain != "")
+    if f.get("no_website"):
+        # the enrichment target set: rows the Explorer can hand straight to an
+        # enrich job to have their website found
+        stmt = stmt.where(or_(Company.website_domain.is_(None), Company.website_domain == ""))
+    if f.get("enrichment_status"):
+        values = f["enrichment_status"]
+        stmt = stmt.where(Company.enrichment_status.in_(values) if isinstance(values, list)
+                          else Company.enrichment_status == values)
     # Identity fetch-readiness: a numeric page_id is what the Ad Library scrape
     # needs — "without" surfaces the ⚠ no-id rows (confirmed but not fetch-ready).
     if f.get("page_id_state") == "with":

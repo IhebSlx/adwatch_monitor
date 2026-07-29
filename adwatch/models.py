@@ -60,6 +60,19 @@ class Company(Base):
 
     website_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)  # e.g. 'solarlux.com' — used to resolve the Google Ads advertiser (no name search available there)
 
+    # ---- Enrichment (see enrich/ + models.CompanyEnrichment) — the few fields
+    # promoted onto Company because the Explorer filters/sorts and the PDF report
+    # use them directly. The full extracted blob + per-field provenance lives in
+    # CompanyEnrichment; these are a denormalised convenience copy. ----
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)          # 1-2 Sätze, from the company's own site
+    products: Mapped[list | None] = mapped_column(JSON, nullable=True)            # ['Fenster','Wintergarten',...]
+    founded_year: Mapped[int | None] = mapped_column(Integer, nullable=True)      # only when literally stated ('seit 1952')
+    employee_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)  # verbatim ('15 Mitarbeiter'), never an LLM estimate
+    enrichment_status: Mapped[str] = mapped_column(String(20), default="none")
+    # none = never enriched | enriched = data found & accepted | needs_review = a
+    # candidate website failed deterministic validation (a human decides)
+    # no_website_found = searched, nothing credible found | error
+
     page_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     page_name: Mapped[str | None] = mapped_column(String(300), nullable=True)   # matched Facebook page name
     page_url: Mapped[str | None] = mapped_column(String(400), nullable=True)
@@ -245,6 +258,42 @@ class ScheduleConfig(Base):
     send_day: Mapped[int] = mapped_column(Integer, default=0)    # Monday
     send_time: Mapped[str] = mapped_column(String(5), default="07:00")
     send_report: Mapped[str] = mapped_column(String(10), default="top5")  # top5 | full
+
+
+class CompanyEnrichment(Base):
+    """Everything enrichment learned about one company, plus WHY we believe it.
+
+    `fields` is the extracted blob (description, products, founded_year,
+    employee_hint, legal_form, service_area, mentions_solarlux,
+    competitor_brands, ...). `provenance` maps each field name ->
+    {source, confidence, evidence, fetched_at}, so any value can be audited and
+    a wrong one traced back — the same auditability that CompanyPage.evidence
+    gives identity. Enrichment NEVER overwrites SAP/human-entered data; it only
+    fills blanks (see enrich/service.py).
+
+    `website_source` records how the website itself was determined:
+      email_domain = derived from the SAP contact email (free, Tier 0)
+      serper       = found via a web search (Tier 1)
+      sap          = came with the import — authoritative, never replaced
+      manual       = a human set/approved it
+    """
+    __tablename__ = "company_enrichment"
+    __table_args__ = (UniqueConstraint("company_id", name="uq_enrichment_company"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
+
+    fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    website_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    website_candidates: Mapped[list | None] = mapped_column(JSON, nullable=True)  # rejected/unvalidated options, for the review queue
+    website_validated_by: Mapped[str | None] = mapped_column(String(40), nullable=True)  # phone | plz_street | name_tokens | none
+
+    status: Mapped[str] = mapped_column(String(20), default="none")   # mirrors Company.enrichment_status
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(60), nullable=True)   # which model produced `fields`
+    enriched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ReportDefinition(Base):

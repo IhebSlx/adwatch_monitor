@@ -176,6 +176,20 @@ def _migrate(engine) -> None:
                         :city, :phone, :email, :fax, :website,
                         :r0, :r1, :r2, :r3, :r4, :imported_at)
                 """), params)
+        # companies: enrichment fields promoted onto the row (see enrich/ and
+        # models.CompanyEnrichment). Additive + nullable; enrichment_status gets a
+        # DEFAULT so existing rows read as "never enriched" rather than NULL.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("description", "TEXT"), ("products", "JSON"),
+                ("founded_year", "INTEGER"), ("employee_hint", "VARCHAR(120)"),
+                ("enrichment_status", "VARCHAR(20) DEFAULT 'none'"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            conn.execute(text("UPDATE companies SET enrichment_status = 'none' "
+                              "WHERE enrichment_status IS NULL"))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
         cols = _existing_columns(conn, "fetch_jobs")
         if cols and "kind" not in cols:
