@@ -1705,7 +1705,8 @@
     } catch (e) { /* no data yet */ }
   }
 
-  async function loadCustomers() {
+  async function loadCustomers(append = false) {
+    if (!append) CUST.page = 1;   // any filter/sort reload starts from the top
     CUST.filters = currentCustomerFilters();
     const params = new URLSearchParams();
     Object.entries(CUST.filters).forEach(([k, v]) => {
@@ -1718,14 +1719,38 @@
     params.set("page_size", CUST.pageSize);
     const data = await api(`/api/customers?${params.toString()}`);
     CUST.total = data.total;
-    renderCustomers(data);
+    renderCustomers(data, append);
+    updateFilterBadge();
   }
 
-  function renderCustomers(data) {
-    CUST.lastRows = data.rows;
+  // Infinite scroll: when the sentinel below the table comes into view and more
+  // rows exist, the next page is fetched and APPENDED — no pager clicks.
+  let _custLoadingMore = false;
+  async function loadMoreCustomers() {
+    if (_custLoadingMore) return;
+    if ((CUST.page * CUST.pageSize) >= CUST.total) return;   // everything is loaded
+    _custLoadingMore = true;
+    try { CUST.page++; await loadCustomers(true); }
+    catch { CUST.page--; }
+    finally { _custLoadingMore = false; }
+  }
+
+  function updateFilterBadge() {
+    const badge = $("#custFilterBadge");
+    if (!badge) return;
+    const n = activeFilterSummary(currentCustomerFilters()).length;
+    badge.textContent = n || "";
+    badge.classList.toggle("hidden", !n);
+  }
+
+  function renderCustomers(data, append = false) {
+    CUST.lastRows = append ? (CUST.lastRows || []).concat(data.rows) : data.rows;
     const body = $("#customersTableBody");
     $("#customersEmptyHint").classList.toggle("hidden", data.total > 0);
-    body.innerHTML = data.rows.map(r => {
+    // Always render the FULL accumulated list (not just the new page): rebuilding
+    // the tbody keeps row event wiring single-bound — appending HTML and re-running
+    // the $$(...) wiring below would double-bind listeners on the older rows.
+    const html = CUST.lastRows.map(r => {
       const open = expandedPages.has(r.id);
       const website = r.website_domain
         ? `<a class="link" href="${esc(/^https?:\/\//.test(r.website_domain) ? r.website_domain : "https://" + r.website_domain)}" target="_blank">${esc(r.website_domain)}</a>`
@@ -1734,30 +1759,31 @@
       <tr data-id="${r.id}" class="${CUST.selected.has(r.id) ? "selected" : ""}">
         <td class="col-check"><input type="checkbox" class="cust-check" ${CUST.selected.has(r.id) ? "checked" : ""}></td>
         <td class="col-dot"><span class="dot dot-${r.resolution_status}" title="${esc(STATUS_LABEL[r.resolution_status] || r.resolution_status)}"></span></td>
-        <td>${esc(r.sap_number || "")}</td>
-        <td>${esc(r.name)}</td>
-        <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
-        <td class="num">${r.active_ads == null ? '<span class="muted">—</span>' : (r.active_ads > 0 ? `<strong>${r.active_ads}</strong>` : '<span class="muted">0</span>')}</td>
+        <td class="cell-name">${esc(r.name)}</td>
         <td>${customerStateChip(r.customer_state)}</td>
         <td class="num">${fitCell(r.fit_score)}</td>
-        <td>${esc(r.kv || "")}</td>
-        <td>${esc(r.segment || "")}</td>
-        <td>${esc(r.sub_segment || "")}</td>
-        <td>${esc(r.sales_channel || "")}</td>
-        <td>${esc(r.city || "")}</td>
-        <td>${esc(r.country || "")}</td>
+        <td class="num">${r.active_ads == null ? '<span class="muted">—</span>' : (r.active_ads > 0 ? `<strong>${r.active_ads}</strong>` : '<span class="muted">0</span>')}</td>
+        <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
         <td>${website}</td>
+        <td>${esc(r.city || "")}</td>
         <td class="num">${eur(r.revenue_y0)}</td>
-        <td class="num">${eur(r.revenue_y1)}</td>
-        <td class="num">${eur(r.revenue_y2)}</td>
-        <td class="num">${eur(r.revenue_y3)}</td>
-        <td class="num">${eur(r.revenue_y4)}</td>
+        <td class="col-extra">${esc(r.sap_number || "")}</td>
+        <td class="col-extra">${esc(r.kv || "")}</td>
+        <td class="col-extra">${esc(r.segment || "")}</td>
+        <td class="col-extra">${esc(r.sub_segment || "")}</td>
+        <td class="col-extra">${esc(r.sales_channel || "")}</td>
+        <td class="col-extra">${esc(r.country || "")}</td>
+        <td class="col-extra num">${eur(r.revenue_y1)}</td>
+        <td class="col-extra num">${eur(r.revenue_y2)}</td>
+        <td class="col-extra num">${eur(r.revenue_y3)}</td>
+        <td class="col-extra num">${eur(r.revenue_y4)}</td>
         <td><button class="btn btn-sm pages-toggle-row" data-id="${r.id}">${open ? "Hide" : "Pages"}</button></td>
       </tr>
       <tr class="pages-row ${open ? "" : "hidden"}" data-pages-for="${r.id}">
-        <td colspan="19"><div class="pages-body-inline" id="pages-${r.id}"></div></td>
+        <td colspan="21"><div class="pages-body-inline" id="pages-${r.id}"></div></td>
       </tr>`;
     }).join("");
+    body.innerHTML = html;
 
     $$(".cust-check", body).forEach(cb => cb.addEventListener("change", () => {
       const tr = cb.closest("tr"); const id = Number(tr.dataset.id);
@@ -1829,13 +1855,12 @@
       th.classList.toggle("sorted-desc", th.dataset.sort === CUST.sort && CUST.direction === "desc");
     });
 
-    const from = data.total ? (data.page - 1) * data.page_size + 1 : 0;
-    const to = Math.min(data.page * data.page_size, data.total);
-    $("#custTotal").textContent = `${data.total.toLocaleString("de-DE")} companies`;
-    $("#custPageInfo").textContent = `${from}–${to} of ${data.total.toLocaleString("de-DE")}`;
-    $("#custPrevBtn").disabled = data.page <= 1;
-    $("#custNextBtn").disabled = to >= data.total;
-    $("#custSelectPage").checked = data.rows.length > 0 && data.rows.every(r => CUST.selected.has(r.id));
+    const shown = CUST.lastRows.length;
+    $("#custTotal").textContent = `${data.total.toLocaleString("de-DE")} Firmen`;
+    $("#custPageInfo").textContent = data.total > shown
+      ? `${shown.toLocaleString("de-DE")} von ${data.total.toLocaleString("de-DE")} geladen — weiter scrollen lädt mehr…`
+      : (data.total ? `alle ${data.total.toLocaleString("de-DE")} geladen` : "");
+    $("#custSelectPage").checked = CUST.lastRows.length > 0 && CUST.lastRows.every(r => CUST.selected.has(r.id));
     updateSelectionUI();
   }
 
@@ -2397,8 +2422,34 @@
       CUST.page = 1; loadCustomers();
     });
 
-    $("#custPrevBtn").addEventListener("click", () => { if (CUST.page > 1) { CUST.page--; loadCustomers(); } });
-    $("#custNextBtn").addEventListener("click", () => { CUST.page++; loadCustomers(); });
+    // Infinite scroll replaces the pager: the sentinel under the table triggers
+    // the next page ~600px before it becomes visible. IntersectionObserver is
+    // the primary signal; a throttled scroll listener backs it up because IO
+    // callbacks are throttled/paused in backgrounded or embedded windows.
+    const _sentinelNear = () => {
+      const el = $("#custScrollSentinel");
+      if (!el || !$("#tab-customers").classList.contains("active")) return false;
+      return el.getBoundingClientRect().top < window.innerHeight + 600;
+    };
+    new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) loadMoreCustomers();
+    }, { rootMargin: "600px" }).observe($("#custScrollSentinel"));
+    let _scrollTick = false;
+    window.addEventListener("scroll", () => {
+      if (_scrollTick) return;
+      _scrollTick = true;
+      setTimeout(() => { _scrollTick = false; if (_sentinelNear()) loadMoreCustomers(); }, 150);
+    }, { passive: true });
+
+    // advanced-filter panel + secondary-columns toggles
+    $("#custMoreFiltersBtn").addEventListener("click", () => {
+      const nowHidden = $("#custMoreFilters").classList.toggle("hidden");
+      $("#custMoreFiltersBtn").firstChild.textContent = nowHidden ? "Mehr Filter ▾ " : "Mehr Filter ▴ ";
+    });
+    $("#custColsBtn").addEventListener("click", () => {
+      const on = $("#customersTable").classList.toggle("show-extra");
+      $("#custColsBtn").textContent = on ? "Weniger Spalten ▴" : "Mehr Spalten ▾";
+    });
 
     $$("#customersTable th[data-sort]").forEach(th => th.addEventListener("click", () => {
       const key = th.dataset.sort;
@@ -2740,10 +2791,18 @@
     cancelled: "Cancelled", interrupted: "Interrupted", cancelling: "Cancelling…",
   };
 
+  let JOBS_EXPANDED = false;
+
   function renderJobs(jobList) {
     const box = $("#jobsList");
-    if (!jobList.length) { box.innerHTML = `<p class="hint">No jobs yet — select companies above and pick an action.</p>`; return; }
-    box.innerHTML = jobList.map(j => {
+    if (!jobList.length) { box.innerHTML = `<p class="hint">Noch keine Jobs — oben Firmen auswählen und eine Aktion starten.</p>`; return; }
+    // Day-to-day only the CURRENT job matters: show anything still live, else
+    // just the newest — the older history sits behind one expander instead of
+    // a wall of cards.
+    const live = jobList.filter(j => ["running", "queued", "cancelling"].includes(j.status));
+    const shownJobs = JOBS_EXPANDED ? jobList : (live.length ? live : jobList.slice(0, 1));
+    const hiddenCount = jobList.length - shownJobs.length;
+    box.innerHTML = shownJobs.map(j => {
       const pct = j.total ? Math.round(100 * j.completed / j.total) : 0;
       const canResume = j.status === "interrupted" || j.status === "queued";
       const canCancel = j.status === "running" || j.status === "queued";
@@ -2769,7 +2828,10 @@
         <div class="job-progress-track"><div class="job-progress-fill" style="width:${pct}%"></div></div>
         <div class="job-log">${logTail.map(e => `<div>${esc(e.text)}</div>`).join("")}</div>
       </div>`;
-    }).join("");
+    }).join("")
+      + (hiddenCount > 0 ? `<button class="btn btn-sm btn-ghost" id="jobsMoreBtn">${hiddenCount} ältere Jobs anzeigen ▾</button>` : "")
+      + (JOBS_EXPANDED && jobList.length > 1 ? `<button class="btn btn-sm btn-ghost" id="jobsMoreBtn">Nur aktuellen Job anzeigen ▴</button>` : "");
+    $("#jobsMoreBtn")?.addEventListener("click", () => { JOBS_EXPANDED = !JOBS_EXPANDED; renderJobs(jobList); });
 
     $$(".job-resume-btn", box).forEach(btn => btn.addEventListener("click", async () => {
       const jobId = Number(btn.closest(".job-item").dataset.job);

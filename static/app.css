@@ -776,6 +776,18 @@ a.link:hover { text-decoration: underline; }
 .icp-feature-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .icp-feature-excluded { opacity: .55; }
 
+/* ---- UX pass: unified add card, filter badge, column priority, infinite scroll ---- */
+.add-company-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.add-divider { color: var(--muted); font-size: 12px; flex: 0 0 auto; }
+.filter-badge {
+  display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 3px;
+  border-radius: 999px; background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 700;
+}
+#customersTable .col-extra { display: none; }
+#customersTable.show-extra .col-extra { display: table-cell; }
+#customersTable .cell-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.scroll-sentinel { text-align: center; padding: 14px 0 6px; color: var(--muted); font-size: 12.5px; }
+
 /* ============================== responsive ============================== */
 @media (max-width: 960px) {
   .sidebar {
