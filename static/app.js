@@ -1309,40 +1309,31 @@
       </div>`;
     }).join("");
     $("#icpProfileCard").classList.remove("hidden");
-    $("#icpApplyBtn").classList.remove("hidden");
   }
 
+  // ONE action: compute the profile AND immediately score every company with
+  // it — after "berechnen" the Fit column is simply there, no second click.
   async function icpPreview() {
     const btn = $("#icpPreviewBtn");
-    btn.disabled = true; btn.textContent = "Berechne…";
+    btn.disabled = true; btn.textContent = "Berechne & bewerte…";
     try {
       ICP_FILTERS = icpWinnersFilters();
       const p = await api("/api/icp/preview", "POST", { filters: ICP_FILTERS });
       if (p.winners_count < 5) {
         $("#icpWinnersHint").textContent =
           `Nur ${p.winners_count} Firmen im Gewinner-Filter — zu wenige für ein belastbares Profil.`;
-        $("#icpApplyBtn").classList.add("hidden");
         return;
       }
       $("#icpWinnersHint").textContent = "";
       renderIcpFeatures(p);
+      const res = await api("/api/icp/apply", "POST", { filters: ICP_FILTERS || {} });
+      toast(`✓ Profil angewendet — ${res.companies_scored.toLocaleString("de-DE")} Firmen bewertet. `
+        + `Die Fit-Spalte im Companies-Tab ist aktuell.`, "info");
+      await loadIcpStatus();
+      loadCustomers().catch(() => {});   // Fit column changed
     } catch (e) {
       toast(`Profil fehlgeschlagen: ${e.message}`, "error");
-    } finally { btn.disabled = false; btn.textContent = "Profil berechnen"; }
-  }
-
-  async function icpApply() {
-    const btn = $("#icpApplyBtn");
-    btn.disabled = true; btn.textContent = "Bewerte alle Firmen…";
-    try {
-      const res = await api("/api/icp/apply", "POST", { filters: ICP_FILTERS || {} });
-      toast(`✓ ${res.companies_scored.toLocaleString("de-DE")} Firmen bewertet `
-        + `(${res.with_target_score} mit Ziel-Score).`, "info");
-      await loadIcpStatus();
-      loadCustomers().catch(() => {});   // Fit column may have changed
-    } catch (e) {
-      toast(`Anwenden fehlgeschlagen: ${e.message}`, "error");
-    } finally { btn.disabled = false; btn.textContent = "✓ Anwenden & alle Firmen bewerten"; }
+    } finally { btn.disabled = false; btn.textContent = "Profil berechnen & anwenden"; }
   }
 
   async function loadIcpStatus() {
@@ -2509,9 +2500,8 @@
     $("#saveReportSaveBtn").addEventListener("click", saveReportDef);
     $("#saveReportCancelBtn").addEventListener("click", () => $("#saveReportPanel").classList.add("hidden"));
 
-    // Profil (ICP) tab
+    // ICP tab
     $("#icpPreviewBtn").addEventListener("click", icpPreview);
-    $("#icpApplyBtn").addEventListener("click", icpApply);
 
     // selection actions + drawer chrome
     $("#custIdentityBtn").addEventListener("click", runIdentityAction);

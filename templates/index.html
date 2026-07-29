@@ -36,7 +36,7 @@
       </button>
       <button class="tab" data-tab="profil">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-        Profil
+        ICP
       </button>
       <button class="tab" data-tab="reports">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15h6M9 11h2"/></svg>
@@ -360,7 +360,7 @@
               <th>Facebook Seite</th>
               <th class="num" title="Aktive Anzeigen beim letzten Abruf">Aktive Anzeigen</th>
               <th data-sort="customer_state" title="Kundenstatus aus den Umsatzspalten">Kunde</th>
-              <th class="num" data-sort="fit_score" title="Fit-Score 0–100: wie sehr diese Firma dem idealen Kundenprofil entspricht (Profil-Tab)">Fit</th>
+              <th class="num" data-sort="fit_score" title="Fit-Score 0–100: wie sehr diese Firma dem idealen Kundenprofil entspricht (ICP-Tab)">Fit</th>
               <th>KV</th>
               <th data-sort="segment">Segment</th>
               <th data-sort="sub_segment">Untersegment</th>
@@ -399,7 +399,7 @@
     <!-- ================= TAB: Profil (ICP) ================= -->
     <section id="tab-profil" class="tab-panel">
       <header class="page-head">
-        <h1>Ideales Kundenprofil</h1>
+        <h1>ICP — Ideales Kundenprofil</h1>
         <p>Wie sehen die Firmen aus, die bei uns kaufen — und welche der übrigen passen am besten dazu?</p>
       </header>
 
@@ -412,8 +412,7 @@
             <option value="default">Aktive Käufer (aktiv + neu)</option>
             <option value="filter">Aktueller Companies-Filter</option>
           </select>
-          <button id="icpPreviewBtn" class="btn btn-primary">Profil berechnen</button>
-          <button id="icpApplyBtn" class="btn hidden" title="Speichert das Profil und bewertet ALLE Firmen (Fit-Score 0–100) — reine lokale Berechnung, keine Kosten">✓ Anwenden &amp; alle Firmen bewerten</button>
+          <button id="icpPreviewBtn" class="btn btn-primary" title="Berechnet das Profil UND bewertet sofort alle Firmen (Fit-Spalte im Companies-Tab) — reine lokale Berechnung, keine Kosten">Profil berechnen &amp; anwenden</button>
         </div>
         <p class="hint" id="icpWinnersHint"></p>
       </div>
