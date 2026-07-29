@@ -38,6 +38,10 @@ NON_COMPANY_DOMAINS = {
     "ebay.de", "etsy.com", "houzz.de", "myhammer.de", "check24.de", "wer-zu-wem.de",
     "kununu.com", "indeed.com", "stepstone.de", "meinestadt.de", "yelp.de",
     "provenexpert.com", "golocal.de", "cylex.de", "branchenbuch.de", "marktplatz.de",
+    # trade portals found in live testing — exact registrable-domain matches, so
+    # 'mueller-metallbau.com' is NOT caught, only the portal 'metallbau.com' is
+    "dashandwerk.de", "firminform.de", "metallbau.com", "openregister.de",
+    "registercheck.de", "dastelefonbuch.de",
 }
 
 _DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
@@ -55,6 +59,13 @@ def normalize_domain(value: str | None) -> str | None:
     if s.startswith("www."):
         s = s[4:]
     if not s or "." not in s or not _DOMAIN_RE.match(s):
+        return None
+    # The SAP typo pattern 'http.x.de' (someone typed 'http.' instead of
+    # 'http://') LOOKS like a valid hostname but never is one — found live as an
+    # unreachable-crawl error in the 112-company pilot. Deliberately rejected
+    # here (not silently fixed): a malformed value must go through salvage_domain
+    # + validation, so the repair is PROVEN before anything trusts it.
+    if s.split(".", 1)[0] in ("http", "https"):
         return None
     return s
 
@@ -98,11 +109,17 @@ def salvage_domain(value: str | None) -> str | None:
     # 'www.x.de/foo.html'.
     for cand in _DOMAINISH_RE.findall(s) or []:
         cand = cand.strip(".")
-        if cand.startswith("www."):
-            cand = cand[4:]
-        first = cand.split(".")[0]
+        # strip junk leading labels — 'www.' and the 'http.'/'https.' typo label
+        # ('http.terrassen-freye.de' -> 'terrassen-freye.de')
+        changed = True
+        while changed:
+            changed = False
+            for junk in ("www.", "http.", "https."):
+                if cand.startswith(junk):
+                    cand = cand[len(junk):]
+                    changed = True
         tld = cand.rsplit(".", 1)[-1]
-        if first in ("http", "https") or not (2 <= len(tld) <= 24) or not tld.isalpha():
+        if "." not in cand or not (2 <= len(tld) <= 24) or not tld.isalpha():
             continue
         if tld in ("html", "htm", "php", "asp", "aspx", "jsp", "pdf", "jpg", "jpeg",
                    "png", "gif", "svg", "css", "js", "xml", "json"):

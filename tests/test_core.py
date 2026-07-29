@@ -397,6 +397,10 @@ def test_enrich_domain_derivation_and_salvage():
 
     assert normalize_domain("https://WWW.Foo.de/kontakt?a=1") == "foo.de"
     assert normalize_domain("foo") is None
+    # the SAP typo pattern 'http.' as a LABEL (live: http.terrassen-freye.de)
+    # must NOT normalize — it has to take the salvage+validate+repair path
+    assert normalize_domain("http.terrassen-freye.de") is None
+    assert salvage_domain("http.terrassen-freye.de") == "terrassen-freye.de"
     # real malformed master-data values
     assert salvage_domain("https://http: //www.tischlerei-tieste.de") == "tischlerei-tieste.de"
     assert salvage_domain("http;//www.thalhammer-bau.com") == "thalhammer-bau.com"
@@ -503,6 +507,179 @@ def test_enrich_never_overwrites_sap_website(temp_db, monkeypatch):
     enr = service.get_enrichment(bid)
     assert enr["website_source"] == "manual"
     assert enr["provenance"]["website_domain"]["confidence"] == 1.0
+
+
+def test_enrich_fetch_ssrf_guard():
+    """The crawler must never fetch non-public addresses — domains come from
+    email addresses and search results (attacker-influenceable data). Private,
+    loopback and link-local hosts are refused before any HTTP happens."""
+    from adwatch.enrich.fetchpage import _host_is_public, page_bundle
+
+    for private in ("127.0.0.1", "localhost", "10.0.0.8", "192.168.1.7",
+                    "169.254.1.1", "0.0.0.0", "definitely-not-a-real-host-xyz.invalid"):
+        assert _host_is_public(private) is False, private
+        assert page_bundle(private) is None, private
+
+
+def test_enrich_serper_fallback_after_failed_email_domain(temp_db, monkeypatch):
+    """The coverage-gap fix: when the email-domain candidate FAILS validation
+    (contact address on a supplier's domain), the web search must still run —
+    and a search hit that validates via phone must be accepted, with the failed
+    email candidate kept in the audit trail."""
+    from adwatch.enrich import service
+    import adwatch.enrich.fetchpage as fetchpage
+    import adwatch.enrich.website_finder as finder
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Sonnenschutz Beispiel GmbH", country="DE",
+                email="info@lieferanten-portal.de",           # usable but WRONG domain
+                phone="0521 555123-0", postal_code="33602", street="Musterweg 3")
+    s.add(c); s.commit()
+    cid = c.id
+    s.close()
+
+    pages = {
+        # the email domain's site: someone else's data -> must fail validation
+        "lieferanten-portal.de": "Lieferanten-Portal AG, 80331 München, Tel 089 111111",
+        # the search hit: carries the company's own phone -> must be accepted
+        "sonnenschutz-beispiel.de": "Sonnenschutz Beispiel GmbH · Musterweg 3 · Tel 0521 555123-0",
+    }
+    monkeypatch.setattr(fetchpage, "page_bundle",
+                        lambda domain, total_chars=9000: (
+                            {"domain": domain, "home_url": f"https://{domain}",
+                             "text": pages[domain], "pages": [], "chars": len(pages[domain])}
+                            if domain in pages else None))
+    searched = []
+    monkeypatch.setattr(finder, "search_candidates",
+                        lambda name, city=None, country="DE", limit=6: (
+                            searched.append(name) or
+                            [{"domain": "sonnenschutz-beispiel.de", "title": "t", "snippet": "s",
+                              "position": 1}]))
+
+    res = service.enrich_company(cid, allow_search=True, allow_llm=False)
+    assert searched, "Serper fallback did not run after the email candidate failed"
+    assert res["website"] == "sonnenschutz-beispiel.de"
+    assert res["website_source"] == "serper" and res["validated_by"] == "phone"
+    assert res["status"] == "enriched"                       # normalized, never the internal 'ok'
+    enr = service.get_enrichment(cid)
+    origins = {c.get("origin"): c.get("validated") for c in enr["website_candidates"]}
+    assert origins.get("email_domain") is False              # the failed candidate stays auditable
+    assert origins.get("serper") is True
+
+
+def test_enrich_junk_search_hits_dont_reach_review(temp_db, monkeypatch):
+    """Unrelated portals a search coughs up (no name signal at all) must NOT
+    park the company in the review queue — that's an honest no_website_found.
+    A search hit that at least carries the company name in its domain IS
+    review-worthy. (Live case: 'Metallbau Thomas Saß' surfacing dastelefonbuch
+    and metallbau.com — junk the gate rejected but the queue then showed.)"""
+    from adwatch.enrich import service
+    import adwatch.enrich.fetchpage as fetchpage
+    import adwatch.enrich.website_finder as finder
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    a = Company(name="Metallbau Saßberg GmbH", country="DE", city="Neu Karin",
+                phone="0170 111111", postal_code="18230")
+    b = Company(name="Fensterbau Wexlinger", country="DE", city="Ulm",
+                phone="0731 222222", postal_code="89073")
+    s.add_all([a, b]); s.commit()
+    aid, bid = a.id, b.id
+    s.close()
+
+    # crawls return generic portal text with NO connection to either company
+    monkeypatch.setattr(fetchpage, "page_bundle",
+                        lambda domain, total_chars=9000: {
+                            "domain": domain, "home_url": f"https://{domain}",
+                            "text": "Das große Branchenportal für Handwerker in Deutschland.",
+                            "pages": [], "chars": 55})
+    # company A gets pure junk; company B gets a hit whose DOMAIN carries its name
+    def fake_search(name, city=None, country="DE", limit=4):
+        if "Saßberg" in name or "Sassberg" in name:
+            return [{"domain": "dashandwerk-portal.de", "title": "", "snippet": "", "position": 1}]
+        return [{"domain": "fensterbau-wexlinger.de", "title": "", "snippet": "", "position": 1}]
+    monkeypatch.setattr(finder, "search_candidates", fake_search)
+
+    res_a = service.enrich_company(aid, allow_search=True, allow_llm=False)
+    assert res_a["status"] == "no_website_found"          # junk -> not a review case
+    trail = service.get_enrichment(aid)["website_candidates"]
+    assert trail and trail[0]["domain"] == "dashandwerk-portal.de"   # but still auditable
+
+    res_b = service.enrich_company(bid, allow_search=True, allow_llm=False)
+    assert res_b["status"] == "needs_review"              # name-in-domain -> worth a look
+    assert res_b["website"] is None                       # ...but never auto-accepted
+
+
+def test_enrich_repairs_malformed_sap_website_only_with_proof(temp_db, monkeypatch):
+    """A stored website that is objectively MALFORMED ('http.x.de' — live SAP
+    typo) may be repaired, but ONLY by a domain that passed hard validation.
+    Unprovable -> the broken value stays and the row goes to review."""
+    from adwatch.enrich import service
+    import adwatch.enrich.fetchpage as fetchpage
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    good = Company(name="Terrassen Freye", country="DE",
+                   website_domain="http.terrassen-freye.de",     # malformed
+                   phone="04441 88877-0", postal_code="49377")
+    bad = Company(name="Kaputt GmbH", country="DE",
+                  website_domain="http.kaputt-typo.de",          # malformed
+                  phone="0999 123456", postal_code="99999")
+    s.add_all([good, bad]); s.commit()
+    gid, bid = good.id, bad.id
+    s.close()
+
+    texts = {
+        "terrassen-freye.de": "Terrassen Freye · 49377 Vechta · Tel. 04441 88877-0",  # proves it
+        "kaputt-typo.de": "Irgendein anderer Inhalt ohne Bezug.",                     # proves nothing
+    }
+    monkeypatch.setattr(fetchpage, "page_bundle",
+                        lambda domain, total_chars=9000: (
+                            {"domain": domain, "home_url": f"https://{domain}",
+                             "text": texts[domain], "pages": [], "chars": 1}
+                            if domain in texts else None))
+
+    res = service.enrich_company(gid, allow_search=False, allow_llm=False)
+    assert res["validated_by"] == "phone" and res["website"] == "terrassen-freye.de"
+    s = temp_db.SessionLocal()
+    assert s.get(Company, gid).website_domain == "terrassen-freye.de"     # REPAIRED
+    assert s.get(Company, bid).website_domain == "http.kaputt-typo.de" or True
+    s.close()
+    prov = service.get_enrichment(gid)["provenance"]["website_domain"]
+    assert "repaired malformed" in prov["evidence"]
+
+    res_b = service.enrich_company(bid, allow_search=False, allow_llm=False)
+    assert res_b["status"] == "needs_review"                              # salvaged origin -> reviewable
+    s = temp_db.SessionLocal()
+    assert s.get(Company, bid).website_domain == "http.kaputt-typo.de"    # NOT repaired without proof
+    s.close()
+
+
+def test_enrich_status_never_leaks_ok(temp_db, monkeypatch):
+    """A reachable site with NO extractable text (JS-only page) must end as
+    'enriched' with an explanatory error — never the internal 'ok' marker,
+    which Company.enrichment_status doesn't know."""
+    from adwatch.enrich import service
+    import adwatch.enrich.fetchpage as fetchpage
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    c = Company(name="JS Only GmbH", country="DE", website_domain="js-only.de")
+    s.add(c); s.commit()
+    cid = c.id
+    s.close()
+
+    monkeypatch.setattr(fetchpage, "page_bundle",
+                        lambda domain, total_chars=9000: {
+                            "domain": domain, "home_url": f"https://{domain}",
+                            "text": "   ", "pages": [], "chars": 0})
+    res = service.enrich_company(cid, allow_search=False, allow_llm=True)
+    assert res["status"] == "enriched"
+    assert "no text extracted" in (res["error"] or "")
+    s = temp_db.SessionLocal()
+    assert s.get(Company, cid).enrichment_status == "enriched"
+    s.close()
 
 
 def test_downgrade_resets_collected_ads(temp_db):

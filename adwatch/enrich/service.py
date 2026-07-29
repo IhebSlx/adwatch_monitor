@@ -60,40 +60,68 @@ def _resolve_website(comp: dict, allow_search: bool) -> dict:
         return {"domain": existing, "source": "sap", "validated_by": "sap",
                 "candidates": [], "bundle": bundle, "status": "ok"}
 
-    # Build the candidate list cheapest-first: a salvaged SAP typo, then the
-    # email domain, then (optionally) search hits.
-    candidates: list[dict] = []
-    if existing:
-        candidates.append({"domain": existing, "origin": "sap_salvaged"})
-    derived = domain_from_email(comp.get("email"))
-    if derived and derived not in [c["domain"] for c in candidates]:
-        candidates.append({"domain": derived, "origin": "email_domain"})
-    if allow_search and not candidates:
-        try:
-            for hit in website_finder.search_candidates(
-                    comp.get("name") or "", comp.get("city"), comp.get("country") or "DE"):
-                if hit["domain"] not in [c["domain"] for c in candidates]:
-                    candidates.append({"domain": hit["domain"], "origin": "serper",
-                                       "title": hit.get("title"), "snippet": hit.get("snippet")})
-        except Exception as exc:  # noqa: BLE001 — a failed search is not a failed company
-            candidates.append({"domain": None, "origin": "serper_error", "error": str(exc)[:200]})
-
-    # Try each candidate: crawl once, validate against SAP master data.
     tried: list[dict] = []
-    for cand in candidates:
-        dom = cand.get("domain")
-        if not dom:
-            tried.append(cand)
-            continue
-        bundle = fetchpage.page_bundle(dom)
-        result = validate.validate_site(comp, dom, (bundle or {}).get("text"))
-        tried.append({**cand, "validated": result["ok"], "matched_by": result["matched_by"],
-                      "signals": result["signals"], "reachable": bundle is not None})
-        if result["ok"]:
-            return {"domain": dom, "source": cand["origin"], "validated_by": result["matched_by"],
-                    "candidates": tried, "bundle": bundle, "status": "ok"}
 
-    status = "needs_review" if any(c.get("domain") for c in tried) else "no_website_found"
+    def _try(candidates: list[dict]) -> dict | None:
+        """Crawl + validate each candidate; first proven one wins."""
+        for cand in candidates:
+            dom = cand.get("domain")
+            if not dom or dom in {t.get("domain") for t in tried}:
+                if not dom:
+                    tried.append(cand)     # keep e.g. the serper_error marker for the audit trail
+                continue
+            bundle = fetchpage.page_bundle(dom)
+            result = validate.validate_site(comp, dom, (bundle or {}).get("text"))
+            tried.append({**cand, "validated": result["ok"], "matched_by": result["matched_by"],
+                          "signals": result["signals"], "reachable": bundle is not None})
+            if result["ok"]:
+                return {"domain": dom, "source": cand["origin"], "validated_by": result["matched_by"],
+                        "candidates": tried, "bundle": bundle, "status": "ok"}
+        return None
+
+    # Stage 1 — free local candidates: a salvaged SAP typo, then the email domain.
+    local: list[dict] = []
+    if existing:
+        local.append({"domain": existing, "origin": "sap_salvaged"})
+    derived = domain_from_email(comp.get("email"))
+    if derived and derived not in [c["domain"] for c in local]:
+        local.append({"domain": derived, "origin": "email_domain"})
+    hit = _try(local)
+    if hit:
+        return hit
+
+    # Stage 2 — web search. Runs whenever stage 1 didn't PROVE a site — including
+    # when an email-domain candidate existed but failed validation (e.g. the
+    # contact address sits on a supplier's domain): that company still deserves
+    # a search before being parked for review.
+    if allow_search:
+        search_hits: list[dict] = []
+        try:
+            for h in website_finder.search_candidates(
+                    comp.get("name") or "", comp.get("city"), comp.get("country") or "DE"):
+                search_hits.append({"domain": h["domain"], "origin": "serper",
+                                    "title": h.get("title"), "snippet": h.get("snippet")})
+        except Exception as exc:  # noqa: BLE001 — a failed search is not a failed company
+            tried.append({"domain": None, "origin": "serper_error", "error": str(exc)[:200]})
+        hit = _try(search_hits)
+        if hit:
+            return hit
+
+    # Only PLAUSIBLY-RELATED failures deserve a human's time. A candidate that
+    # came from the company's own data (its email / its SAP typo) is always
+    # review-worthy; a search hit is only review-worthy when at least a name
+    # signal connects it to the company. Unrelated portals a search coughed up
+    # (all signals false) are recorded for the audit trail but do NOT put the
+    # company into the review queue — that's an honest "no website found".
+    def _review_worthy(t: dict) -> bool:
+        if not t.get("domain"):
+            return False
+        if t.get("origin") in ("email_domain", "sap_salvaged"):
+            return True
+        sig = t.get("signals") or {}
+        return bool(sig.get("name_in_text") or sig.get("name_in_domain"))
+
+    status = "needs_review" if any(_review_worthy(t) for t in tried) else "no_website_found"
     return {"domain": None, "source": None, "validated_by": None,
             "candidates": tried, "bundle": None, "status": status}
 
@@ -138,6 +166,15 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
         error = f"website unreachable: {site['domain']}"
         status = "error" if had_website else site["status"]
 
+    # A settled website must never leave the internal 'ok' marker behind —
+    # Company.enrichment_status only knows {none, enriched, needs_review,
+    # no_website_found, error}. Reachable-but-textless sites (e.g. pure-JS
+    # pages our crawler can't render) land here: website kept, no facts.
+    if site["domain"] and status == "ok":
+        status = "enriched"
+        if not (bundle and (bundle.get("text") or "").strip()):
+            error = error or f"no text extracted from {site['domain']} (JS-only page?)"
+
     # ---- persist -------------------------------------------------------------
     with SessionLocal() as s:
         c = s.get(Company, company_id)
@@ -145,12 +182,20 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             raise ValueError("Company disappeared mid-enrichment")
 
         # A website is only WRITTEN into master data when the column was empty —
-        # SAP's own value (even a typo'd one) is never replaced automatically.
-        if site["domain"] and not (c.website_domain or "").strip():
+        # with ONE principled exception: a stored value that is objectively
+        # MALFORMED (normalize_domain rejects it, e.g. 'http.terrassen-freye.de',
+        # 'www.x .de') may be REPAIRED, but only by a domain that passed the
+        # deterministic validation gate. A working SAP value is never replaced.
+        raw = (c.website_domain or "").strip()
+        _hard_proof = site["validated_by"] in ("phone", "plz_street", "plz_name",
+                                               "domain_plus_name", "manual")
+        if site["domain"] and (not raw or (normalize_domain(raw) is None and _hard_proof)):
+            note = (f"repaired malformed value {raw!r}, validated by {site['validated_by']}"
+                    if raw else f"validated by {site['validated_by']}")
             c.website_domain = site["domain"]
             provenance["website_domain"] = _prov(
                 site["source"] or "unknown", _CONFIDENCE.get(site["validated_by"] or "", 0.5),
-                f"validated by {site['validated_by']}")
+                note)
 
         # Enrichment-owned columns: safe to refresh on every run.
         if fields.get("description_de"):

@@ -1907,9 +1907,15 @@
         e.enriched_at ? ` · ${esc(e.enriched_at)}` : ""}${e.error ? ` · <span class="status-error">${esc(e.error)}</span>` : ""}</p>`;
   }
 
-  // needs_review: show each unproven candidate with why it failed + accept/reject
+  // needs_review: show each unproven candidate with why it failed + accept/reject.
+  // Same plausibility rule as the backend: own-data candidates always, search
+  // hits only when a name signal ties them to the company — unrelated portals
+  // stay in the audit blob but are not offered for review.
   function enrichCandidatesHtml(e) {
-    const cands = (e.website_candidates || []).filter(c => c && c.domain);
+    const worthy = c => c && c.domain && (
+      ["email_domain", "sap_salvaged"].includes(c.origin)
+      || c.signals?.name_in_text || c.signals?.name_in_domain);
+    const cands = (e.website_candidates || []).filter(worthy);
     if (e.status !== "needs_review" || !cands.length) return "";
     return `<div class="enrich-review">
       <p class="hint"><b>Website-Vorschläge</b> — nicht automatisch bestätigt, weil Telefon/PLZ/Straße auf der Seite nicht gefunden wurden. Bitte prüfen:</p>
