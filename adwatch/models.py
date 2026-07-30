@@ -79,6 +79,11 @@ class Company(Base):
     # year) | lapsed (bought before, nothing this year) | never (no revenue on
     # record). Stored so the Explorer can filter/sort on it directly.
     customer_state: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    # Own group / intercompany entity (Linara, NanaWall, Solarlux Vertriebsbüros,
+    # subsidiaries). They appear as ordinary customers with large revenue, so
+    # without this flag the ICP learns to love the group's own companies and
+    # recommends them as acquisition targets. Never a winner, never a target.
+    is_intercompany: Mapped[bool] = mapped_column(Boolean, default=False)
     fit_score: Mapped[float | None] = mapped_column(Float, nullable=True)          # 0-100 vs the applied ICP
     opportunity_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-100, Divergenz (needs ad data)
     target_score: Mapped[float | None] = mapped_column(Float, nullable=True)       # combined priority (see icp.apply)

@@ -179,7 +179,13 @@ def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
         filters["exclude_segment"] = already + [s for s in WINNER_EXCLUDED_SEGMENTS if s not in already]
 
     with SessionLocal() as s:
-        winners = list(s.scalars(_apply_filters(select(Company), filters)))
+        stmt = _apply_filters(select(Company), filters)
+        if not filters.get("ids"):
+            # own-group companies never define the profile (see
+            # customers.INTERCOMPANY_NAME_PATTERNS) — they are large, look ideal,
+            # and would teach the model to seek out its own subsidiaries
+            stmt = stmt.where(Company.is_intercompany.is_(False))
+        winners = list(s.scalars(stmt))
     ads = _ad_presence_map([c.id for c in winners]) if winners else {}
 
     dists: dict[str, dict] = {}
@@ -285,7 +291,11 @@ def apply_profile(filters: dict | None = None, name: str = "ICP") -> dict:
             c.fit_score = fit
             c.fit_breakdown = {"profile_id": profile_id, "features": breakdown} if breakdown else None
             c.opportunity_score = opp.get(c.id)
-            if fit is not None and c.opportunity_score is not None:
+            # An own-group company can never be "acquired" — it keeps its
+            # descriptive scores but is removed from the ranked call list.
+            if c.is_intercompany:
+                c.target_score = None
+            elif fit is not None and c.opportunity_score is not None:
                 c.target_score = round((fit * c.opportunity_score) ** 0.5, 1)
                 with_target += 1
             else:

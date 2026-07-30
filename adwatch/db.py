@@ -197,6 +197,7 @@ def _migrate(engine) -> None:
                 ("customer_state", "VARCHAR(12)"), ("fit_score", "FLOAT"),
                 ("opportunity_score", "FLOAT"), ("target_score", "FLOAT"),
                 ("fit_breakdown", "JSON"), ("scores_updated_at", "DATETIME"),
+                ("is_intercompany", "BOOLEAN DEFAULT 0"),
             ]:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))

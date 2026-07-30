@@ -804,6 +804,50 @@ def test_icp_winners_never_include_consumers(temp_db):
     assert p3["winners_count"] == len(consumer_ids)
 
 
+def test_intercompany_never_winner_never_target(temp_db):
+    """Own-group entities (Linara, NanaWall, Solarlux Vertriebsbüros) appear as
+    ordinary large customers. Confirmed live: Linara Kaufbeuren (EUR 1.35M) was
+    the biggest 'customer' and ranked #3 in the target list, and 5 Linara rows
+    were shaping the profile. They must never be a winner nor a target."""
+    from adwatch import customers
+    from adwatch.insights import icp
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    assert customers.looks_intercompany("Linara Kaufbeuren GmbH")
+    assert customers.looks_intercompany("Mike Morgenstern Solarlux Vertriebsbüro")
+    assert not customers.looks_intercompany("Serin Bauelemente")
+
+    s = temp_db.SessionLocal()
+    # deliberately VARIED winners: if every winner shared one value, the feature
+    # would be dropped as "nicht trennscharf" and nothing would be comparable
+    for i in range(6):
+        s.add(Company(name=f"Echter Haendler {i}", country="DE",
+                      segment="Handel" if i < 4 else "Verarbeiter",
+                      postal_code="49134" if i < 4 else "80331",
+                      revenue_y0=50000, revenue_y1=40000))
+    s.add(Company(name="Linara Teststadt GmbH", country="DE", segment="Handel",
+                  postal_code="49134", revenue_y0=1350910, revenue_y1=900000))
+    s.commit()
+    for c in s.scalars(select(Company)):
+        c.customer_state = customers.derive_customer_state(
+            c.revenue_y0, c.revenue_y1, c.revenue_y2, c.revenue_y3, c.revenue_y4)
+    s.commit()
+    s.close()
+
+    assert customers.flag_intercompany() == 1          # only the Linara row flagged
+    p = icp.build_profile(None)
+    assert p["winners_count"] == 6                      # the group company is out
+
+    icp.apply_profile(None, name="t")
+    s = temp_db.SessionLocal()
+    linara = s.scalar(select(Company).where(Company.name.like("Linara%")))
+    assert linara.is_intercompany is True
+    assert linara.target_score is None                  # never on the call list
+    assert linara.fit_score is not None                 # but still described
+    s.close()
+
+
 def test_icp_profile_and_fit(temp_db):
     """The heart: the profile counts winner distributions; fit scores a company
     by how typical its values are (modal winner value = 1.0); unknown values are

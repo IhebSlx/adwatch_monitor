@@ -66,6 +66,35 @@ SORTABLE = {
 }
 
 
+# Own-group entities that appear in the CRM as ordinary customers. Confirmed
+# against the CRM: Linara entities, NanaWall Systems and Solarlux Vertriebsbüros
+# show up with large revenue — Linara Kaufbeuren alone was the single biggest
+# "customer" (EUR 1.35M) and ranked #3 in the target list before this flag.
+# Matched case-insensitively as a whole word / prefix of the company name.
+INTERCOMPANY_NAME_PATTERNS = (
+    "linara", "nana wall", "nanawall", "solarlux", "slect",
+)
+
+
+def looks_intercompany(name: str | None) -> bool:
+    n = _norm(name)
+    return bool(n) and any(p in n for p in INTERCOMPANY_NAME_PATTERNS)
+
+
+def flag_intercompany() -> int:
+    """(Re)set Company.is_intercompany from the name patterns. Idempotent, and
+    run on every import so newly synced group companies are caught too."""
+    with SessionLocal() as s:
+        n = 0
+        for c in s.scalars(select(Company)):
+            flag = looks_intercompany(c.name)
+            if bool(c.is_intercompany) != flag:
+                c.is_intercompany = flag
+                n += 1
+        s.commit()
+        return n
+
+
 def derive_customer_state(y0, y1, y2, y3, y4) -> str:
     """Customer lifecycle from the imported Umsatz columns (NULL counts as €0):
     active = buys now AND bought before | new = first revenue this year |
@@ -288,6 +317,7 @@ def upsert_companies(records: list[dict]) -> dict:
             # partner whose revenue reappears flips lapsed -> active by itself
             row.customer_state = derive_customer_state(
                 row.revenue_y0, row.revenue_y1, row.revenue_y2, row.revenue_y3, row.revenue_y4)
+            row.is_intercompany = looks_intercompany(row.name)
         s.commit()
     return {"received": len(records), "inserted": inserted, "updated": updated,
            "skipped_no_name": skipped_no_name, "name_collisions": name_collisions}
