@@ -813,6 +813,22 @@ body.nav-collapsed #fetchBtn::before { content: "📣"; font-size: 15px; line-he
    inside wide tables; collapsing the nav frees another ~180px */
 main { max-width: none; }
 
+/* ---- resizable columns (drag the right edge of a header) ---- */
+th { position: relative; }
+.col-grip {
+  position: absolute; top: 0; right: -4px; width: 9px; height: 100%;
+  cursor: col-resize; z-index: 5; user-select: none; touch-action: none;
+}
+.col-grip::after {
+  content: ""; position: absolute; top: 22%; bottom: 22%; right: 4px; width: 1px;
+  background: var(--border-strong); opacity: 0; transition: opacity .12s;
+}
+th:hover .col-grip::after, .col-grip:hover::after { opacity: 1; }
+body.col-resizing { cursor: col-resize; user-select: none; }
+/* frozen (fixed-layout) tables: cells clip instead of reflowing neighbours;
+   colspan cells (e.g. the expandable pages row) keep their natural behaviour */
+table.col-resized td:not([colspan]) { overflow: hidden; text-overflow: ellipsis; }
+
 /* ---- column-header menus (sort + per-column filter) ---- */
 .th-has-menu { cursor: pointer; user-select: none; }
 .th-has-menu:hover { color: var(--accent-ink); }

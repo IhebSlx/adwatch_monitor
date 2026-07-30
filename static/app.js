@@ -241,6 +241,58 @@
   }
   document.addEventListener("click", () => $$(".checkdrop-panel").forEach(p => p.classList.add("hidden")));
 
+  // ------------------------------------------------------------------ resizable columns
+  // Every data table gets drag handles on the RIGHT EDGE of its headers (and
+  // only there). The first drag freezes the current auto-layout widths and
+  // switches the table to table-layout:fixed so one column's width never
+  // reflows the others; double-click on a handle resets the whole table.
+  function makeColumnsResizable(table) {
+    const ths = $$("thead th", table);
+    if (!ths.length || table.dataset.resizable) return;
+    table.dataset.resizable = "1";
+
+    function freeze() {
+      if (table.classList.contains("col-resized")) return;
+      ths.forEach(th => { if (th.offsetParent !== null) th.style.width = th.offsetWidth + "px"; });
+      table.classList.add("col-resized");
+      table.style.tableLayout = "fixed";
+      table.style.width = "max-content";   // grows/shrinks with the columns, scrolls in .table-wrap
+    }
+    function reset() {
+      ths.forEach(th => { th.style.width = ""; });
+      table.classList.remove("col-resized");
+      table.style.tableLayout = "";
+      table.style.width = "";
+    }
+
+    ths.forEach(th => {
+      const grip = document.createElement("span");
+      grip.className = "col-grip";
+      grip.title = "Ziehen: Spaltenbreite · Doppelklick: zurücksetzen";
+      th.appendChild(grip);
+      // a resize gesture must never count as a header CLICK (sort/filter menu)
+      grip.addEventListener("click", e => e.stopPropagation());
+      grip.addEventListener("dblclick", e => { e.stopPropagation(); reset(); });
+      grip.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        freeze();
+        const startX = e.clientX;
+        const startW = th.offsetWidth;
+        const move = (ev) => { th.style.width = Math.max(44, startW + (ev.clientX - startX)) + "px"; };
+        const up = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          document.body.classList.remove("col-resizing");
+        };
+        document.body.classList.add("col-resizing");
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      });
+    });
+  }
+  // all data tables (each sits in a .table-wrap); decorative info tables are skipped
+  $$(".table-wrap table").forEach(makeColumnsResizable);
+
   // ------------------------------------------------------------------ load + render
   async function loadState() {
     const notice = $("#noDataNotice");
