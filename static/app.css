@@ -789,15 +789,26 @@ a.link:hover { text-decoration: underline; }
   display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 3px;
   border-radius: 999px; background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 700;
 }
-#customersTable .col-extra { display: none; }
-#customersTable.show-extra .col-extra { display: table-cell; }
+/* ALL columns are visible by default; the toolbar button hides the secondary
+   ones (SAP, KV, Segmente, Vertriebsweg, Land, Umsatz-Historie) on demand. */
+#customersTable.hide-extra .col-extra { display: none; }
 /* Sensible default column widths: cap the few text-heavy cells so one long
    value can't blow the column out to 400px. The LINK is truncated rather than
    the cell, so badges and the ✎ edit button stay visible and clickable.
    Everything stays adjustable by dragging the header edge. */
 #customersTable .cell-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-#customersTable .fb-page-cell .link { max-width: 140px; }
-#customersTable .cell-website .link { max-width: 150px; }
+/* Facebook + Website sit at the far right as reference links, not reading
+   material: the label is clipped to roughly the first word — enough to
+   recognise and click — with the full value in the tooltip and the href intact. */
+#customersTable .fb-page-cell .link { max-width: 82px; }
+#customersTable .cell-website .link { max-width: 92px; }
+/* the ✎ button and the IG/⚠ badges dominated this cell's width — compact them
+   so the column stays narrow while everything remains clickable */
+#customersTable .fb-page-cell .btn { padding: 2px 6px; font-size: 11px; }
+#customersTable .fb-page-cell .role-badge,
+#customersTable .fb-page-cell .candidate-flag {
+  padding: 0 4px; font-size: 9.5px; margin-left: 3px;
+}
 #customersTable .fb-page-cell .link,
 #customersTable .cell-website .link {
   display: inline-block; overflow: hidden;

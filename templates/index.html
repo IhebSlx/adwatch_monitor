@@ -324,7 +324,7 @@
             <input type="number" id="custTopN" value="30" min="1" style="width:60px">
             <button id="custSelectTopBtn" class="btn btn-sm">Select</button>
           </span>
-          <button id="custColsBtn" class="btn btn-sm" title="SAP, KV, Segment, Vertriebsweg, Land und Umsatz-Historie ein-/ausblenden">Mehr Spalten ▾</button>
+          <button id="custColsBtn" class="btn btn-sm" title="SAP, KV, Segment, Vertriebsweg, Land und Umsatz-Historie aus-/einblenden">Weniger Spalten ▴</button>
           <!-- all act-on-the-FILTERED-set actions live in one dropdown; the
                buttons keep their ids, so every existing handler is untouched -->
           <div class="action-menu" id="custActionsMenu">
@@ -428,8 +428,6 @@
               <th data-col="kunde" data-sort="customer_state">Kunde</th>
               <th class="num" data-sort="fit_score" title="Fit-Score 0–100: wie sehr diese Firma dem idealen Kundenprofil entspricht (ICP-Tab)" data-col="fit">Fit</th>
               <th class="num" data-col="anzeigen" title="Aktive Anzeigen beim letzten Abruf">Anzeigen</th>
-              <th data-col="fb">Facebook Seite</th>
-              <th data-col="website">Website</th>
               <th data-col="ort" data-sort="city">Ort</th>
               <th class="num" data-col="umsatz" data-sort="revenue_y0">Umsatz akt.</th>
               <th class="col-extra" data-col="sap" data-sort="sap_number">SAP</th>
@@ -442,6 +440,8 @@
               <th class="col-extra num" data-col="u2" data-sort="revenue_y2">Umsatz -2</th>
               <th class="col-extra num" data-col="u3" data-sort="revenue_y3">Umsatz -3</th>
               <th class="col-extra num" data-col="u4" data-sort="revenue_y4">Umsatz -4</th>
+              <th data-col="fb">Facebook</th>
+              <th data-col="website">Website</th>
               <th></th>
             </tr></thead>
             <tbody id="customersTableBody"></tbody>

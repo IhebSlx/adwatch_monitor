@@ -155,15 +155,18 @@
     // real Facebook/Instagram URL but no numeric page_id yet. Falling back to
     // page_id-only would hide a resolved identity behind a blank "+ Link".
     const href = r.page_url || (r.page_id ? fbPageUrl(r.page_id) : null);
-    const editBtn = `<button class="btn btn-sm fb-edit-btn" data-id="${r.id}" title="${href ? "Edit linked page" : "Link a Facebook page"}">${href ? "✎" : "+ Link"}</button>`;
+    // icon-only on purpose: this column sits at the far right as a reference
+    // link, so the affordance lives in the tooltip rather than in column width
+    const editBtn = `<button class="btn btn-sm fb-edit-btn" data-id="${r.id}" title="${href ? "Verknüpfte Meta-Seite bearbeiten" : "Facebook-Seite verknüpfen"}">${href ? "✎" : "+"}</button>`;
     if (!href) return `<span class="muted">—</span> ${editBtn}`;
     const label = r.page_name || r.page_id || r.page_url;
     const isIG = href.includes("instagram.com");
     const platform = isIG ? ` <span class="role-badge" title="Instagram profile — same Meta ad identity as a Facebook page">IG</span>` : "";
+    const titleAttr = ` title="${esc(label)}"`;   // the link is truncated — full name on hover
     const needsId = (!r.page_id && r.resolution_status === "confirmed")
       ? ` <span class="candidate-flag flag-warn" title="Meta-Seite bestätigt, aber die numerische Page-ID für den Ad lookup fehlt noch — der Ad lookup ermittelt sie, oder per ✎ manuell eintragen.">⚠</span>`
       : "";
-    return `<a class="link" href="${esc(href)}" target="_blank">${esc(label)}</a>${platform}${needsId} ${editBtn}`;
+    return `<a class="link" href="${esc(href)}" target="_blank"${titleAttr}>${esc(label)}</a>${platform}${needsId} ${editBtn}`;
   }
 
   function spendCell(m) {
@@ -1860,7 +1863,7 @@
     const html = CUST.lastRows.map(r => {
       const open = expandedPages.has(r.id);
       const website = r.website_domain
-        ? `<a class="link" href="${esc(/^https?:\/\//.test(r.website_domain) ? r.website_domain : "https://" + r.website_domain)}" target="_blank">${esc(r.website_domain)}</a>`
+        ? `<a class="link" href="${esc(/^https?:\/\//.test(r.website_domain) ? r.website_domain : "https://" + r.website_domain)}" target="_blank" title="${esc(r.website_domain)}">${esc(r.website_domain)}</a>`
         : "";
       return `
       <tr data-id="${r.id}" class="${CUST.selected.has(r.id) ? "selected" : ""}">
@@ -1870,8 +1873,6 @@
         <td>${customerStateChip(r.customer_state)}</td>
         <td class="num">${fitCell(r.fit_score)}</td>
         <td class="num">${r.active_ads == null ? '<span class="muted">—</span>' : (r.active_ads > 0 ? `<strong>${r.active_ads}</strong>` : '<span class="muted">0</span>')}</td>
-        <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
-        <td class="cell-website">${website}</td>
         <td class="cell-ort">${esc(r.city || "")}</td>
         <td class="num">${eur(r.revenue_y0)}</td>
         <td class="col-extra">${esc(r.sap_number || "")}</td>
@@ -1884,6 +1885,8 @@
         <td class="col-extra num">${eur(r.revenue_y2)}</td>
         <td class="col-extra num">${eur(r.revenue_y3)}</td>
         <td class="col-extra num">${eur(r.revenue_y4)}</td>
+        <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
+        <td class="cell-website">${website}</td>
         <td><button class="btn btn-sm pages-toggle-row" data-id="${r.id}">${open ? "Hide" : "Pages"}</button></td>
       </tr>
       <tr class="pages-row ${open ? "" : "hidden"}" data-pages-for="${r.id}">
@@ -2550,9 +2553,10 @@
       setTimeout(() => { _scrollTick = false; if (_sentinelNear()) loadMoreCustomers(); }, 150);
     }, { passive: true });
 
+    // All columns show by default; this hides the secondary ones on demand.
     $("#custColsBtn").addEventListener("click", () => {
-      const on = $("#customersTable").classList.toggle("show-extra");
-      $("#custColsBtn").textContent = on ? "Weniger Spalten ▴" : "Mehr Spalten ▾";
+      const hidden = $("#customersTable").classList.toggle("hide-extra");
+      $("#custColsBtn").textContent = hidden ? "Alle Spalten ▾" : "Weniger Spalten ▴";
     });
 
     // "⚡ Aktionen (gefiltert)" dropdown — the five filtered-set actions in one
