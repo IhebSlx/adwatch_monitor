@@ -682,6 +682,59 @@ def test_enrich_status_never_leaks_ok(temp_db, monkeypatch):
     s.close()
 
 
+def test_country_code_mapping():
+    """The CRM's Land column holds full names; Company.country must end up as an
+    ISO-2 code because it is what the ad lookups pass as their country param."""
+    from adwatch.customers import _country_code
+    assert _country_code("Spanien") == "ES"
+    assert _country_code("Deutschland") == "DE"
+    assert _country_code("Portugal") == "PT"
+    assert _country_code("Österreich") == "AT"
+    assert _country_code("  spanien ") == "ES"          # normalised
+    assert _country_code("ES") == "ES" and _country_code("es") == "ES"
+    assert _country_code("Absurdistan") is None          # unknown -> don't guess
+    assert _country_code(None) is None and _country_code("") is None
+
+
+def test_import_keeps_rows_without_sap_and_reports_them(temp_db):
+    """Rows with no SAP Nummer must be imported (matched by Firmenname) and
+    REPORTED, not silently dropped — a real CRM export had 917 of 1,000 such
+    rows, which previously vanished without a word. Rows with neither key are
+    skipped, also with a count."""
+    import io
+    import openpyxl
+    from adwatch.customers import parse_excel, upsert_companies
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["SAP Nummer", "Firmenname", "Land", "Ort"])
+    ws.append(["0005000001", "Mit SAP GmbH", "Deutschland", "Melle"])
+    ws.append([None, "Ohne SAP SL", "Spanien", "Barcelona"])       # name-keyed
+    ws.append([None, None, "Spanien", None])                        # no key -> skipped
+    buf = io.BytesIO(); wb.save(buf)
+
+    records, warnings = parse_excel(buf.getvalue())
+    assert len(records) == 2                                        # not 1
+    assert any("no SAP Nummer" in w for w in warnings)
+    assert any("skipped" in w for w in warnings)
+
+    upsert_companies(records)
+    s = temp_db.SessionLocal()
+    rows = {c.name: c for c in s.scalars(select(Company))}
+    assert set(rows) == {"Mit SAP GmbH", "Ohne SAP SL"}
+    assert rows["Mit SAP GmbH"].country == "DE"
+    assert rows["Ohne SAP SL"].country == "ES"                      # not the "DE" default
+    s.close()
+
+    # re-importing the same SAP-less row must UPDATE it, not duplicate it
+    upsert_companies(records)
+    s = temp_db.SessionLocal()
+    assert len(list(s.scalars(select(Company)))) == 2
+    s.close()
+
+
 def test_customer_state_derivation():
     """Lifecycle from the Umsatz columns: active = buys now AND before, new =
     first revenue this year, lapsed = bought before not now, never = nothing."""

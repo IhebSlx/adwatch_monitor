@@ -116,6 +116,50 @@ def _clean_str(value) -> str | None:
     return s or None
 
 
+# The CRM's Land column holds full names ("Spanien", "Deutschland"), but every
+# downstream consumer needs an ISO-2 code: Company.country is what the Meta and
+# Google ad lookups pass as their country parameter, so a Spanish company left
+# at the "DE" default would be searched in the GERMAN ad library.
+_COUNTRY_CODES = {
+    "deutschland": "DE", "germany": "DE",
+    "spanien": "ES", "españa": "ES", "espana": "ES", "spain": "ES",
+    "portugal": "PT",
+    "österreich": "AT", "oesterreich": "AT", "austria": "AT",
+    "schweiz": "CH", "switzerland": "CH", "suisse": "CH",
+    "frankreich": "FR", "france": "FR",
+    "italien": "IT", "italia": "IT", "italy": "IT",
+    "niederlande": "NL", "nederland": "NL", "netherlands": "NL", "holland": "NL",
+    "belgien": "BE", "belgium": "BE", "belgique": "BE",
+    "luxemburg": "LU", "luxembourg": "LU",
+    "polen": "PL", "poland": "PL", "polska": "PL",
+    "tschechien": "CZ", "czechia": "CZ", "czech republic": "CZ",
+    "dänemark": "DK", "daenemark": "DK", "denmark": "DK",
+    "schweden": "SE", "sweden": "SE", "norwegen": "NO", "norway": "NO",
+    "finnland": "FI", "finland": "FI",
+    "großbritannien": "GB", "grossbritannien": "GB", "vereinigtes königreich": "GB",
+    "united kingdom": "GB", "england": "GB",
+    "irland": "IE", "ireland": "IE",
+    "ungarn": "HU", "hungary": "HU", "rumänien": "RO", "romania": "RO",
+    "slowakei": "SK", "slovakia": "SK", "slowenien": "SI", "slovenia": "SI",
+    "kroatien": "HR", "croatia": "HR", "griechenland": "GR", "greece": "GR",
+    "usa": "US", "vereinigte staaten": "US", "united states": "US",
+}
+
+
+def _country_code(value) -> str | None:
+    """'Spanien' -> 'ES', 'ES' -> 'ES', unknown full name -> None (keep the
+    existing value rather than guess)."""
+    s = _norm(value)
+    if not s:
+        return None
+    code = _COUNTRY_CODES.get(s)
+    if code:
+        return code
+    if 2 <= len(s) <= 3 and s.isalpha():
+        return s.upper()          # already a code (possibly one not listed here)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Import
 # ---------------------------------------------------------------------------
@@ -146,18 +190,32 @@ def parse_excel(file_bytes: bytes) -> tuple[list[dict], list[str]]:
         raise ValueError("Could not find a 'SAP Nummer' column in the file's header row.")
 
     records, warnings = [], []
+    no_sap = no_key = 0
     for line_no, row in enumerate(rows, start=2):
         rec: dict = {}
         for idx, field in col_field.items():
             value = row[idx] if idx < len(row) else None
             rec[field] = _parse_number(value) if field in _REVENUE_FIELDS else _clean_str(value)
+        # A row needs SOME key to be identifiable: the SAP number, or failing
+        # that its name (upsert_companies matches those by exact name). Rows with
+        # neither are blank/trailing rows and are dropped — but the count is
+        # REPORTED, never silent: a CRM view can legitimately hold thousands of
+        # rows without a SAP number, and quietly discarding them once looked like
+        # "the import worked" while 90% of the file vanished.
         if not rec.get("sap_number"):
-            continue  # silently skip rows with no SAP key (blank trailing rows, etc.)
+            if not rec.get("name"):
+                no_key += 1
+                continue
+            no_sap += 1
         records.append(rec)
 
     missing = [f for f in _FIELD_HEADERS if f not in col_field.values()]
     if missing:
         warnings.append(f"{len(missing)} column(s) not found and left blank: {', '.join(missing)}")
+    if no_sap:
+        warnings.append(f"{no_sap} row(s) have no SAP Nummer — matched by Firmenname instead")
+    if no_key:
+        warnings.append(f"{no_key} row(s) skipped: neither SAP Nummer nor Firmenname")
     return records, warnings
 
 
@@ -220,8 +278,9 @@ def upsert_companies(records: list[dict]) -> dict:
                         row.website_domain = value
                     continue
                 if field == "country":
-                    if value and len(value) <= 3:
-                        row.country = value
+                    code = _country_code(value)
+                    if code:
+                        row.country = code
                     continue
                 setattr(row, field, value)
             row.imported_at = now
