@@ -567,14 +567,29 @@ _EXPORT_COLUMNS = [
     ("revenue_y0", "Umsatz aktuelles Jahr"), ("revenue_y1", "Umsatz aktuelles Jahr -1"),
     ("revenue_y2", "Umsatz aktuelles Jahr -2"), ("revenue_y3", "Umsatz aktuelles Jahr -3"),
     ("revenue_y4", "Umsatz aktuelles Jahr -4"),
+    # enriched fields (see enrich/) — without these an export of a freshly
+    # enriched market would carry none of the information that was just gathered
+    ("customer_state", "Kundenstatus"),
+    ("description", "Beschreibung (Website)"),
+    ("assessment", "Einschätzung (KI, unbestätigt)"),
+    ("products_str", "Produkte"),
+    ("founded_year", "Gegründet"),
+    ("employee_hint", "Betriebsgröße (Angabe)"),
+    ("mentions_solarlux_str", "Nennt Solarlux"),
+    ("competitor_brands_str", "Wettbewerber auf Website"),
+    ("active_ads", "Aktive Anzeigen"),
+    ("enrichment_status", "Anreicherungs-Status"),
 ]
 
 
 def export_xlsx(filters: dict | None = None, ids: list[int] | None = None,
                 sort: str | None = None, direction: str = "asc") -> bytes:
-    """Export either an explicit selection (ids) or the whole filtered set,
-    as a .xlsx matching the original column layout."""
+    """Export either an explicit selection (ids) or the whole filtered set, as a
+    .xlsx. Carries the master data AND the enriched fields (description, the
+    marked AI assessment, products, brand mentions, ad count) — an export of a
+    freshly enriched market is otherwise missing everything just gathered."""
     import openpyxl
+    from .models import CompanyEnrichment
     with SessionLocal() as s:
         stmt = select(Company)
         if ids is not None:
@@ -583,13 +598,28 @@ def export_xlsx(filters: dict | None = None, ids: list[int] | None = None,
             stmt = _apply_filters(stmt, filters or {})
         stmt = _apply_sort(stmt, sort, direction)
         companies = list(s.scalars(stmt))
+        rows = [_to_dict(c) for c in companies]
+        _attach_active_ads(s, rows)
+        enr = {e.company_id: (e.fields or {}) for e in s.scalars(
+            select(CompanyEnrichment).where(
+                CompanyEnrichment.company_id.in_([c.id for c in companies])))} if companies else {}
+
+    def _yesno(v):
+        return "ja" if v is True else ("nein" if v is False else None)
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Companies"
     ws.append([label for _, label in _EXPORT_COLUMNS])
-    for c in companies:
-        d = _to_dict(c)
+    for d in rows:
+        f = enr.get(d["id"], {})
+        d = dict(d)
+        # the AI assessment is exported in its own clearly-labelled column so it
+        # can never be read as a verified fact
+        d["assessment"] = f.get("assessment_de")
+        d["products_str"] = ", ".join(d.get("products") or f.get("products") or [])
+        d["mentions_solarlux_str"] = _yesno(f.get("mentions_solarlux"))
+        d["competitor_brands_str"] = ", ".join(f.get("competitor_brands") or [])
         ws.append([d.get(field) for field, _ in _EXPORT_COLUMNS])
     buf = io.BytesIO()
     wb.save(buf)

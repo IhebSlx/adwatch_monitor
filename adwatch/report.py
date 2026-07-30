@@ -382,6 +382,117 @@ def _source_label(rows) -> str:
     return "Meta Ad Library + Google Ads Transparency" if has_google else "Meta Ad Library"
 
 
+def _enrichment_map(company_ids: list[int] | None) -> dict[int, dict]:
+    """company_id -> enriched fields (see enrich/). Empty dict when a company was
+    never enriched, so callers can simply skip it."""
+    from sqlalchemy import select as _select
+
+    from .db import SessionLocal as _S
+    from .models import Company as _C, CompanyEnrichment as _E
+    out: dict[int, dict] = {}
+    with _S() as s:
+        stmt = _select(_E, _C).join(_C, _C.id == _E.company_id)
+        if company_ids is not None:
+            stmt = stmt.where(_E.company_id.in_(company_ids))
+        for enr, comp in s.execute(stmt):
+            f = enr.fields or {}
+            out[enr.company_id] = {
+                "description": f.get("description_de") or comp.description,
+                "assessment": f.get("assessment_de"),
+                "products": f.get("products") or comp.products or [],
+                "founded_year": f.get("founded_year") or comp.founded_year,
+                "employee_hint": f.get("employee_hint") or comp.employee_hint,
+                "legal_form": f.get("legal_form"),
+                "service_area": f.get("service_area"),
+                "mentions_solarlux": f.get("mentions_solarlux"),
+                "competitor_brands": f.get("competitor_brands") or [],
+                "website": comp.website_domain,
+                "status": enr.status,
+            }
+    return out
+
+
+def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int = 80) -> list:
+    """FIRMENPROFILE — one compact block per enriched company: what the website
+    says (belegt), then the AI assessment (clearly marked as an estimate), then
+    the hard fields and any ad activity.
+
+    Deliberately driven by the company scope, not by ad metrics: a market that has
+    never been fetched (e.g. Spain) still gets full profiles."""
+    enr = _enrichment_map([d["company_id"] for d in data])
+    rows = [d for d in data if enr.get(d["company_id"], {}).get("description")
+            or enr.get(d["company_id"], {}).get("assessment")]
+    if not rows:
+        return []
+
+    h2 = ParagraphStyle("ph2", parent=styles["Heading2"], textColor=INK, fontSize=13,
+                        spaceBefore=16, spaceAfter=4)
+    nm = ParagraphStyle("pnm", parent=styles["Normal"], textColor=INK, fontSize=10,
+                        leading=13, spaceBefore=7, spaceAfter=1)
+    fact = ParagraphStyle("pfact", parent=styles["Normal"], textColor=INK, fontSize=8.8,
+                          leading=12, leftIndent=6)
+    est = ParagraphStyle("pest", parent=styles["Normal"], textColor=colors.HexColor("#4a5568"),
+                         fontSize=8.8, leading=12, leftIndent=6)
+    meta = ParagraphStyle("pmeta", parent=styles["Normal"], textColor=MUTED, fontSize=8,
+                          leading=11, leftIndent=6, spaceAfter=2)
+    note = ParagraphStyle("pnote", parent=styles["Normal"], textColor=MUTED, fontSize=7.5,
+                          leading=11, spaceBefore=2)
+
+    story: list = [
+        Paragraph("Firmenprofile", h2),
+        Paragraph("Je Firma: <b>Beschreibung</b> = wörtlich von der eigenen Website belegt. "
+                  "<b>Einschätzung</b> = KI-gestützte Ableitung aus dem Seiteninhalt "
+                  "(Größenklasse, Zielkundschaft, Positionierung) — plausibel, aber "
+                  "<b>keine belegte Angabe</b> und vor einer Ansprache zu prüfen.", note),
+        Spacer(1, 4),
+    ]
+
+    for d in rows[:limit]:
+        e = enr[d["company_id"]]
+        head = _esc(d["company"])
+        if e.get("website"):
+            head += f' &nbsp;·&nbsp; {_link(_web_url(e["website"]), _esc(e["website"]))}'
+        story.append(Paragraph(f"<b>{head}</b>", nm))
+
+        if e.get("description"):
+            story.append(Paragraph(f'<b>Beschreibung:</b> {_esc(e["description"])}', fact))
+        if e.get("assessment"):
+            story.append(Paragraph(f'<b>Einschätzung:</b> <i>{_esc(e["assessment"])}</i>', est))
+
+        bits = []
+        if e.get("products"):
+            bits.append("Produkte: " + _esc(", ".join(e["products"][:6])))
+        if e.get("founded_year"):
+            bits.append(f'Gegründet: {e["founded_year"]}')
+        if e.get("employee_hint"):
+            bits.append("Größe: " + _esc(str(e["employee_hint"])))
+        if e.get("legal_form"):
+            bits.append("Rechtsform: " + _esc(e["legal_form"]))
+        if e.get("service_area"):
+            bits.append("Gebiet: " + _esc(str(e["service_area"])[:60]))
+        if bits:
+            story.append(Paragraph(" &nbsp;·&nbsp; ".join(bits), meta))
+
+        brands = []
+        if e.get("mentions_solarlux") is True:
+            brands.append("<b>nennt Solarlux</b>")
+        elif e.get("mentions_solarlux") is False:
+            brands.append("nennt Solarlux nicht")
+        if e.get("competitor_brands"):
+            brands.append("Wettbewerber auf der Website: <b>"
+                          + _esc(", ".join(e["competitor_brands"][:6])) + "</b>")
+        act = d.get("total_active_ads") or 0
+        if d.get("has_data"):
+            brands.append(f"Anzeigen: {act} aktiv" if act else "keine aktiven Anzeigen")
+        if brands:
+            story.append(Paragraph(" &nbsp;·&nbsp; ".join(brands), meta))
+
+    if len(rows) > limit:
+        story.append(Paragraph(f"… {len(rows) - limit} weitere angereicherte Firmen nicht "
+                               "dargestellt — vollständig im Excel-Export.", note))
+    return story
+
+
 def build_report(path: str | None = None, filters: dict | None = None) -> str:
     if path is None:
         path = str(next_report_path("adwatch_report"))
@@ -469,6 +580,11 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     ]
     table.setStyle(TableStyle(style))
     story.append(table)
+
+    # ---- Firmenprofile: the enriched picture per company. Comes BEFORE the ad
+    # detail blocks and does not depend on ad data, so a market that has never
+    # been fetched still produces a substantive report. ----
+    story += _profiles_story(data, filters, styles)
 
     # ---- detail: only the active advertisers (keeps the report uncluttered) ----
     active_rows = [d for d in data if d.get("has_data") and (d.get("total_active_ads") or 0) > 0]

@@ -849,6 +849,118 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_report_shows_enriched_profiles_and_marks_the_estimate(temp_db, tmp_path):
+    """The Firmenprofile section must render the enriched picture per company —
+    WITHOUT any ad data (the Spain case) — and must keep the verified description
+    and the AI assessment visibly separate, so an inference can't be read as a
+    documented fact."""
+    from adwatch.models import Company, CompanyEnrichment
+    from adwatch.report import build_report
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Cerramientos Test SL", country="ES", segment="Handel",
+                sales_channel="Fachhandelsvertrieb", city="Barcelona",
+                website_domain="cerramientos-test.es",
+                description="Fachbetrieb für Glasfaltwände und Terrassenverglasung.",
+                products=["Fenster", "Terrassendach"], founded_year=1998,
+                employee_hint="12 Mitarbeiter", enrichment_status="enriched")
+    s.add(c); s.flush()
+    s.add(CompanyEnrichment(company_id=c.id, status="enriched", fields={
+        "description_de": "Fachbetrieb für Glasfaltwände und Terrassenverglasung.",
+        "assessment_de": "Dürfte ein Kleinbetrieb mit regionalem Fokus sein; "
+                         "der Auftritt wirkt privatkundenorientiert.",
+        "products": ["Fenster", "Terrassendach"], "founded_year": 1998,
+        "employee_hint": "12 Mitarbeiter", "legal_form": "SL",
+        "mentions_solarlux": False, "competitor_brands": ["WAREMA"],
+    }))
+    s.commit()
+    cid = c.id
+    s.close()
+
+    out = str(tmp_path / "profile_report.pdf")
+    build_report(path=out, filters={"ids": [cid]})
+
+    from pypdf import PdfReader
+    text = "\n".join(p.extract_text() or "" for p in PdfReader(out).pages)
+    assert "Firmenprofile" in text
+    assert "Cerramientos Test SL" in text
+    assert "Beschreibung:" in text and "Glasfaltw" in text
+    # the inference is present AND labelled as an estimate, not as a fact
+    assert "Einschätzung:" in text and "Kleinbetrieb" in text
+    assert "keine belegte Angabe" in text
+    # the hard fields and the brand signal made it in
+    assert "1998" in text and "12 Mitarbeiter" in text
+    assert "WAREMA" in text
+
+
+def test_export_includes_enriched_columns(temp_db):
+    """A freshly enriched market must not export as bare master data."""
+    import io
+    import openpyxl
+    from adwatch.customers import export_xlsx
+    from adwatch.models import Company, CompanyEnrichment
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Export Test SL", country="ES", description="Baut Wintergärten.",
+                products=["Wintergarten"], founded_year=2005, enrichment_status="enriched")
+    s.add(c); s.flush()
+    s.add(CompanyEnrichment(company_id=c.id, status="enriched", fields={
+        "assessment_de": "Wirkt wie ein spezialisierter Kleinbetrieb.",
+        "mentions_solarlux": True, "competitor_brands": ["Sunflex"]}))
+    s.commit(); s.close()
+
+    wb = openpyxl.load_workbook(io.BytesIO(export_xlsx(filters={})))
+    ws = wb.active
+    header = [cell.value for cell in ws[1]]
+    for col in ("Beschreibung (Website)", "Einschätzung (KI, unbestätigt)", "Produkte",
+                "Nennt Solarlux", "Wettbewerber auf Website", "Aktive Anzeigen"):
+        assert col in header, col
+    row = {header[i]: v for i, v in enumerate([c.value for c in ws[2]])}
+    assert row["Beschreibung (Website)"] == "Baut Wintergärten."
+    assert row["Einschätzung (KI, unbestätigt)"] == "Wirkt wie ein spezialisierter Kleinbetrieb."
+    assert row["Produkte"] == "Wintergarten"
+    assert row["Nennt Solarlux"] == "ja"
+    assert row["Wettbewerber auf Website"] == "Sunflex"
+
+
+def test_extract_separates_facts_from_assessment():
+    """The assessment is capped and kept as its own field; the fact fields stay
+    extract-only (the prompt enforces that, the parser enforces the shape)."""
+    from adwatch.enrich.extract import _clean_list, PRODUCT_VOCAB
+    import adwatch.enrich.extract as ex
+
+    raw = {
+        "description_de": "Baut Fenster.", "products": ["Fenster", "Unfug"],
+        "founded_year": 1990, "employee_hint": None, "legal_form": "GmbH",
+        "service_area": None, "mentions_solarlux": True, "competitor_brands": ["warema"],
+        "evidence": {"description_de": "Wir bauen Fenster."},
+        "assessment_de": "X" * 900,
+    }
+
+    class _Blk:
+        type = "text"
+        text = __import__("json").dumps(raw)
+
+    class _Msg:
+        content = [_Blk()]
+
+    class _Client:
+        def __init__(self, **k): self.messages = self
+        def create(self, **k): return _Msg()
+
+    import sys, types
+    mod = types.ModuleType("anthropic"); mod.Anthropic = _Client
+    sys.modules["anthropic"] = mod
+    ex.config.ANTHROPIC_API_KEY = "test-key"
+
+    got = ex.extract_facts("x" * 200)
+    assert got["description_de"] == "Baut Fenster."
+    assert got["products"] == ["Fenster"]                 # off-vocabulary dropped
+    assert got["competitor_brands"] == ["WAREMA"]         # canonicalised
+    assert len(got["assessment_de"]) == 700               # capped, not unbounded
+    assert "evidence" in got and got["evidence"]["description_de"]
+
+
 def test_icp_diagnose_guards(temp_db):
     """The validity check behind 'an ICP for any filter — but only the ones that
     make sense': it must refuse a too-small set, refuse a set whose winners look

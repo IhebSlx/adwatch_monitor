@@ -154,7 +154,14 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
                     if value in (None, [], ""):
                         continue
                     fields[key] = value
-                    provenance[key] = _prov("website+llm", 0.85, ev.get(key))
+                    if key == "assessment_de":
+                        # an INFERENCE, not an extracted fact: separate source and a
+                        # markedly lower confidence, so the report (and any future
+                        # consumer) can present it as an estimate rather than a quote
+                        provenance[key] = _prov("website+llm-einschaetzung", 0.5,
+                                                "begründete Einschätzung, keine belegte Angabe")
+                    else:
+                        provenance[key] = _prov("website+llm", 0.85, ev.get(key))
                 fields["_llm_model"] = model
                 status = "enriched"
             except Exception as exc:  # noqa: BLE001 — keep the website win even if extraction fails

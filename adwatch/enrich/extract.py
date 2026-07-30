@@ -45,14 +45,27 @@ PRODUCT_VOCAB = (
     "Balkon/Geländer", "Carport", "Pergola", "Gartenbau",
 )
 
-_PROMPT = """Du extrahierst Firmeninformationen aus dem Website-Text eines deutschen Bauelemente-/Handwerksbetriebs.
+_PROMPT = """Du analysierst den Website-Text eines Bauelemente-/Handwerksbetriebs.
+Die Antwort hat ZWEI streng getrennte Teile: belegte FAKTEN und eine als solche
+gekennzeichnete EINSCHÄTZUNG. Vermische die beiden niemals.
 
-STRIKTE REGELN:
-- Gib NUR zurück, was WÖRTLICH im Text steht. Nichts schätzen, nichts annehmen, nichts aus Weltwissen ergänzen.
-- Wenn eine Information nicht im Text steht: null (bzw. leere Liste). Ein leeres Feld ist besser als eine Vermutung.
-- KEINE Personennamen (keine Geschäftsführer, Inhaber, Mitarbeiter) — nur firmenbezogene Angaben.
-- "employee_hint" und "founded_year" nur, wenn der Text sie ausdrücklich nennt ("15 Mitarbeiter", "seit 1952", "gegründet 1978").
-- "evidence": kurzes wörtliches Zitat (max. 120 Zeichen) als Belegstelle je gefülltem Feld.
+TEIL 1 — FAKTEN (Felder description_de bis competitor_brands):
+- Gib NUR zurück, was WÖRTLICH im Text steht. Nichts schätzen, nichts annehmen,
+  nichts aus Weltwissen ergänzen.
+- Fehlt eine Information: null (bzw. leere Liste). Ein leeres Feld ist besser als eine Vermutung.
+- "employee_hint" und "founded_year" nur, wenn der Text sie ausdrücklich nennt
+  ("15 Mitarbeiter", "seit 1952", "gegründet 1978").
+- "evidence": kurzes wörtliches Zitat (max. 120 Zeichen) als Belegstelle je gefülltem Faktenfeld.
+
+TEIL 2 — EINSCHÄTZUNG (Feld assessment_de), 2-3 kurze Sätze:
+- Hier DARFST du begründet schlussfolgern: Größenklasse des Betriebs, Zielkundschaft
+  (Privatkunden / Objekt / Handel), Preis- und Qualitätspositionierung, regionale
+  Reichweite, Professionalität des Auftritts, Eignung als Fachpartner.
+- Aber: nur was aus dem Text plausibel folgt. ERFINDE KEINE ZAHLEN — keine konkreten
+  Mitarbeiterzahlen, Umsätze oder Gründungsjahre, die nicht im Text stehen.
+- Unsicherheit sprachlich kennzeichnen ("wirkt", "dürfte", "eher", "vermutlich").
+- Keine Personennamen. Keine Wiederholung der Faktenliste — nur der zusätzliche Erkenntniswert.
+- Wenn der Text zu dünn für eine sinnvolle Einschätzung ist: null.
 
 Antworte AUSSCHLIESSLICH mit diesem JSON (keine Erklärung, kein Markdown):
 {
@@ -64,7 +77,8 @@ Antworte AUSSCHLIESSLICH mit diesem JSON (keine Erklärung, kein Markdown):
   "service_area": "<Region/Umkreis, falls genannt, sonst null>",
   "mentions_solarlux": <true|false>,
   "competitor_brands": [<genannte Marken aus: COMPETITOR_LIST>],
-  "evidence": {"<feldname>": "<Zitat>", ...}
+  "evidence": {"<feldname>": "<Zitat>", ...},
+  "assessment_de": "<2-3 Sätze Einschätzung wie oben, oder null>"
 }
 
 PRODUCT_VOCAB: __PRODUCTS__
@@ -119,7 +133,7 @@ def extract_facts(site_text: str, model: str | None = None) -> dict:
     client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
     msg = client.messages.create(
         model=use_model,
-        max_tokens=700,
+        max_tokens=900,   # +200 for the Einschätzung on top of the fact fields
         messages=[{"role": "user", "content": _prompt() + text[:9000]}],
     )
     raw = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
@@ -127,9 +141,14 @@ def extract_facts(site_text: str, model: str | None = None) -> dict:
     data = json.loads(raw)
 
     desc = (data.get("description_de") or "").strip() or None
+    # The assessment is explicitly ALLOWED to infer (size class, target customers,
+    # positioning), so it is kept apart from the fact fields and stored with its
+    # own provenance + lower confidence — the report labels it as an estimate.
+    assess = (data.get("assessment_de") or "").strip() or None
     evidence = data.get("evidence") if isinstance(data.get("evidence"), dict) else {}
     return {
         "description_de": desc[:600] if desc else None,
+        "assessment_de": assess[:700] if assess else None,
         "products": _clean_list(data.get("products"), PRODUCT_VOCAB, 6),
         "founded_year": _coerce_year(data.get("founded_year")),
         "employee_hint": ((data.get("employee_hint") or "").strip() or None),
