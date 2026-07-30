@@ -19,6 +19,7 @@ import json
 import re
 
 from .. import config
+from ..products import PRODUCT_VOCAB, canonical_products
 
 CATEGORIES = ["recruitment", "product_sale", "brand_awareness", "event_promo", "other"]
 
@@ -82,15 +83,10 @@ _PRODUCT_PATTERNS = [(_boundary_pattern(term), term) for term in _PRODUCT_LEXICO
 
 
 def _extract_products(text: str) -> list[str]:
-    found: list[str] = []
-    for pattern, term in _PRODUCT_PATTERNS:
-        if pattern.search(text):
-            # skip if a longer variant already matched (Wintergärten ⊃ Wintergarten)
-            norm = term.lower().rstrip("en").rstrip("e")
-            if not any(norm in f.lower() or f.lower().rstrip("en").rstrip("e") in term.lower()
-                       for f in found):
-                found.append(term)
-    return found
+    """Keyword hits, then folded onto the canonical vocabulary — so 'Wintergärten'
+    and 'Wintergarten' can never both appear as separate products."""
+    hits = [term for pattern, term in _PRODUCT_PATTERNS if pattern.search(text)]
+    return canonical_products(hits)
 
 
 def classify_deterministic(text: str) -> dict:
@@ -130,8 +126,10 @@ def classify_deterministic(text: str) -> dict:
 # LLM backend (Claude Haiku)
 # ---------------------------------------------------------------------------
 
-_LLM_PROMPT = """You classify German (sometimes English) Facebook/Instagram ads \
-from building-product companies (windows, glass walls, winter gardens, doors).
+_LLM_PROMPT = """You classify Facebook/Instagram/Google ads from building-product \
+companies (windows, glass walls, winter gardens, doors, terrace glazing). The ad \
+text can be in ANY language — German, English, Spanish, Portuguese, French, \
+Italian, Dutch — because the partner network is European.
 
 Category definitions:
 - recruitment: hiring people (Stellenanzeigen, "m/w/d", "jetzt bewerben", team growth)
@@ -141,12 +139,19 @@ Category definitions:
 - brand_awareness: general image/values/quality content with no concrete product push
 - other: none of the above / no meaningful text
 
+Products: translate what is advertised into the GERMAN families below. Use these \
+exact strings and nothing else — no free text, no material names (Aluminium, PVC, \
+Holz are materials, not products), no English or Spanish terms. A Spanish \
+"cerramiento de porche" is "Terrassenverglasung". Omit the field if nothing \
+concrete is advertised.
+Allowed products: __PRODUCTS__
+
 Return ONLY a JSON object (no prose, no markdown):
 {"category": "<one of: recruitment|product_sale|brand_awareness|event_promo|other>",
- "product": "<German product name(s) if product_sale, else null>"}
+ "product": "<comma-separated values from the allowed list, else null>"}
 
 Ad text:
-"""
+""".replace("__PRODUCTS__", ", ".join(PRODUCT_VOCAB))
 
 
 def _classify_llm(text: str) -> dict:
@@ -164,8 +169,11 @@ def _classify_llm(text: str) -> dict:
     category = data.get("category")
     if category not in CATEGORIES:
         category = "other"
-    product = data.get("product") or None
-    return {"category": category, "product": product}
+    # Never trust the model's wording: fold onto the canonical vocabulary and
+    # drop anything unmappable. Without this, a Spanish ad yields "cerramiento"
+    # and an English one "windows and doors (wood, PVC)" in a German report.
+    products = canonical_products(data.get("product"))
+    return {"category": category, "product": ", ".join(products) or None}
 
 
 # ---------------------------------------------------------------------------

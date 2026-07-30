@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 
 from . import config
 from .db import SessionLocal
+from .products import canonical_products
 from .models import (
     Ad, CollectionRun, Company, CompanyPage, ReportRecipient, ScheduleConfig, WeeklyCompanyMetric,
 )
@@ -134,13 +135,16 @@ def _merge_week_rows(rows: list[WeeklyCompanyMetric]) -> dict:
     tracked on both platforms gets one coherent weekly number instead of the
     dashboard arbitrarily picking whichever source's row happened to be last."""
     cats = Counter()
-    products: list[str] = []
+    raw_products: list[str] = []
     for r in rows:
         for k, v in (r.ads_by_category or {}).items():
             cats[k] += v
-        for p in (r.products or []):
-            if p not in products:
-                products.append(p)
+        raw_products.extend(r.products or [])
+    # Fold onto the canonical German vocabulary at read time, not just at write
+    # time: rows collected before the vocabulary existed hold free text in the
+    # ad's own language, and re-fetching them just to fix wording would cost
+    # real money. See adwatch/products.py.
+    products = canonical_products(raw_products)
     methods = {r.spend_method for r in rows if r.spend_method}
     by_source = {r.source: r.total_active_ads for r in rows}
     return {

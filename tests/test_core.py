@@ -1059,6 +1059,92 @@ def test_report_shows_enriched_profiles_and_marks_the_estimate(temp_db, tmp_path
     assert "WAREMA" in text
 
 
+def test_ad_products_are_normalised_to_german_families():
+    """Ads are written in the local market's language but the report is German.
+    The first Spanish run listed 'cerramiento', 'Porche-Verschluss (porch closure)'
+    and 'windows and doors (wood, PVC)' as separate products — the same family in
+    three languages, plus materials. Everything must fold onto one vocabulary."""
+    from adwatch.products import PRODUCT_VOCAB, canonical_products
+
+    # the four strings that actually appeared for one Spanish company
+    assert canonical_products([
+        "cerramiento", "Porcheschließung/Porche-Verschluss",
+        "Porche-Verschluss (porch closure)", "Porcheverglasungen/Terrassenverglasung",
+    ]) == ["Terrassenverglasung"]
+
+    assert canonical_products(
+        ["windows and doors (wood, wood-aluminium, aluminium, PVC)"]) == ["Fenster", "Türen"]
+
+    # German inflections must not survive as separate families
+    assert canonical_products(["Wintergärten", "Wintergarten"]) == ["Wintergarten"]
+    # materials are not products, and unmappable free text is dropped, not shown
+    assert canonical_products(["Aluminium", "PVC", "Holz"]) == []
+    assert canonical_products(["Raumschiffe"]) == []
+    # short keys need word boundaries: 'tor' inside 'Motor' is not a Tor
+    assert canonical_products(["Motor", "importante"]) == []
+    # every result is a member of the shared vocabulary, always
+    for out in (canonical_products(["toldos y persianas"]),
+                canonical_products(["puertas correderas de cristal"])):
+        assert out and all(p in PRODUCT_VOCAB for p in out)
+
+    # the enrichment side imports the very same tuple, so the two can't drift
+    from adwatch.enrich.extract import PRODUCT_VOCAB as VOCAB_ENRICH
+    assert VOCAB_ENRICH is PRODUCT_VOCAB
+
+
+def test_top5_report_shows_profiles_and_an_honest_count(temp_db, tmp_path):
+    """A 'Top 5' that shows 2 companies must say why, and each company must carry
+    its enriched profile — otherwise the report is just ad counts with no context."""
+    import datetime as dt
+    from adwatch.models import Company, CompanyEnrichment, WeeklyCompanyMetric
+    from adwatch.report import build_top5_report
+
+    s = temp_db.SessionLocal()
+    wk = dt.date(2026, 7, 27)
+    ids = []
+    for i in range(2):
+        c = Company(name=f"Cerramientos {i} SL", country="ES", segment="Handel",
+                    resolution_status="confirmed", website_domain=f"cerr{i}.es",
+                    enrichment_status="enriched")
+        s.add(c); s.flush()
+        s.add(WeeklyCompanyMetric(company_id=c.id, source="meta", week_start=wk,
+                                  total_active_ads=8 - i,
+                                  products=["cerramiento", "porch closure"]))
+        s.add(CompanyEnrichment(company_id=c.id, status="enriched", fields={
+            "description_de": "Anbieter von Glasabschlüssen für Veranden und Terrassen.",
+            "assessment_de": "Dürfte ein Kleinbetrieb mit regionalem Fokus sein.",
+            "products": ["Terrassenverglasung"], "employee_hint": "10 Mitarbeiter",
+            "competitor_brands": ["Sunflex"]}))
+        ids.append(c.id)
+    # 3 more companies in scope that never advertised — they are why it isn't 5
+    for i in range(3):
+        s.add(Company(name=f"Stille Firma {i}", country="ES", segment="Handel",
+                      resolution_status="confirmed"))
+    s.commit(); s.close()
+
+    out = str(tmp_path / "top5.pdf")
+    build_top5_report(path=out, filters={})
+
+    from pypdf import PdfReader
+    raw = "\n".join(p.extract_text() or "" for p in PdfReader(out).pages)
+    # collapse whitespace: the PDF line-wraps mid-sentence, which would otherwise
+    # make these assertions depend on where the text happens to break
+    text = " ".join(raw.split())
+    # the headline states the real number instead of promising five
+    assert "Top 5" not in text
+    assert "Werbetreibende mit aktiven Anzeigen (2)" in text
+    assert "die Liste ist nicht gekürzt" in text
+    assert "nur 2 von 5 Firmen" in text
+    # the enrichment reaches this report type too, fact and inference kept apart
+    assert "Beschreibung:" in text and "Glasabschl" in text
+    assert "Einschätzung (KI, unbestätigt):" in text and "Kleinbetrieb" in text
+    assert "keine belegte Angabe" in text
+    assert "10 Mitarbeiter" in text and "Sunflex" in text
+    # ad-derived products arrive in German, not as 'cerramiento'/'porch closure'
+    assert "cerramiento" not in text and "porch closure" not in text
+    assert "Terrassenverglasung" in text
+
+
 def test_export_includes_enriched_columns(temp_db):
     """A freshly enriched market must not export as bare master data."""
     import io

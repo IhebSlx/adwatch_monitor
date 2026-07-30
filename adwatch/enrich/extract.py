@@ -37,13 +37,10 @@ COMPETITOR_BRANDS = (
     "Nanawall", "Corradi", "Pratic", "Gibus", "Renson", "Brustor", "Kettler",
 )
 
-PRODUCT_VOCAB = (
-    "Fenster", "Türen", "Haustüren", "Schiebetüren", "Wintergarten", "Terrassendach",
-    "Glasdach", "Fassade", "Sonnenschutz", "Markisen", "Rollladen", "Jalousien",
-    "Insektenschutz", "Tore", "Glas/Glaserei", "Metallbau", "Holzbau", "Zimmerei",
-    "Tischlerei/Schreinerei", "Innenausbau", "Bausanierung", "Smart Home",
-    "Balkon/Geländer", "Carport", "Pergola", "Gartenbau",
-)
+# Shared with ad classification (see adwatch/products.py) so "products
+# advertised" and "products offered" are always the same vocabulary and can be
+# compared per company.
+from ..products import PRODUCT_VOCAB  # noqa: E402  (re-exported on purpose)
 
 _PROMPT = """Du analysierst den Website-Text eines Bauelemente-/Handwerksbetriebs.
 Die Antwort hat ZWEI streng getrennte Teile: belegte FAKTEN und eine als solche

@@ -657,14 +657,22 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
     rank = ParagraphStyle("rank", parent=styles["Heading2"], textColor=ACCENT, fontSize=14, spaceBefore=12, spaceAfter=2)
     body = ParagraphStyle("body", parent=styles["Normal"], textColor=INK, fontSize=10, leading=14)
     note = ParagraphStyle("note", parent=styles["Normal"], textColor=MUTED, fontSize=8, leading=11)
+    fact = ParagraphStyle("t5fact", parent=body, fontSize=9, leading=12.5)
+    est = ParagraphStyle("t5est", parent=body, fontSize=9, leading=12.5,
+                         textColor=colors.HexColor("#4a5568"))
 
     doc = SimpleDocTemplate(path, pagesize=A4,
                             leftMargin=18 * mm, rightMargin=18 * mm,
                             topMargin=18 * mm, bottomMargin=18 * mm)
     week = next((d["week_start"] for d in top if d.get("week_start")), None)
     week_de = _de_date(dt.date.fromisoformat(week)) if week else None
+    # Don't promise five when the data holds two: say what is actually shown, so
+    # a short list reads as a finding about the market rather than a broken report.
+    shown = len(top)
     story = [
-        Paragraph("Top 5 Werbetreibende — Anzeigen-Aktivitätsbericht", h1),
+        Paragraph("Top 5 Werbetreibende — Anzeigen-Aktivitätsbericht" if shown >= 5
+                  else f"Werbetreibende mit aktiven Anzeigen ({shown}) — "
+                       "Anzeigen-Aktivitätsbericht", h1),
         Paragraph(
             f"Erstellt am {_de_datetime(dt.datetime.now())}"
             + (f" &nbsp;·&nbsp; Woche vom {week_de}" if week_de else "")
@@ -680,6 +688,15 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         doc.build(story)
         return path
 
+    if shown < 5:
+        story.append(Paragraph(
+            f"<b>Hinweis:</b> Es werden {shown} Firmen gezeigt, weil in der letzten Erfassung "
+            f"nur {n_active} von {len(all_metrics)} Firmen im Bericht-Umfang aktive Anzeigen "
+            "hatten — die Liste ist nicht gekürzt.", note))
+        story.append(Spacer(1, 8))
+
+    enr = _enrichment_map([d["company_id"] for d in top])
+
     for i, d in enumerate(top, start=1):
         cats = d.get("ads_by_category") or {}
         products = d.get("products") or []
@@ -694,6 +711,30 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         cta = _ads_cta(card_links.get(d["company_id"]))
         if cta:
             story.append(Paragraph(cta, body))
+
+        # Who the company is, before what it advertises: the enrichment is the
+        # only part of this report that explains WHY the ad activity matters.
+        e = enr.get(d["company_id"]) or {}
+        if e.get("description"):
+            story.append(Paragraph(f'<b>Beschreibung:</b> {_esc(e["description"])}', fact))
+        if e.get("assessment"):
+            story.append(Paragraph("<b>Einschätzung (KI, unbestätigt):</b> "
+                                   f'<i>{_esc(e["assessment"])}</i>', est))
+        profile_bits = []
+        if e.get("products"):
+            profile_bits.append("Produkte (Website): " + _esc(", ".join(e["products"][:6])))
+        if e.get("employee_hint"):
+            profile_bits.append("Größe: " + _esc(str(e["employee_hint"])))
+        if e.get("founded_year"):
+            profile_bits.append(f'Gegründet: {e["founded_year"]}')
+        if e.get("mentions_solarlux") is True:
+            profile_bits.append("<b>nennt Solarlux</b>")
+        if e.get("competitor_brands"):
+            profile_bits.append("Wettbewerber auf der Website: <b>"
+                                + _esc(", ".join(e["competitor_brands"][:5])) + "</b>")
+        if profile_bits:
+            story.append(Paragraph(" &nbsp;·&nbsp; ".join(profile_bits), note))
+
         story.append(Paragraph(f"<b>Signal:</b> {_esc(_signal(cats, products))}", body))
         method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method"))
         story.append(Paragraph(
@@ -712,7 +753,12 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         "Die Links <b>„Aktive Anzeigen ansehen“</b> (Meta Ad Library) und <b>„Google-Anzeigen "
         "ansehen“</b> (Google Ads Transparency) öffnen die laufenden Anzeigen der Firma. Ausgaben sind "
         "ein <b>geschätzter</b> Intervallwert (von–bis), nicht offiziell veröffentlicht. Rangfolge "
-        "nach Aktivität in der letzten wöchentlichen Erfassung.", note))
+        "nach Aktivität in der letzten wöchentlichen Erfassung. <b>Beschreibung</b> und "
+        "<b>Produkte (Website)</b> sind von der eigenen Website der Firma belegt; die "
+        "<b>Einschätzung</b> ist eine KI-gestützte Ableitung daraus — plausibel, aber "
+        "<b>keine belegte Angabe</b> und vor einer Ansprache zu prüfen. <b>Beworbene "
+        "Produkte</b> stammen aus dem Anzeigentext und sind auf die deutschen "
+        "Produktfamilien normalisiert.", note))
     doc.build(story)
     return path
 
