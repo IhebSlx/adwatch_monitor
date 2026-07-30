@@ -1875,7 +1875,6 @@
         <td class="num">${r.active_ads == null ? '<span class="muted">—</span>' : (r.active_ads > 0 ? `<strong>${r.active_ads}</strong>` : '<span class="muted">0</span>')}</td>
         <td class="cell-ort">${esc(r.city || "")}</td>
         <td class="num">${eur(r.revenue_y0)}</td>
-        <td class="col-extra">${esc(r.sap_number || "")}</td>
         <td class="col-extra">${esc(r.kv || "")}</td>
         <td class="col-extra">${esc(r.segment || "")}</td>
         <td class="col-extra">${esc(r.sub_segment || "")}</td>
@@ -1887,6 +1886,7 @@
         <td class="col-extra num">${eur(r.revenue_y4)}</td>
         <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
         <td class="cell-website">${website}</td>
+        <td class="col-extra">${esc(r.sap_number || "")}</td>
         <td><button class="btn btn-sm pages-toggle-row" data-id="${r.id}">${open ? "Hide" : "Pages"}</button></td>
       </tr>
       <tr class="pages-row ${open ? "" : "hidden"}" data-pages-for="${r.id}">
