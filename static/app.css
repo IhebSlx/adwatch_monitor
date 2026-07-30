@@ -788,6 +788,31 @@ a.link:hover { text-decoration: underline; }
 #customersTable .cell-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .scroll-sentinel { text-align: center; padding: 14px 0 6px; color: var(--muted); font-size: 12.5px; }
 
+/* ---- collapsible sidebar (icon-only) + full-width content ---- */
+.nav-toggle {
+  margin-left: auto; flex: none; width: 24px; height: 24px; line-height: 1;
+  border: 1px solid var(--side-line); border-radius: 7px; cursor: pointer;
+  background: rgba(255, 255, 255, .05); color: var(--side-muted);
+  font: inherit; font-size: 12px; padding: 0;
+}
+.nav-toggle:hover { color: var(--side-ink); background: rgba(255, 255, 255, .1); }
+.sidebar, .content { transition: width .18s ease, margin-left .18s ease; }
+
+body.nav-collapsed { --sidebar-w: 64px; }
+body.nav-collapsed .brand-text { display: none; }
+body.nav-collapsed .sidebar-brand { padding: 20px 12px 17px; justify-content: center; flex-direction: column; gap: 8px; }
+body.nav-collapsed .nav-toggle { margin-left: 0; }
+/* text nodes inside the tab buttons collapse via font-size:0; the svg keeps its size */
+body.nav-collapsed .tab { font-size: 0; gap: 0; justify-content: center; padding: 10px 0; }
+body.nav-collapsed .tab.active::before { left: -12px; }
+body.nav-collapsed .source-switch { display: none; }
+body.nav-collapsed #fetchBtn { font-size: 0; padding: 9px 0; }
+body.nav-collapsed #fetchBtn::before { content: "📣"; font-size: 15px; line-height: 1.25; }
+
+/* content fills the full width — no artificial cap, less horizontal scrolling
+   inside wide tables; collapsing the nav frees another ~180px */
+main { max-width: none; }
+
 /* ---- column-header menus (sort + per-column filter) ---- */
 .th-has-menu { cursor: pointer; user-select: none; }
 .th-has-menu:hover { color: var(--accent-ink); }

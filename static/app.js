@@ -910,6 +910,18 @@
   function wireStatic() {
     $("#fetchBtn").addEventListener("click", () => startFetch());
 
+    // Collapsible sidebar: icon-only mode, remembered across sessions. Tab
+    // labels become tooltips so the icons stay self-explanatory.
+    const applyNavCollapsed = (on) => {
+      document.body.classList.toggle("nav-collapsed", on);
+      $("#navToggle").textContent = on ? "»" : "«";
+      try { localStorage.setItem("navCollapsed", on ? "1" : ""); } catch { /* private mode */ }
+    };
+    $$(".tab").forEach(t => { t.title = t.textContent.trim(); });
+    $("#navToggle").addEventListener("click", () =>
+      applyNavCollapsed(!document.body.classList.contains("nav-collapsed")));
+    try { if (localStorage.getItem("navCollapsed") === "1") applyNavCollapsed(true); } catch { }
+
     function showTab(name) {
       const btn = $$(".tab").find(t => t.dataset.tab === name);
       if (!btn) return;
