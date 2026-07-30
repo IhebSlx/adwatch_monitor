@@ -630,6 +630,13 @@ def icp_apply_route(payload: SelectTopIn):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/icp/diagnose")
+def icp_diagnose_route(payload: SelectTopIn):
+    """Is this winners filter worth building a profile from — and why/why not."""
+    from .insights import icp
+    return icp.diagnose(payload.filters or None)
+
+
 @app.get("/api/icp/latest")
 def icp_latest_route():
     from .insights import icp

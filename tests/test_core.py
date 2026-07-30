@@ -820,11 +820,12 @@ def test_intercompany_never_winner_never_target(temp_db):
 
     s = temp_db.SessionLocal()
     # deliberately VARIED winners: if every winner shared one value, the feature
-    # would be dropped as "nicht trennscharf" and nothing would be comparable
-    for i in range(6):
+    # would be dropped as "nicht trennscharf" and nothing would be comparable.
+    # 30+ winners because the profile guard rejects anything smaller as noise.
+    for i in range(30):
         s.add(Company(name=f"Echter Haendler {i}", country="DE",
-                      segment="Handel" if i < 4 else "Verarbeiter",
-                      postal_code="49134" if i < 4 else "80331",
+                      segment="Handel" if i < 20 else "Verarbeiter",
+                      postal_code="49134" if i < 20 else "80331",
                       revenue_y0=50000, revenue_y1=40000))
     s.add(Company(name="Linara Teststadt GmbH", country="DE", segment="Handel",
                   postal_code="49134", revenue_y0=1350910, revenue_y1=900000))
@@ -837,7 +838,7 @@ def test_intercompany_never_winner_never_target(temp_db):
 
     assert customers.flag_intercompany() == 1          # only the Linara row flagged
     p = icp.build_profile(None)
-    assert p["winners_count"] == 6                      # the group company is out
+    assert p["winners_count"] == 30                     # the group company is out
 
     icp.apply_profile(None, name="t")
     s = temp_db.SessionLocal()
@@ -846,6 +847,84 @@ def test_intercompany_never_winner_never_target(temp_db):
     assert linara.target_score is None                  # never on the call list
     assert linara.fit_score is not None                 # but still described
     s.close()
+
+
+def test_icp_diagnose_guards(temp_db):
+    """The validity check behind 'an ICP for any filter — but only the ones that
+    make sense': it must refuse a too-small set, refuse a set whose winners look
+    exactly like the population, and detect a set that secretly mixes two
+    incompatible groups (which is how the Handel/Verarbeiter split was found)."""
+    from adwatch import customers
+    from adwatch.insights import icp
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+
+    def mk(name, seg, plz, buys):
+        s.add(Company(name=name, country="DE", segment=seg, postal_code=plz,
+                      sales_channel="Fachhandelsvertrieb",
+                      revenue_y0=50000 if buys else None,
+                      revenue_y1=40000 if buys else None))
+
+    # (a) tiny set -> unusable on n alone
+    for i in range(8):
+        mk(f"Klein {i}", "Nische", "49134", i < 4)
+    s.commit()
+    for c in s.scalars(select(Company)):
+        c.customer_state = customers.derive_customer_state(
+            c.revenue_y0, c.revenue_y1, c.revenue_y2, c.revenue_y3, c.revenue_y4)
+    s.commit(); s.close()
+
+    d = icp.diagnose({"customer_state": ["active", "new"], "segment": ["Nische"]})
+    assert d["verdict"] == "unusable"
+    assert any("unter 30" in r for r in d["reasons"])
+
+    # (b) 40 buyers + 40 non-buyers that are IDENTICAL in every feature ->
+    #     nothing separates them, so the profile cannot rank
+    s = temp_db.SessionLocal()
+    for i in range(80):
+        mk(f"Gleich {i}", "Flach", "49134", i < 40)
+    s.commit()
+    for c in s.scalars(select(Company)):
+        c.customer_state = customers.derive_customer_state(
+            c.revenue_y0, c.revenue_y1, c.revenue_y2, c.revenue_y3, c.revenue_y4)
+    s.commit(); s.close()
+
+    d = icp.diagnose({"customer_state": ["active", "new"], "segment": ["Flach"]})
+    assert d["winners"] == 40
+    assert d["verdict"] == "unusable"
+    assert any("Kein Merkmal trennt" in r for r in d["reasons"])
+
+    # (c) a mixed set: two groups whose winners differ sharply -> split advised.
+    #     Each group needs INTERNAL variety, otherwise every feature is 100%
+    #     uniform inside it, gets dropped as non-discriminating, and neither
+    #     sub-profile can score anything (which is what the real Handel vs
+    #     Verarbeiter sets have naturally).
+    s = temp_db.SessionLocal()
+
+    def mk2(name, seg, sub, plz, buys):
+        s.add(Company(name=name, country="DE", segment=seg, sub_segment=sub,
+                      postal_code=plz, sales_channel="Fachhandelsvertrieb",
+                      revenue_y0=50000 if buys else None,
+                      revenue_y1=40000 if buys else None))
+
+    for i in range(40):
+        mk2(f"Nord {i}", "GruppeA", "Metallbau" if i < 24 else "Tischler", "20095", True)
+        mk2(f"Sued {i}", "GruppeB", "Glaser" if i < 24 else "Fensterbau", "80331", True)
+    for i in range(40):                                  # non-buyers on both sides
+        mk2(f"NordNo {i}", "GruppeA", "Metallbau" if i < 20 else "Tischler", "49134", False)
+        mk2(f"SuedNo {i}", "GruppeB", "Glaser" if i < 20 else "Fensterbau", "70173", False)
+    s.commit()
+    for c in s.scalars(select(Company)):
+        c.customer_state = customers.derive_customer_state(
+            c.revenue_y0, c.revenue_y1, c.revenue_y2, c.revenue_y3, c.revenue_y4)
+    s.commit(); s.close()
+
+    d = icp.diagnose({"customer_state": ["active", "new"], "segment": ["GruppeA", "GruppeB"]})
+    seg_split = next((sp for sp in d["splits"] if sp["dimension"] == "segment"), None)
+    assert seg_split is not None and seg_split["should_split"] is True
+    assert any("Gemischte Grundgesamtheit" in r for r in d["reasons"])
 
 
 def test_icp_profile_and_fit(temp_db):
@@ -859,13 +938,14 @@ def test_icp_profile_and_fit(temp_db):
     from sqlalchemy import select
 
     s = temp_db.SessionLocal()
-    # 6 winners: 4× Metallbau in PLZ 4x, 2× Tischler in PLZ 8x; ALL share the
-    # same Vertriebsweg (non-discriminating -> must be excluded from scoring)
-    for i in range(4):
+    # 30 winners (the guard rejects smaller sets as noise): 20× Metallbau in
+    # PLZ 4x, 10× Tischler in PLZ 8x; ALL share the same Vertriebsweg
+    # (non-discriminating -> must be excluded from scoring)
+    for i in range(20):
         s.add(Company(name=f"W Metall {i}", country="DE", segment="Verarbeiter",
                       sub_segment="Metallbau-Schlosser", sales_channel="Fachhandelsvertrieb",
                       postal_code="49134", revenue_y0=50000, revenue_y1=40000))
-    for i in range(2):
+    for i in range(10):
         s.add(Company(name=f"W Tisch {i}", country="DE", segment="Verarbeiter",
                       sub_segment="Tischler", sales_channel="Fachhandelsvertrieb",
                       postal_code="80331", revenue_y0=50000, revenue_y1=40000))
@@ -886,11 +966,11 @@ def test_icp_profile_and_fit(temp_db):
     s.close()
 
     p = icp.build_profile(None)
-    assert p["winners_count"] == 6
-    assert dict(p["features"]["sub_segment"]["shares"])["Metallbau-Schlosser"] == pytest.approx(4 / 6)
+    assert p["winners_count"] == 30
+    assert dict(p["features"]["sub_segment"]["shares"])["Metallbau-Schlosser"] == pytest.approx(20 / 30)
 
     res = icp.apply_profile(None, name="test")
-    assert res["companies_scored"] >= 8   # everyone with any comparable value
+    assert res["companies_scored"] >= 32  # everyone with any comparable value
 
     s = temp_db.SessionLocal()
     la, pa, bl = s.get(Company, la_id), s.get(Company, pa_id), s.get(Company, bl_id)

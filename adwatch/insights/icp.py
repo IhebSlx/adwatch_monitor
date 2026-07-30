@@ -268,9 +268,11 @@ def apply_profile(filters: dict | None = None, name: str = "ICP") -> dict:
     from .divergence import compute_divergence
 
     profile = build_profile(filters, name=name)
-    if profile["winners_count"] < 5:
-        raise ValueError(f"Nur {profile['winners_count']} Gewinner im Filter — "
-                         "zu wenige, um ein belastbares Profil zu bilden (mind. 5).")
+    if profile["winners_count"] < MIN_WINNERS_USABLE:
+        raise ValueError(
+            f"Nur {profile['winners_count']} Gewinner im Filter — unter "
+            f"{MIN_WINNERS_USABLE} sind die Verteilungen Rauschen. Filter weiter "
+            "fassen (z. B. Land oder Segment nicht einschränken).")
 
     opp = {r["company_id"]: r["divergence"] for r in compute_divergence()["rows"]}
     now = dt.datetime.utcnow()
@@ -309,6 +311,153 @@ def apply_profile(filters: dict | None = None, name: str = "ICP") -> dict:
             "winners_count": profile["winners_count"],
             "companies_scored": scored, "with_target_score": with_target,
             "applied_at": now.isoformat(timespec="minutes")}
+
+
+# ---------------------------------------------------------------------------
+# Validity check — "an ICP for ANY filter, but only the ones that make sense,
+# and say why". A profile can be built from any winners set; whether it can
+# RANK anything is a different question. Four failure modes, all measurable:
+#
+#   too few winners      -> the distributions are noise
+#   not discriminating   -> winners look like the population; every fit ~equal
+#   mixed population     -> the set spans two incompatible groups (Handel vs
+#                           Verarbeiter, DE vs ES); the blend fits neither
+#   no feature data      -> only 1-2 features carry values at all
+#
+# Thresholds are deliberately conservative and named, not hidden in a formula.
+# ---------------------------------------------------------------------------
+
+MIN_WINNERS_USABLE = 30      # below this: indicative only
+MIN_WINNERS_SOLID = 80       # at/above this: stable distributions
+_TVD_NO_SIGNAL = 0.05        # winners vs population distance below this = noise
+_SPLIT_GAP = 25              # self-score minus cross-score above this = mixed set
+_MIN_COVERAGE = 0.15         # a feature known for <15% of winners proves nothing,
+                             # however cleanly it seems to separate those few rows
+
+
+def _distribution(companies: list[Company], feat: str, ads: dict) -> dict[str, float]:
+    counts: dict[str, int] = {}
+    known = 0
+    for c in companies:
+        value = company_features(c, ads)[feat]
+        if feat == "products":
+            if value:
+                known += 1
+                for p in value:
+                    counts[p] = counts.get(p, 0) + 1
+        elif value:
+            known += 1
+            counts[value] = counts.get(value, 0) + 1
+    return {v: n / known for v, n in counts.items()} if known else {}
+
+
+def _tvd(a: dict[str, float], b: dict[str, float]) -> float:
+    """Total variation distance between two distributions (0 = identical,
+    1 = disjoint). Readable as 'how different are winners from the population'."""
+    keys = set(a) | set(b)
+    return 0.5 * sum(abs(a.get(k, 0.0) - b.get(k, 0.0)) for k in keys)
+
+
+def diagnose(filters: dict | None = None) -> dict:
+    """Judge whether a winners filter yields a profile worth trusting.
+    Returns {verdict, winners, population, reasons[], features[], splits[]}
+    where verdict is 'ok' | 'weak' | 'unusable'. Pure computation, no writes."""
+    from ..customers import _apply_filters
+
+    profile = build_profile(filters)
+    win_filter = profile["winners_filter"]
+    # The honest baseline: the same population the winners were drawn from,
+    # i.e. the identical filter WITHOUT the buying condition.
+    pop_filter = {k: v for k, v in win_filter.items() if k != "customer_state"}
+
+    with SessionLocal() as s:
+        winners = list(s.scalars(_apply_filters(select(Company), win_filter)
+                                 .where(Company.is_intercompany.is_(False))))
+        population = list(s.scalars(_apply_filters(select(Company), pop_filter)
+                                    .where(Company.is_intercompany.is_(False))))
+    ads = _ad_presence_map()
+
+    # --- per-feature: does it separate winners from the population? ---
+    features = []
+    for feat, weight in (profile.get("weights") or DEFAULT_WEIGHTS).items():
+        w_dist = _distribution(winners, feat, ads)
+        p_dist = _distribution(population, feat, ads)
+        cov = profile["features"][feat]["coverage"]
+        tvd = _tvd(w_dist, p_dist)
+        top = sorted(w_dist.items(), key=lambda kv: -kv[1])[:1]
+        lift = (top[0][1] / p_dist.get(top[0][0], 1e-9)) if top else 0.0
+        features.append({
+            "feature": feat, "label": _FEATURE_LABEL_DE[feat], "weight": weight,
+            "coverage": round(cov, 3), "separation": round(tvd, 3),
+            "top_value": top[0][0] if top else None, "lift": round(min(lift, 99), 2),
+            "usable": cov >= _MIN_COVERAGE and tvd >= _TVD_NO_SIGNAL,
+        })
+
+    # --- is the winners set secretly two populations? ---
+    splits = []
+    for dim, getter in (("country", lambda c: c.country),
+                        ("segment", lambda c: c.segment),
+                        ("sales_channel", lambda c: c.sales_channel)):
+        groups: dict[str, list[Company]] = {}
+        for c in winners:
+            key = getter(c)
+            if key:
+                groups.setdefault(key, []).append(c)
+        big = sorted((g for g in groups.items() if len(g[1]) >= 15), key=lambda kv: -len(kv[1]))[:2]
+        if len(big) < 2:
+            continue
+        (na, ga), (nb, gb) = big
+        pa = build_profile({"ids": [c.id for c in ga]})
+        pb = build_profile({"ids": [c.id for c in gb]})
+        def med(pool, prof):
+            vals = [fit_for(company_features(c, ads), prof)[0] for c in pool]
+            vals = [v for v in vals if v is not None]
+            return round(sorted(vals)[len(vals) // 2], 1) if vals else 0.0
+        gap = max(med(ga, pa) - med(ga, pb), med(gb, pb) - med(gb, pa))
+        splits.append({"dimension": dim, "group_a": na, "n_a": len(ga),
+                       "group_b": nb, "n_b": len(gb), "gap": round(gap, 1),
+                       "should_split": gap >= _SPLIT_GAP})
+
+    # --- verdict ---
+    reasons: list[str] = []
+    n = len(winners)
+    verdict = "ok"
+    if n < MIN_WINNERS_USABLE:
+        verdict = "unusable"
+        reasons.append(f"Nur {n} Gewinner — unter {MIN_WINNERS_USABLE} sind die Verteilungen Rauschen.")
+    elif n < MIN_WINNERS_SOLID:
+        verdict = "weak"
+        reasons.append(f"{n} Gewinner — verwertbar, aber erst ab {MIN_WINNERS_SOLID} stabil.")
+    usable = [f for f in features if f["usable"]]
+    if not usable:
+        verdict = "unusable"
+        reasons.append("Kein Merkmal trennt die Gewinner von der Grundgesamtheit — "
+                       "dieses Profil kann nicht ranken.")
+    elif len(usable) <= 2:
+        verdict = "unusable" if verdict == "unusable" else "weak"
+        reasons.append(f"Nur {len(usable)} von {len(features)} Merkmalen tragen Signal "
+                       f"({', '.join(f['label'] for f in usable)}) — meist fehlen die Daten (Anreicherung).")
+    thin = [f["label"] for f in features
+            if f["coverage"] < _MIN_COVERAGE and f["separation"] >= _TVD_NO_SIGNAL]
+    if thin:
+        reasons.append(f"Zu dünn belegt, daher ignoriert: {', '.join(thin)} "
+                       f"(unter {int(_MIN_COVERAGE * 100)}% der Gewinner haben einen Wert) — "
+                       "die Anreicherung würde genau diese Merkmale nutzbar machen.")
+    _DIM_LABEL = {"country": "Land", "segment": "Kundensegment", "sales_channel": "Vertriebsweg"}
+    for sp in splits:
+        if sp["should_split"]:
+            verdict = "weak" if verdict == "ok" else verdict
+            a, b, gap = sp["group_a"], sp["group_b"], sp["gap"]
+            dim = _DIM_LABEL.get(sp["dimension"], sp["dimension"])
+            reasons.append(f"Gemischte Grundgesamtheit: {a} und {b} unterscheiden sich um "
+                           f"{gap} Punkte — besser getrennt nach {dim} bilden.")
+    if verdict == "ok" and not reasons:
+        reasons.append(f"{n} Gewinner, {len(usable)} tragende Merkmale, keine gemischte "
+                       "Grundgesamtheit erkannt.")
+
+    return {"verdict": verdict, "winners": n, "population": len(population),
+            "reasons": reasons, "features": features, "splits": splits,
+            "winners_filter": win_filter}
 
 
 def latest_profile() -> dict | None:
