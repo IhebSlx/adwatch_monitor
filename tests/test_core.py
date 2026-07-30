@@ -764,6 +764,46 @@ def test_icp_parsers():
     assert plz_zone("123") is None
 
 
+def test_icp_winners_never_include_consumers(temp_db):
+    """Regression: 'Private Endkunden' who bought something were silently making
+    up ~a third of the default winners set, pulling the TRADE-PARTNER profile
+    toward consumer traits. They must never define the profile — not by default,
+    and not when the caller passes their own filter — unless hand-picked by id."""
+    from adwatch import customers
+    from adwatch.insights import icp
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    for i in range(6):
+        s.add(Company(name=f"Haendler {i}", country="DE", segment="Handel",
+                      postal_code="49134", revenue_y0=90000, revenue_y1=80000))
+    for i in range(6):
+        s.add(Company(name=f"Verbraucher {i}", country="DE", segment="Private Endkunden",
+                      postal_code="10115", revenue_y0=400, revenue_y1=300))
+    s.commit()
+    for c in s.scalars(select(Company)):
+        c.customer_state = customers.derive_customer_state(
+            c.revenue_y0, c.revenue_y1, c.revenue_y2, c.revenue_y3, c.revenue_y4)
+    s.commit()
+    consumer_ids = [c.id for c in s.scalars(select(Company).where(Company.segment == "Private Endkunden"))]
+    s.close()
+
+    # default winners: consumers excluded
+    p = icp.build_profile(None)
+    assert p["winners_count"] == 6
+    assert "Private Endkunden" not in (p["features"]["segment"]["shares"] or {})
+
+    # caller-supplied filter: consumers still excluded, caller's own exclusion kept
+    p2 = icp.build_profile({"customer_state": ["active", "new"], "exclude_segment": ["Handel"]})
+    assert set(p2["winners_filter"]["exclude_segment"]) == {"Handel", "Private Endkunden"}
+    assert p2["winners_count"] == 0
+
+    # hand-picked ids remain an explicit override (deliberate consumer profiling)
+    p3 = icp.build_profile({"ids": consumer_ids})
+    assert p3["winners_count"] == len(consumer_ids)
+
+
 def test_icp_profile_and_fit(temp_db):
     """The heart: the profile counts winner distributions; fit scores a company
     by how typical its values are (modal winner value = 1.0); unknown values are

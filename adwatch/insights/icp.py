@@ -46,6 +46,13 @@ DEFAULT_WEIGHTS = {
     "ad_presence": 1.0,
 }
 
+# Segments that must NEVER define the profile: they are not the kind of company
+# the partner program acquires. "Private Endkunden" are consumers — 332 of them
+# bought something, which silently made them 32% of the default winners set and
+# dragged the trade-partner profile toward consumer traits. The Explorer already
+# hides them from the VIEW; the winners definition has to exclude them too.
+WINNER_EXCLUDED_SEGMENTS = ("Private Endkunden",)
+
 _FEATURE_LABEL_DE = {
     "segment": "Kundensegment", "sub_segment": "Untersegment",
     "sales_channel": "Vertriebsweg", "plz_zone": "PLZ-Zone",
@@ -157,11 +164,19 @@ def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
 
     filters = dict(filters or {})
     if not any(filters.values()):
-        # Default winners: the companies buying NOW (active + new). Deliberately
-        # NOT "everyone who ever bought" — in this dataset that is the entire
+        # Default winners: the companies buying NOW (active + new), minus the
+        # segments that are not partner material at all. Deliberately NOT
+        # "everyone who ever bought" — in this dataset that is the entire
         # population (it's a customer export, never-bought = 0), and a profile
         # built from everyone just mirrors the population and ranks nothing.
-        filters = {"customer_state": ["active", "new"]}
+        filters = {"customer_state": ["active", "new"],
+                   "exclude_segment": list(WINNER_EXCLUDED_SEGMENTS)}
+    elif not filters.get("ids"):
+        # An explicit filter is respected, but consumers still never DEFINE the
+        # profile unless they were hand-picked by id. Any exclusion the caller
+        # set is kept and extended, not replaced.
+        already = list(filters.get("exclude_segment") or [])
+        filters["exclude_segment"] = already + [s for s in WINNER_EXCLUDED_SEGMENTS if s not in already]
 
     with SessionLocal() as s:
         winners = list(s.scalars(_apply_filters(select(Company), filters)))
