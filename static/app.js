@@ -161,7 +161,7 @@
     const isIG = href.includes("instagram.com");
     const platform = isIG ? ` <span class="role-badge" title="Instagram profile — same Meta ad identity as a Facebook page">IG</span>` : "";
     const needsId = (!r.page_id && r.resolution_status === "confirmed")
-      ? ` <span class="candidate-flag flag-warn" title="Meta page confirmed, but the numeric page ID needed for Ad lookup isn't captured yet — Ad lookup will resolve it, or add it manually with ✎.">⚠ no id</span>`
+      ? ` <span class="candidate-flag flag-warn" title="Meta-Seite bestätigt, aber die numerische Page-ID für den Ad lookup fehlt noch — der Ad lookup ermittelt sie, oder per ✎ manuell eintragen.">⚠</span>`
       : "";
     return `<a class="link" href="${esc(href)}" target="_blank">${esc(label)}</a>${platform}${needsId} ${editBtn}`;
   }
@@ -1871,8 +1871,8 @@
         <td class="num">${fitCell(r.fit_score)}</td>
         <td class="num">${r.active_ads == null ? '<span class="muted">—</span>' : (r.active_ads > 0 ? `<strong>${r.active_ads}</strong>` : '<span class="muted">0</span>')}</td>
         <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
-        <td>${website}</td>
-        <td>${esc(r.city || "")}</td>
+        <td class="cell-website">${website}</td>
+        <td class="cell-ort">${esc(r.city || "")}</td>
         <td class="num">${eur(r.revenue_y0)}</td>
         <td class="col-extra">${esc(r.sap_number || "")}</td>
         <td class="col-extra">${esc(r.kv || "")}</td>

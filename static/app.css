@@ -285,7 +285,13 @@ select { cursor: pointer; }
   overscroll-behavior: contain;
 }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 10.5px 13px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+/* Dense data tables size to their CONTENT instead of stretching to the
+   container: with a full-width layout (and the nav collapsed) a 100%-wide table
+   distributes all the slack into the columns, which reads as huge empty gaps
+   since long values are rare. Content-width keeps columns tight; .table-wrap
+   still scrolls when the columns genuinely need more room than the screen. */
+#customersTable, #companyTable, #logsTable, #divergenceTable { width: auto; }
+th, td { text-align: left; padding: 7.5px 9px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
 thead th {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 700;
   background: #fafbfc; position: sticky; top: 0; z-index: 2;
@@ -785,7 +791,19 @@ a.link:hover { text-decoration: underline; }
 }
 #customersTable .col-extra { display: none; }
 #customersTable.show-extra .col-extra { display: table-cell; }
-#customersTable .cell-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+/* Sensible default column widths: cap the few text-heavy cells so one long
+   value can't blow the column out to 400px. The LINK is truncated rather than
+   the cell, so badges and the ✎ edit button stay visible and clickable.
+   Everything stays adjustable by dragging the header edge. */
+#customersTable .cell-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+#customersTable .fb-page-cell .link { max-width: 140px; }
+#customersTable .cell-website .link { max-width: 150px; }
+#customersTable .fb-page-cell .link,
+#customersTable .cell-website .link {
+  display: inline-block; overflow: hidden;
+  text-overflow: ellipsis; vertical-align: middle;
+}
+#customersTable .cell-ort { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
 .scroll-sentinel { text-align: center; padding: 14px 0 6px; color: var(--muted); font-size: 12.5px; }
 
 /* ---- collapsible sidebar (icon-only) + full-width content ---- */
