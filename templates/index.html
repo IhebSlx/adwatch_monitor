@@ -325,11 +325,18 @@
             <button id="custSelectTopBtn" class="btn btn-sm">Select</button>
           </span>
           <button id="custColsBtn" class="btn btn-sm" title="SAP, KV, Segment, Vertriebsweg, Land und Umsatz-Historie ein-/ausblenden">Mehr Spalten ▾</button>
-          <button id="custFetchAllBtn" class="btn btn-sm" title="Anzeigen für ALLE gefilterten Firmen abrufen (keine Auswahl nötig)">📣 Ad lookup (gefiltert)</button>
-          <button id="custReportAllBtn" class="btn btn-sm" title="PDF-Bericht über ALLE gefilterten Firmen — der verwendete Filter steht im Berichtskopf">📄 Report (gefiltert)</button>
-          <button id="custEnrichAllBtn" class="btn btn-sm" title="Für ALLE gefilterten Firmen: fehlende Website finden + Firmeninfos von der eigenen Website lesen">✨ Daten anreichern (gefiltert)</button>
-          <button id="custSaveReportBtn" class="btn btn-sm" title="Diesen Filter als wiederkehrenden Bericht speichern (Empfänger + optionaler Zeitplan)">💾 Als Bericht speichern</button>
-          <button id="custExportAllBtn" class="btn btn-sm">Export filtered</button>
+          <!-- all act-on-the-FILTERED-set actions live in one dropdown; the
+               buttons keep their ids, so every existing handler is untouched -->
+          <div class="action-menu" id="custActionsMenu">
+            <button id="custActionsBtn" class="btn btn-sm btn-primary" title="Aktionen für ALLE Firmen im aktuellen Filter (keine Auswahl nötig)">⚡ Aktionen (gefiltert) ▾</button>
+            <div class="action-menu-panel hidden">
+              <button id="custFetchAllBtn" class="action-menu-item" title="Anzeigen für ALLE gefilterten Firmen abrufen">📣 Ad lookup</button>
+              <button id="custEnrichAllBtn" class="action-menu-item" title="Fehlende Website finden + Firmeninfos von der eigenen Website lesen">✨ Daten anreichern</button>
+              <button id="custReportAllBtn" class="action-menu-item" title="PDF-Bericht — der verwendete Filter steht im Berichtskopf">📄 Report erstellen</button>
+              <button id="custSaveReportBtn" class="action-menu-item" title="Diesen Filter als wiederkehrenden Bericht speichern (Empfänger + Zeitplan)">💾 Als Bericht speichern</button>
+              <button id="custExportAllBtn" class="action-menu-item" title="Gefilterte Firmen als Excel exportieren">⬇ Excel-Export</button>
+            </div>
+          </div>
         </div>
 
         <!-- appears when ≥1 company is selected: choose what to do with the selection -->

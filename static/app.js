@@ -2555,6 +2555,17 @@
       $("#custColsBtn").textContent = on ? "Weniger Spalten ▴" : "Mehr Spalten ▾";
     });
 
+    // "⚡ Aktionen (gefiltert)" dropdown — the five filtered-set actions in one
+    // place. The item buttons keep their original ids/handlers; this wiring
+    // only opens/closes the panel (and closes it once an action is picked).
+    const actionsPanel = $("#custActionsMenu .action-menu-panel");
+    $("#custActionsBtn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      actionsPanel.classList.toggle("hidden");
+    });
+    actionsPanel.addEventListener("click", () => actionsPanel.classList.add("hidden"));
+    document.addEventListener("click", () => actionsPanel.classList.add("hidden"));
+
     // ---------------- column-header menus: click a header -> sort + THAT
     // column's filter, Excel-style. The controls proxy into the hidden
     // state-holders (#custFilterState), so currentCustomerFilters() and all
