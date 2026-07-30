@@ -335,6 +335,7 @@
               <button id="custReportAllBtn" class="action-menu-item" title="PDF-Bericht — der verwendete Filter steht im Berichtskopf">📄 Report erstellen</button>
               <button id="custSaveReportBtn" class="action-menu-item" title="Diesen Filter als wiederkehrenden Bericht speichern (Empfänger + Zeitplan)">💾 Als Bericht speichern</button>
               <button id="custExportAllBtn" class="action-menu-item" title="Gefilterte Firmen als Excel exportieren">⬇ Excel-Export</button>
+              <button id="custPipelineBtn" class="action-menu-item" title="Mehrere Schritte in der richtigen Reihenfolge: anreichern → Identität → Anzeigen → Bericht → senden">🚀 Komplett-Pipeline…</button>
             </div>
           </div>
         </div>
@@ -381,6 +382,48 @@
             <button id="reportReadySendBtn" class="btn btn-primary">Senden</button>
             <button id="reportReadySaveBtn" class="btn" title="Diesen Filter als wiederkehrenden Bericht speichern">Als Bericht speichern…</button>
             <button id="reportReadyCloseBtn" class="btn btn-ghost">Schließen</button>
+          </div>
+        </div>
+
+        <!-- Komplett-Pipeline: pick the steps, they always run in the working order. -->
+        <div id="pipelinePanel" class="fetch-plan hidden">
+          <h3>🚀 Komplett-Pipeline</h3>
+          <p class="hint" id="pipelineScope"></p>
+          <p class="hint">Die Reihenfolge ist fest, weil die Schritte aufeinander aufbauen:
+            die <b>Anreicherung</b> findet die Website, die <b>Identitätsprüfung</b> nutzt genau
+            diese Website um die Meta-Seite zu finden, und der <b>Ad lookup</b> braucht beides
+            (Meta-Seite bzw. Website). Nicht gewählte Schritte werden übersprungen.</p>
+
+          <div class="pipe-steps">
+            <label class="pipe-step"><input type="checkbox" id="pipeEnrich" checked>
+              <span><b>1 · Daten anreichern</b><br><span class="muted small">Website finden + Beschreibung, Produkte, Größe, Marken (~$0,004/Firma)</span></span></label>
+            <label class="pipe-step"><input type="checkbox" id="pipeIdentity" checked>
+              <span><b>2 · Identitätsprüfung</b><br><span class="muted small">Meta-/Facebook-Seite ermitteln (~$0,005/Firma)</span></span></label>
+            <label class="pipe-step"><input type="checkbox" id="pipeAds">
+              <span><b>3 · Ad lookup</b>
+                <label class="pipe-sub"><input type="checkbox" id="pipeAdsMeta" checked> Meta</label>
+                <label class="pipe-sub"><input type="checkbox" id="pipeAdsGoogle"> Google</label>
+                <br><span class="muted small">Google ist langsam (~110 s/Firma), Meta ~20 s</span></span></label>
+            <label class="pipe-step"><input type="checkbox" id="pipeReport" checked>
+              <span><b>4 · Bericht erstellen</b>
+                <select id="pipeReportType" class="pipe-inline-sel">
+                  <option value="full">Vollständig</option>
+                  <option value="top5">Top 5</option>
+                </select>
+                <br><span class="muted small">Deutsches PDF inkl. Firmenprofile · kostenlos</span></span></label>
+            <label class="pipe-step"><input type="checkbox" id="pipeSend">
+              <span><b>5 · Bericht senden</b><br><span class="muted small">an die unten gewählten Empfänger</span></span></label>
+          </div>
+
+          <div id="pipeRecipientsWrap" class="hidden" style="margin-top:8px">
+            <div style="margin-bottom:4px"><b>Empfänger:</b></div>
+            <div id="pipeRecipients" class="recipient-checks"></div>
+          </div>
+
+          <div id="pipelineSummary" class="fetch-plan-summary" style="margin-top:12px"></div>
+          <div class="inline-form" style="margin-top:10px">
+            <button id="pipelineStartBtn" class="btn btn-primary">Pipeline starten</button>
+            <button id="pipelineCancelBtn" class="btn btn-ghost">Abbrechen</button>
           </div>
         </div>
 

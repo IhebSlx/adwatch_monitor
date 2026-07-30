@@ -849,6 +849,75 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_pipeline_runs_steps_in_the_working_order(temp_db, monkeypatch):
+    """The pipeline must execute enrich -> identity -> ads -> report -> send, skip
+    unchecked steps, and never send without a report. The order is load-bearing:
+    enrichment supplies the website that the identity check crawls and that the
+    Google lookup needs."""
+    from adwatch import jobs
+    from adwatch.models import Company, FetchJob, ReportRecipient
+
+    s = temp_db.SessionLocal()
+    a = Company(name="Pipe Eins", country="DE"); b = Company(name="Pipe Zwei", country="DE")
+    r = ReportRecipient(name="BD", email="bd@x.de", active=True)
+    s.add_all([a, b, r]); s.commit()
+    ids, rid = [a.id, b.id], r.id
+    s.close()
+
+    calls = []
+    import adwatch.enrich.service as enrich_service
+    import adwatch.identity.resolver as resolver
+    import adwatch.collect.pipeline as coll
+    import adwatch.report as report_mod
+    import adwatch.emailer as emailer_mod
+
+    monkeypatch.setattr(enrich_service, "enrich_company",
+                        lambda cid, **k: calls.append(("enrich", cid)) or {"status": "enriched", "website": "x.de",
+                                                                           "website_source": "email_domain",
+                                                                           "validated_by": "phone", "fields_found": 3})
+    monkeypatch.setattr(resolver, "run_identity_check",
+                        lambda cid, **k: calls.append(("identity", cid)) or {"status": "confirmed", "page_name": "P"})
+    monkeypatch.setattr(coll, "run_once", lambda company_id=None: calls.append(("meta", company_id)))
+    monkeypatch.setattr(coll, "run_once_google", lambda company_id=None: calls.append(("google", company_id)))
+    monkeypatch.setattr(jobs, "_plan_units", lambda s_, cids, srcs: [(cids[0], "meta")])
+    monkeypatch.setattr(report_mod, "build_report",
+                        lambda filters=None: calls.append(("report", None)) or "output/adwatch_report_KW31_2026.pdf")
+    monkeypatch.setattr(report_mod, "write_report_meta", lambda *a, **k: None)
+    monkeypatch.setattr(report_mod, "subject_for_filename", lambda f: "Bericht")
+    monkeypatch.setattr(emailer_mod, "send_report_email",
+                        lambda path, recipient=None, subject=None: calls.append(("send", tuple(recipient))))
+
+    plan = {"enrich": True, "identity": True, "ads": ["meta"], "report": "full", "send_to": [rid]}
+    job = jobs.create_pipeline_job(ids, plan, label="t")
+    assert job["total"] == 2 + 2 + 2 + 1 + 1          # enrich+identity per company, ads upper bound, report, send
+    jobs._run_pipeline(job["id"])                     # run inline, no thread
+
+    order = [c[0] for c in calls]
+    assert order.index("enrich") < order.index("identity") < order.index("meta")
+    assert order.index("meta") < order.index("report") < order.index("send")
+    assert [c for c in calls if c[0] == "enrich"] == [("enrich", ids[0]), ("enrich", ids[1])]
+    assert ("send", ("bd@x.de",)) in calls
+
+    s = temp_db.SessionLocal()
+    j = s.get(FetchJob, job["id"])
+    assert j.status == "done"
+    txt = " ".join(e["text"] for e in (j.log or []))
+    for marker in ("Schritt 1/5", "Schritt 2/5", "Schritt 3/5", "Schritt 4/5", "Schritt 5/5",
+                   "Pipeline abgeschlossen"):
+        assert marker in txt, marker
+    s.close()
+
+    # a plan with only some steps skips the rest; sending without a report is refused
+    calls.clear()
+    job2 = jobs.create_pipeline_job(ids, {"enrich": True}, label="t2")
+    jobs._run_pipeline(job2["id"])
+    assert {c[0] for c in calls} == {"enrich"}
+    with pytest.raises(ValueError):
+        jobs.create_pipeline_job(ids, {"send_to": [rid]})
+    with pytest.raises(ValueError):
+        jobs.create_pipeline_job(ids, {})
+
+
 def test_report_shows_enriched_profiles_and_marks_the_estimate(temp_db, tmp_path):
     """The Firmenprofile section must render the enriched picture per company —
     WITHOUT any ad data (the Spain case) — and must keep the verified description

@@ -63,17 +63,32 @@ def _digits(s: str | None) -> str:
     return re.sub(r"\D", "", str(s or ""))
 
 
+# Country calling codes we may strip — longest first, so 351/352 are tested
+# before 35, and 49 before 4. Only ever applied to a number that was written in
+# INTERNATIONAL form ('+…' or '00…'); otherwise a German local number like
+# '0341 555…' would have its '34' eaten and stop matching its own website.
+_CALLING_CODES = ("351", "352", "353", "358", "385", "386", "420", "421",
+                  "30", "31", "32", "33", "34", "36", "39", "40", "41", "43",
+                  "44", "45", "46", "47", "48", "49", "1")
+
+
 def national_phone_digits(phone: str | None) -> str:
-    """German number -> national significant digits, so '+49 5405 1234-0',
-    '0049 5405/12340' and '05405 1234 0' all compare equal."""
-    d = _digits(phone)
+    """Any European number -> national significant digits, so that
+    '+49 5405 1234-0' / '05405 1234 0' compare equal (Germany) and
+    '+34 932 188 693' / '932188693' compare equal (Spain)."""
+    raw = str(phone or "").strip()
+    d = _digits(raw)
     if not d:
         return ""
-    if d.startswith("0049"):
-        d = d[4:]
-    elif d.startswith("49") and len(d) >= 11:
-        d = d[2:]
-    if d.startswith("0"):
+    international = raw.startswith("+") or d.startswith("00")
+    if d.startswith("00"):
+        d, international = d[2:], True
+    if international:
+        for cc in _CALLING_CODES:
+            if d.startswith(cc) and len(d) - len(cc) >= 6:
+                d = d[len(cc):]
+                break
+    if d.startswith("0"):          # national trunk prefix
         d = d[1:]
     return d
 

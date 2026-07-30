@@ -725,6 +725,33 @@ def create_enrich_job_route(payload: IdentityJobIn):
         raise HTTPException(409, str(e))
 
 
+class PipelineIn(BaseModel):
+    company_ids: list[int]
+    plan: dict                      # {enrich, identity, ads:[...], report:'full'|'top5', send_to:[ids]}
+    label: str | None = None
+
+
+@app.post("/api/pipeline-jobs")
+def create_pipeline_job_route(payload: PipelineIn):
+    """Run several steps for one company set in the only order that works
+    (enrich -> identity -> ads -> report -> send). See jobs._run_pipeline."""
+    plan = payload.plan or {}
+    if plan.get("enrich") and not config.ANTHROPIC_API_KEY:
+        raise HTTPException(400, "ANTHROPIC_API_KEY ist nicht gesetzt — für die Anreicherung nötig")
+    if plan.get("ads") and not config.APIFY_API_TOKEN:
+        raise HTTPException(400, "APIFY_API_TOKEN ist nicht gesetzt — für den Ad lookup nötig")
+    if plan.get("send_to") and not config.POWER_AUTOMATE_WEBHOOK_URL:
+        raise HTTPException(400, "E-Mail ist nicht konfiguriert (POWER_AUTOMATE_WEBHOOK_URL)")
+    try:
+        job = jobs.create_pipeline_job(payload.company_ids, plan, payload.label)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        return jobs.start_pipeline_job(job["id"])
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
 @app.get("/api/companies/{company_id}/enrichment")
 def get_enrichment_route(company_id: int):
     from .enrich import service as enrich_service

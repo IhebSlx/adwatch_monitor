@@ -50,8 +50,21 @@ def _is_directory(domain: str) -> bool:
 
 
 _LEGAL_FORM_RE = re.compile(
-    r"\b(gmbh\s*&\s*co\.?\s*kg|gmbh|ag|kg|ohg|gbr|ug|e\.?\s?k\.?|inh\.?[^,]*|nachf\.?)\b\.?",
+    r"\b(gmbh\s*&\s*co\.?\s*kg|gmbh|ag|kg|ohg|gbr|ug|e\.?\s?k\.?|inh\.?[^,]*|nachf\.?"
+    r"|s\.?\s?l\.?\s?u\.?|s\.?\s?l\.?\s?n\.?\s?e\.?|s\.?\s?l\.?l\.?|s\.?\s?l\.?"
+    r"|s\.?\s?a\.?\s?u\.?|s\.?\s?a\.?|s\.?\s?c\.?\s?p\.?|lda\.?|unipessoal)\b\.?",
     re.IGNORECASE)
+
+# The "find the Impressum" trick is language-specific: a Spanish site has no
+# Impressum, it has an 'aviso legal'. Searching the German term against Spain
+# actively pushes the real company site out of the results.
+_LEGAL_PAGE_TERM = {
+    "DE": "Impressum", "AT": "Impressum", "CH": "Impressum",
+    "ES": "aviso legal", "PT": "contactos", "FR": "mentions légales",
+    "IT": "contatti", "NL": "contact", "PL": "kontakt",
+}
+_UI_LANG = {"ES": "es", "PT": "pt", "FR": "fr", "IT": "it", "NL": "nl", "PL": "pl",
+            "GB": "en", "IE": "en", "US": "en"}
 
 
 def _core_name(name: str) -> str:
@@ -63,10 +76,11 @@ def _core_name(name: str) -> str:
 
 
 def _run_query(query: str, country: str, limit: int, seen: set[str]) -> list[dict]:
+    cc = (country or "DE").upper()
     r = requests.post(
         config.SERPER_SEARCH_URL,
         headers={"X-API-KEY": config.SERPER_API_KEY, "Content-Type": "application/json"},
-        json={"q": query, "gl": (country or "de").lower(), "hl": "de", "num": 10},
+        json={"q": query, "gl": cc.lower(), "hl": _UI_LANG.get(cc, "de"), "num": 10},
         timeout=25,
     )
     if r.status_code >= 400:
@@ -112,8 +126,9 @@ def search_candidates(name: str, city: str | None = None, country: str = "DE",
     name = (name or "").strip()
     city = (city or "").strip()
     seen: set[str] = set()
+    legal_term = _LEGAL_PAGE_TERM.get((country or "DE").upper(), "contact")
 
-    strict = f'"{name}"' + (f" {city}" if city else "") + " Impressum"
+    strict = f'"{name}"' + (f" {city}" if city else "") + f" {legal_term}"
     out = _run_query(strict, country, limit, seen)
     if out:
         return out

@@ -1995,9 +1995,7 @@
     try {
       await api("/api/identity-jobs", "POST", { company_ids: ids });
       CUST.selected.clear();
-      await loadCustomers();
-      await loadJobs();
-      startJobPolling();
+      await showJobProgressNow();          // progress modal first, table after
     } catch (e) { alert(`Could not start identity check: ${e.message}`); }
   }
 
@@ -2020,10 +2018,109 @@
     try {
       await api("/api/enrich-jobs", "POST", { company_ids: ids });
       CUST.selected.clear();
-      await loadCustomers();
-      await loadJobs();
-      startJobPolling();
+      await showJobProgressNow();          // progress modal first, table after
     } catch (e) { alert(`Anreicherung konnte nicht gestartet werden: ${e.message}`); }
+  }
+
+  // Every company id under the current filter, WITHOUT touching the user's
+  // selection. (selectAllMatching() lives inside wireStatic() and is therefore
+  // not reachable from here — calling it threw "selectAllMatching is not
+  // defined" and silently killed both this panel and the filtered-enrich
+  // button.) Reading the scope is also simply the right behaviour: acting on
+  // "everything filtered" shouldn't mutate what the user had ticked.
+  async function filteredCompanyIds() {
+    const n = CUST.total || 0;
+    if (!n) return [];
+    const { ids } = await api("/api/customers/select-top", "POST",
+      { filters: currentCustomerFilters(), sort: CUST.sort, direction: CUST.direction, n });
+    return ids || [];
+  }
+
+  // ---------------- Komplett-Pipeline ----------------
+  let PIPE_IDS = [];
+
+  function pipelinePlan() {
+    const ads = [];
+    if ($("#pipeAdsMeta").checked) ads.push("meta");
+    if ($("#pipeAdsGoogle").checked) ads.push("google");
+    return {
+      enrich: $("#pipeEnrich").checked,
+      identity: $("#pipeIdentity").checked,
+      ads: $("#pipeAds").checked ? ads : [],
+      report: $("#pipeReport").checked ? $("#pipeReportType").value : null,
+      send_to: $("#pipeSend").checked ? checkedRecipientIds($("#pipeRecipients")) : [],
+    };
+  }
+
+  function renderPipelineSummary() {
+    const p = pipelinePlan();
+    const n = PIPE_IDS.length;
+    // per-company cost/time, deliberately rough and labelled as an estimate
+    let cost = 0, secs = 0;
+    if (p.enrich) { cost += n * 0.004; secs += n * 8; }
+    if (p.identity) { cost += n * 0.005; secs += n * 15; }
+    if (p.ads.includes("meta")) { cost += n * 0.004; secs += n * 20; }
+    if (p.ads.includes("google")) { cost += n * 0.012; secs += n * 110; }
+    const steps = [p.enrich && "Anreichern", p.identity && "Identität",
+                   p.ads.length && `Anzeigen (${p.ads.join("+")})`,
+                   p.report && "Bericht", p.send_to.length && `Senden (${p.send_to.length})`]
+                  .filter(Boolean);
+    const fmt = s => s < 90 ? `${Math.round(s)} s` : (s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
+    $("#pipelineSummary").innerHTML = `
+      <div><div class="stat-label">Firmen</div><div class="stat-value">${n.toLocaleString("de-DE")}</div></div>
+      <div><div class="stat-label">Schritte</div><div class="stat-value">${steps.length}</div></div>
+      <div><div class="stat-label">Geschätzte Dauer</div><div class="stat-value">${secs ? fmt(secs) : "—"}</div></div>
+      <div><div class="stat-label">Geschätzte Kosten</div><div class="stat-value">${cost ? "$" + cost.toFixed(2) : "$0"}</div></div>
+      <p class="hint" style="flex-basis:100%">Ablauf: ${steps.join(" → ") || "— kein Schritt gewählt"}</p>`;
+    $("#pipelineStartBtn").disabled = !steps.length || !n;
+    $("#pipeRecipientsWrap").classList.toggle("hidden", !$("#pipeSend").checked);
+    // sending needs a report in the same run
+    if ($("#pipeSend").checked && !$("#pipeReport").checked) {
+      $("#pipelineSummary").innerHTML +=
+        `<p class="hint status-error" style="flex-basis:100%">Zum Senden muss Schritt 4 (Bericht erstellen) aktiv sein.</p>`;
+      $("#pipelineStartBtn").disabled = true;
+    }
+  }
+
+  async function openPipelinePanel() {
+    // scope = current selection if any, else the whole filtered set
+    PIPE_IDS = CUST.selected.size ? [...CUST.selected] : await filteredCompanyIds();
+    $("#pipelineScope").textContent =
+      `Umfang: ${PIPE_IDS.length.toLocaleString("de-DE")} Firmen` +
+      (activeFilterSummary(currentCustomerFilters()).length
+        ? ` · Filter: ${activeFilterSummary(currentCustomerFilters()).join(" · ")}` : "");
+    renderRecipientChecks($("#pipeRecipients"), await ensureRecipients());
+    hideCompanyPanels();
+    $("#pipelinePanel").classList.remove("hidden");
+    renderPipelineSummary();
+    $("#pipelinePanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  async function startPipeline() {
+    const p = pipelinePlan();
+    const n = PIPE_IDS.length;
+    const order = [p.enrich && "1 Daten anreichern", p.identity && "2 Identitätsprüfung",
+                   p.ads.length && `3 Ad lookup (${p.ads.join(" + ")})`,
+                   p.report && `4 Bericht (${p.report === "full" ? "vollständig" : "Top 5"})`,
+                   p.send_to.length && `5 Senden an ${p.send_to.length} Empfänger`].filter(Boolean);
+    if (!await appConfirm(
+      `Pipeline für ${n} Firmen starten?\n\n${order.join("\n")}\n\n`
+      + `Die Schritte laufen in dieser Reihenfolge im Hintergrund. Fortschritt und `
+      + `jede einzelne Firma siehst du live; abbrechen ist jederzeit möglich.`,
+      { title: "Komplett-Pipeline", confirmText: "Pipeline starten" })) return;
+    const btn = $("#pipelineStartBtn");
+    btn.disabled = true; btn.textContent = "Startet…";
+    try {
+      await api("/api/pipeline-jobs", "POST", {
+        company_ids: PIPE_IDS, plan: p,
+        label: `Pipeline: ${order.length} Schritte · ${n} Firmen`,
+      });
+      $("#pipelinePanel").classList.add("hidden");
+      CUST.selected.clear();
+      await showJobProgressNow();
+    } catch (e) {
+      toast(`Pipeline konnte nicht gestartet werden: ${e.message}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "Pipeline starten"; }
   }
 
   async function runEnrichAction() {
@@ -2031,8 +2128,7 @@
   }
 
   async function runEnrichForFilter() {
-    await selectAllMatching();                 // every company under the current filter
-    await runEnrichForIds([...CUST.selected]);
+    await runEnrichForIds(await filteredCompanyIds());   // every company under the current filter
   }
 
   async function runDeleteAction() {
@@ -2796,6 +2892,15 @@
     $("#saveReportSaveBtn").addEventListener("click", saveReportDef);
     $("#saveReportCancelBtn").addEventListener("click", () => $("#saveReportPanel").classList.add("hidden"));
 
+    // Komplett-Pipeline
+    $("#custPipelineBtn").addEventListener("click", openPipelinePanel);
+    $("#pipelineStartBtn").addEventListener("click", startPipeline);
+    $("#pipelineCancelBtn").addEventListener("click", () => $("#pipelinePanel").classList.add("hidden"));
+    ["#pipeEnrich", "#pipeIdentity", "#pipeAds", "#pipeAdsMeta", "#pipeAdsGoogle",
+     "#pipeReport", "#pipeReportType", "#pipeSend"].forEach(sel =>
+      $(sel).addEventListener("change", renderPipelineSummary));
+    $("#pipeRecipients").addEventListener("change", renderPipelineSummary);
+
     // ICP tab
     $("#icpPreviewBtn").addEventListener("click", icpPreview);
 
@@ -2883,12 +2988,26 @@
       // up across views) — but once a job locks in its company list, leaving
       // old picks checked would silently pad the NEXT fetch you start.
       CUST.selected.clear();
-      await loadCustomers();
-      await loadJobs();
-      startJobPolling();
+      await showJobProgressNow();          // progress modal first, table after
     } catch (e) {
       alert(`Could not start job: ${e.message}`);
     } finally { btn.disabled = false; btn.textContent = "Start fetch"; }
+  }
+
+  // After starting ANY background job (ad lookup, identity check, enrichment) the
+  // progress modal must appear at once. It used to be rendered only after
+  // loadCustomers() had finished re-fetching the whole table, which on a few
+  // thousand rows left a second or two of "did my click do anything?" — the ad
+  // lookup masked it with its plan panel, the other two showed nothing at all.
+  // So: jobs first (that paints the modal), table refresh afterwards in the
+  // background. Also clears the dismiss/hide flags so a NEW job is never
+  // suppressed by a previous one the user had hidden.
+  async function showJobProgressNow() {
+    _stripHiddenJobId = null;
+    _stripDismissedJobId = null;
+    await loadJobs();          // -> updateJobStrip() paints the spinner + bar
+    startJobPolling();
+    loadCustomers().catch(() => { /* table refresh is cosmetic here */ });
   }
 
   let _jobPollTimer = null;
@@ -2929,7 +3048,8 @@
   const _cancelRequestedJobs = new Set();  // jobs the user asked to cancel — toast once cancelled
 
   function jobKindLabel(j) {
-    return { identity: "Identity check", enrich: "Datenanreicherung" }[j.kind] || "Ad lookup";
+    return { identity: "Identity check", enrich: "Datenanreicherung",
+             pipeline: "Komplett-Pipeline" }[j.kind] || "Ad lookup";
   }
 
   function hideJobStrip() { $("#jobStrip").classList.add("hidden"); }
@@ -3055,8 +3175,13 @@
       const isIdentity = j.kind === "identity";
       const isFetch = j.kind === "fetch" || !j.kind;
       const what = isIdentity ? "identity check"
-                 : (j.kind === "enrich" ? "Datenanreicherung · Website + Firmeninfos"
-                                        : `ad lookup · ${j.sources.join(" + ")}`);
+                 : j.kind === "enrich" ? "Datenanreicherung · Website + Firmeninfos"
+                 : j.kind === "pipeline" ? "Komplett-Pipeline · " + [
+                     (j.plan || {}).enrich && "anreichern", (j.plan || {}).identity && "Identität",
+                     ((j.plan || {}).ads || []).length && "Anzeigen",
+                     (j.plan || {}).report && "Bericht",
+                     ((j.plan || {}).send_to || []).length && "senden"].filter(Boolean).join(" → ")
+                 : `ad lookup · ${j.sources.join(" + ")}`;
       // an ad count is only meaningful for a real ad fetch
       const stats = `${j.completed}/${j.total} · ${j.errors} error(s)` + (isFetch ? ` · ${j.ads_collected} ads` : "");
       return `<div class="job-item" data-job="${j.id}">

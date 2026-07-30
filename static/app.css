@@ -842,6 +842,21 @@ body.nav-collapsed #fetchBtn::before { content: "📣"; font-size: 15px; line-he
    inside wide tables; collapsing the nav frees another ~180px */
 main { max-width: none; }
 
+/* ---- Komplett-Pipeline panel ---- */
+.pipe-steps { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+.pipe-step {
+  display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--card);
+  cursor: pointer; font-size: 13px; line-height: 1.45;
+}
+.pipe-step:hover { border-color: var(--border-strong); }
+.pipe-step > input { margin-top: 2px; flex: none; }
+.pipe-sub { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; font-size: 12px; }
+.pipe-inline-sel {
+  font: inherit; font-size: 12px; margin-left: 8px; padding: 2px 6px;
+  border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-subtle);
+}
+
 /* ---- "Aktionen (gefiltert)" dropdown ---- */
 .action-menu { position: relative; display: inline-block; }
 .action-menu-panel {

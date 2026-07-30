@@ -236,8 +236,14 @@ class FetchJob(Base):
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="queued")
     # queued | running | cancelling | done | failed | cancelled | interrupted
-    kind: Mapped[str] = mapped_column(String(20), default="fetch")     # fetch (ads) | identity (page resolution only)
+    kind: Mapped[str] = mapped_column(String(20), default="fetch")
+    # fetch (ads) | identity (page resolution) | enrich (website + facts)
+    # | pipeline (several of the above in the correct order, see jobs._run_pipeline)
     sources: Mapped[list] = mapped_column(JSON, default=list)          # ['meta','google']
+    # For kind='pipeline': which steps to run and their options, e.g.
+    # {"enrich":true,"identity":true,"ads":["meta","google"],"report":"full",
+    #  "send_to":[3,7]}. Kept as data so the run is reproducible and auditable.
+    plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     company_ids: Mapped[list] = mapped_column(JSON, default=list)      # the scoped set, fixed at creation
     label: Mapped[str | None] = mapped_column(String(300), nullable=True)  # e.g. filter description, for history
 

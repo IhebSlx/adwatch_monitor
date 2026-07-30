@@ -215,6 +215,8 @@ def _migrate(engine) -> None:
             """))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
         cols = _existing_columns(conn, "fetch_jobs")
+        if cols and "plan" not in cols:
+            conn.execute(text("ALTER TABLE fetch_jobs ADD COLUMN plan JSON"))
         if cols and "kind" not in cols:
             conn.execute(text("ALTER TABLE fetch_jobs ADD COLUMN kind VARCHAR(20) DEFAULT 'fetch'"))
             conn.execute(text("UPDATE fetch_jobs SET kind = 'fetch' WHERE kind IS NULL"))
