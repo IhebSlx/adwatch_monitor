@@ -732,6 +732,53 @@ def test_crm_id_is_the_primary_key_and_write_once(temp_db):
     s.close()
 
 
+def test_crm_showroom_ingest_joins_on_crm_id(temp_db):
+    """CRM showroom rows join to companies through the Dataverse GUID. A row whose
+    dealer GUID is unknown locally must still be STORED (company_id NULL, counted
+    as unmatched) — dropping it would hide that the company master is incomplete.
+    Re-ingesting the same pull must update, never duplicate."""
+    from adwatch import crm_sync
+    from adwatch.models import Company, CrmShowroom
+    from sqlalchemy import select
+
+    GUID_A = "aaaaaaaa-0000-0000-0000-000000000001"
+    s = temp_db.SessionLocal()
+    s.add(Company(name="Schaurraum Partner", country="DE", crm_id=GUID_A))
+    s.commit(); s.close()
+
+    recs = [
+        {"crm_id": "e1", "dealer_crm_id": GUID_A, "product_family": "Glas-Faltwand",
+         "product": "SL 25", "installed_on": "2024-05-01"},
+        {"crm_id": "e2", "dealer_crm_id": GUID_A, "product_family": "Wintergarten",
+         "product": "SDL Atrium plus", "installed_on": None},
+        {"crm_id": "e3", "dealer_crm_id": "unknown-guid", "product_family": "cero"},
+        {"crm_id": "", "dealer_crm_id": GUID_A, "product_family": "Ignoriert"},   # no key
+    ]
+    r = crm_sync.upsert_showrooms(recs)
+    assert r == {"received": 4, "inserted": 3, "updated": 0,
+                 "matched": 2, "unmatched": 1, "skipped": 1}
+
+    s = temp_db.SessionLocal()
+    rows = {x.crm_id: x for x in s.scalars(select(CrmShowroom))}
+    cid = s.scalar(select(Company.id))
+    assert rows["e1"].company_id == cid and rows["e1"].product == "SL 25"
+    assert rows["e1"].installed_on.isoformat() == "2024-05-01"
+    assert rows["e3"].company_id is None            # kept, but unresolved
+    s.close()
+
+    # idempotent: same pull again updates in place
+    r2 = crm_sync.upsert_showrooms(recs)
+    assert r2["inserted"] == 0 and r2["updated"] == 3
+    s = temp_db.SessionLocal()
+    assert len(list(s.scalars(select(CrmShowroom)))) == 3
+    s.close()
+
+    o = crm_sync.showroom_overview()
+    assert o["rows"] == 3 and o["matched_dealers"] == 1
+    assert dict(o["families"])["Glas-Faltwand"] == 1
+    assert o["per_company"][cid] == ["Glas-Faltwand", "Wintergarten"]
+
+
 def test_country_code_mapping():
     """The CRM's Land column holds full names; Company.country must end up as an
     ISO-2 code because it is what the ad lookups pass as their country param."""

@@ -326,6 +326,34 @@ class CompanyEnrichment(Base):
     enriched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class CrmShowroom(Base):
+    """One product family (and concrete system) a dealer exhibits in their
+    showroom — mirrored from the CRM table `sl_dealer_exposition` (1,739 rows,
+    207 dealers, actively maintained).
+
+    Why this matters more than it looks: the per-deal product table
+    (`sl_opportunityproduct`) exists but is permission-denied, and the SAP order
+    mirror is header-level only — so this is the best readable evidence of which
+    product families a partner actually commits to. It is the basis of the
+    cross-sell matrix: a dealer exhibiting Glas-Faltwand but NOT Wintergarten,
+    who otherwise resembles Wintergarten buyers, is a concrete, named
+    cross-sell target — revenue from a partner you already have.
+
+    Joined to Company via `dealer_crm_id` -> `Company.crm_id` (the Dataverse
+    accountid), which is exactly why the durable key had to come first."""
+    __tablename__ = "crm_showrooms"
+    __table_args__ = (UniqueConstraint("crm_id", name="uq_showroom_crm_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    crm_id: Mapped[str] = mapped_column(String(40))          # sl_dealer_expositionid
+    dealer_crm_id: Mapped[str | None] = mapped_column(String(40), nullable=True)   # accountid
+    company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True)
+    product_family: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    product: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    installed_on: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
 class IcpProfile(Base):
     """A computed Ideal-Customer-Profile: WHICH companies defined it (the
     winners filter), what their feature distributions look like, and when it was

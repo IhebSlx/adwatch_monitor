@@ -725,6 +725,28 @@ def create_enrich_job_route(payload: IdentityJobIn):
         raise HTTPException(409, str(e))
 
 
+class CrmShowroomsIn(BaseModel):
+    records: list[dict]          # [{crm_id, dealer_crm_id, product_family, product, installed_on}]
+
+
+@app.post("/api/crm/showrooms")
+def crm_showrooms_route(payload: CrmShowroomsIn):
+    """Ingest CRM dealer-showroom rows (sl_dealer_exposition). Transport-agnostic:
+    a Power-Automate flow, a direct Web API pull, or a one-off export all POST the
+    same shape. Idempotent on crm_id."""
+    from . import crm_sync
+    return crm_sync.upsert_showrooms(payload.records)
+
+
+@app.get("/api/crm/showrooms/overview")
+def crm_showrooms_overview_route():
+    from . import crm_sync
+    o = crm_sync.showroom_overview()
+    o.pop("per_company", None)      # keep the response small; used server-side
+    o.pop("company_names", None)
+    return o
+
+
 class PipelineIn(BaseModel):
     company_ids: list[int]
     plan: dict                      # {enrich, identity, ads:[...], report:'full'|'top5', send_to:[ids]}
