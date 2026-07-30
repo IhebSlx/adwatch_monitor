@@ -682,6 +682,56 @@ def test_enrich_status_never_leaks_ok(temp_db, monkeypatch):
     s.close()
 
 
+def test_crm_id_is_the_primary_key_and_write_once(temp_db):
+    """The Dataverse accountid is the only durable identity: SAP numbers are
+    absent on ~25% of rows and names change. It must be captured from the export
+    header "(Nicht ändern) Firma", matched on BEFORE sap/name, and never
+    overwritten — overwriting would silently repoint a row at another account."""
+    import io
+    import openpyxl
+    from adwatch.customers import parse_excel, upsert_companies
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    GUID = "b943a81c-e493-e011-97fd-0050568441a6"
+
+    def sheet(rows):
+        wb = openpyxl.Workbook(); ws = wb.active
+        ws.append(["(Nicht ändern) Firma", "(Nicht ändern) Geändert am",
+                   "SAP Nummer", "Firmenname", "Ort"])
+        for r in rows:
+            ws.append(r)
+        buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
+
+    recs, _ = parse_excel(sheet([[GUID, "2026-07-03 07:53:00", "0005000001", "Alte AG", "Melle"]]))
+    assert recs[0]["crm_id"] == GUID
+    upsert_companies(recs)
+    s = temp_db.SessionLocal()
+    c = s.scalar(select(Company))
+    assert c.crm_id == GUID and c.crm_modified_on is not None
+    original_id = c.id
+    s.close()
+
+    # SAME GUID, but renamed AND re-numbered in the CRM -> must UPDATE that row
+    recs2, _ = parse_excel(sheet([[GUID, "2026-07-30 09:00:00", "0009999999", "Neue AG", "Osnabrück"]]))
+    upsert_companies(recs2)
+    s = temp_db.SessionLocal()
+    rows = list(s.scalars(select(Company)))
+    assert len(rows) == 1, "matched on crm_id, so no duplicate row"
+    assert rows[0].id == original_id
+    assert rows[0].sap_number == "0009999999" and rows[0].city == "Osnabrück"
+    assert rows[0].crm_id == GUID
+    s.close()
+
+    # a DIFFERENT GUID with the same name is a different company -> new row
+    recs3, _ = parse_excel(sheet([["ffffffff-0000-0000-0000-000000000001",
+                                   "2026-07-30 09:00:00", None, "Neue AG Zweite", "Melle"]]))
+    upsert_companies(recs3)
+    s = temp_db.SessionLocal()
+    assert len(list(s.scalars(select(Company)))) == 2
+    s.close()
+
+
 def test_country_code_mapping():
     """The CRM's Land column holds full names; Company.country must end up as an
     ISO-2 code because it is what the ad lookups pass as their country param."""

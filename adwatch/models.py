@@ -40,6 +40,13 @@ class Company(Base):
 
     # ---- Master data (from the Excel import / SAP) — optional, since the
     # original hand-added companies predate this and have none of it. ----
+    # The Dataverse `accountid` GUID — the only truly durable identity. SAP
+    # numbers are missing on ~25% of rows (they appear at first order) and names
+    # change and collide; the GUID never does. Present in every CRM export as
+    # the "(Nicht ändern) Firma" column, so it can be backfilled offline.
+    # Matching order everywhere: crm_id -> sap_number -> exact name.
+    crm_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    crm_modified_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)  # CRM `modifiedon` = delta watermark
     sap_number: Mapped[str | None] = mapped_column(String(40), nullable=True)   # SAP Nummer
     kv: Mapped[str | None] = mapped_column(String(120), nullable=True)          # KV (account owner)
     segment: Mapped[str | None] = mapped_column(String(120), nullable=True)     # Kundensegment

@@ -31,6 +31,10 @@ from .models import Company
 # still line up. Each model field lists the header variants that map to it.
 # ---------------------------------------------------------------------------
 _FIELD_HEADERS: dict[str, tuple[str, ...]] = {
+    # The Dataverse accountid, shipped in every CRM export as "(Nicht ändern) Firma".
+    # Captured so the durable key lands in the DB on any import, with no CRM call.
+    "crm_id": ("(nicht ändern) firma", "(nicht andern) firma", "accountid", "crm id", "crm-id"),
+    "crm_modified_on": ("(nicht ändern) geändert am", "(nicht andern) geandert am", "modifiedon"),
     "sap_number": ("sap nummer", "sap-nummer", "sapnummer", "sap"),
     "name": ("firmenname", "firma", "name"),
     "kv": ("kv",),
@@ -143,6 +147,18 @@ def _clean_str(value) -> str | None:
         return None
     s = str(value).strip()
     return s or None
+
+
+def _parse_dt(value):
+    """CRM `modifiedon` — already a datetime from openpyxl, or an ISO string."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, dt.datetime):
+        return value
+    try:
+        return dt.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00").replace(" ", "T", 1))
+    except ValueError:
+        return None
 
 
 # The CRM's Land column holds full names ("Spanien", "Deutschland"), but every
@@ -259,14 +275,22 @@ def upsert_companies(records: list[dict]) -> dict:
     now = dt.datetime.utcnow()
     inserted = updated = skipped_no_name = name_collisions = 0
     with SessionLocal() as s:
+        by_crm = {c.crm_id: c for c in
+                  s.scalars(select(Company).where(Company.crm_id.is_not(None)))}
         by_sap = {c.sap_number: c for c in
                   s.scalars(select(Company).where(Company.sap_number.is_not(None)))}
         by_name = {c.name: c for c in s.scalars(select(Company))}
 
         for rec in records:
             sap = rec.get("sap_number")
+            crm = (rec.get("crm_id") or "").strip() or None
             name = (rec.get("name") or "").strip()
-            row = by_sap.get(sap) if sap else None
+            # crm_id first: it is the only key that never changes. SAP number and
+            # exact name remain as fallbacks for rows imported before the GUID
+            # was captured (and for hand-added companies).
+            row = by_crm.get(crm) if crm else None
+            if row is None and sap:
+                row = by_sap.get(sap)
             if row is None and name:
                 row = by_name.get(name)   # fold into a pre-existing un-SAP'd row by exact name
 
@@ -291,7 +315,8 @@ def upsert_companies(records: list[dict]) -> dict:
                     s.add(row)
                     s.flush()
                     name_collisions += 1
-                by_sap[sap] = row
+                if sap:
+                    by_sap[sap] = row
                 by_name[row.name] = row
                 inserted += 1
             else:
@@ -301,6 +326,15 @@ def upsert_companies(records: list[dict]) -> dict:
                 if field in ("sap_number", "name"):
                     if field == "sap_number" and value and row.sap_number != value:
                         row.sap_number = value
+                    continue
+                if field == "crm_id":
+                    # write-once: the GUID is immutable, and overwriting it would
+                    # silently repoint a row at a different CRM account
+                    if value and not row.crm_id:
+                        row.crm_id = str(value).strip()
+                    continue
+                if field == "crm_modified_on":
+                    row.crm_modified_on = _parse_dt(value)
                     continue
                 if field == "website_domain":
                     if value and not row.website_domain:
