@@ -940,11 +940,12 @@ def save_schedule_route(payload: ScheduleIn):
 
 @app.on_event("startup")
 def _startup() -> None:
+    from . import scheduler
+    scheduler.setup_logging()   # BEFORE init_db: its backup/migration lines are worth keeping
     init_db()
     seed_companies_if_empty()
     n = jobs.reconcile_on_startup()
     if n:
         import logging
         logging.getLogger("adwatch.jobs").warning("%d fetch job(s) marked 'interrupted' after restart", n)
-    from . import scheduler
     scheduler.start()

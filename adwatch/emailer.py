@@ -10,11 +10,19 @@ a bearer of its own: whoever has it can trigger the flow)."""
 from __future__ import annotations
 
 import base64
+import logging
 import os
+import time
 
 import requests
 
 from . import config
+
+# Every send attempt and its outcome go here (data/logs/adwatch.log). An ad-hoc
+# send isn't a FetchJob, so without this there is NO record of it anywhere — and
+# after a browser "failed to fetch" you cannot tell whether the mail went out or
+# not, which risks sending a colleague the same report twice.
+log = logging.getLogger("adwatch.emailer")
 
 
 def send_report_email(pdf_path: str, recipient: str | list[str] | None = None,
@@ -46,9 +54,23 @@ def send_report_email(pdf_path: str, recipient: str | list[str] | None = None,
         "subject": subject,
         "week": week_str_for_filename(filename),
     }
-    resp = requests.post(config.POWER_AUTOMATE_WEBHOOK_URL, json=payload, timeout=30)
+    kb = len(content_b64) // 1024
+    # logged BEFORE the call, so a crash mid-request still leaves the attempt on
+    # record — that is the case you most need to reconstruct afterwards
+    log.info("send attempt: %s (%d KB b64) -> %s | subject=%r", filename, kb, to, subject)
+    started = time.monotonic()
+    try:
+        resp = requests.post(config.POWER_AUTOMATE_WEBHOOK_URL, json=payload, timeout=30)
+    except Exception as exc:
+        log.error("send FAILED (no response) after %.1fs: %s -> %s | %s: %s",
+                  time.monotonic() - started, filename, to, type(exc).__name__, exc)
+        raise RuntimeError(f"Power Automate webhook unreachable: {exc}") from exc
     if resp.status_code >= 300:
+        log.error("send FAILED (HTTP %s) after %.1fs: %s -> %s | %s",
+                  resp.status_code, time.monotonic() - started, filename, to, resp.text[:300])
         raise RuntimeError(f"Power Automate webhook failed ({resp.status_code}): {resp.text[:300]}")
+    log.info("send OK (HTTP %s) in %.1fs: %s -> %s",
+             resp.status_code, time.monotonic() - started, filename, to)
 
 
 def send_weekly_report(full: bool = False) -> dict:

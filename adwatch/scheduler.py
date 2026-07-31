@@ -39,9 +39,13 @@ def _record(job: str, ok: bool, detail: str) -> None:
                         "ok": ok, "detail": detail[:300]}
 
 
-def _setup_logging() -> None:
-    """One rotating file handler so scheduled-run outcomes and exceptions are
-    not lost to a closed console (previously nothing was configured)."""
+def setup_logging() -> None:
+    """One rotating file handler so run outcomes and exceptions are not lost to a
+    closed console (previously nothing was configured).
+
+    Called first thing on app startup — not just from start() — because anything
+    logged before the handler exists is gone for good, and startup itself is
+    exactly when you want a record (DB migrations, backups, interrupted jobs)."""
     root = logging.getLogger("adwatch")
     if any(isinstance(h, logging.handlers.RotatingFileHandler) for h in root.handlers):
         return
@@ -156,7 +160,7 @@ def apply_schedule() -> dict:
 
 
 def start() -> None:
-    _setup_logging()
+    setup_logging()
     if not _scheduler.running:
         _scheduler.start()
     apply_schedule()

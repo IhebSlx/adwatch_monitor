@@ -86,7 +86,18 @@
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body);
     }
-    const r = await fetch(path, opts);
+    let r;
+    try {
+      r = await fetch(path, opts);
+    } catch (e) {
+      // fetch() rejects only when the request never got a response at all —
+      // the server is down or was killed mid-request. "Failed to fetch" alone
+      // doesn't tell you that, and for a send it doesn't say whether the mail
+      // went out, so name both.
+      throw new Error(`Server nicht erreichbar (läuft die App noch?) — Anfrage an ${path} `
+                      + "hat keine Antwort erhalten. Bei einem Versand bitte im Log prüfen, "
+                      + "ob die Mail rausging, bevor du erneut sendest.");
+    }
     if (!r.ok) {
       let msg = r.statusText;
       try { msg = (await r.json()).detail || msg; } catch (e) { /* ignore */ }
