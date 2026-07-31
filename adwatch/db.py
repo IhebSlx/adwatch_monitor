@@ -221,6 +221,15 @@ def _migrate(engine) -> None:
         if cols and "kind" not in cols:
             conn.execute(text("ALTER TABLE fetch_jobs ADD COLUMN kind VARCHAR(20) DEFAULT 'fetch'"))
             conn.execute(text("UPDATE fetch_jobs SET kind = 'fetch' WHERE kind IS NULL"))
+        # report_recipients: remembered tick state for the send boxes. Existing
+        # rows default to 1 so nobody silently drops out of a send they were
+        # already part of.
+        cols = _existing_columns(conn, "report_recipients")
+        if cols and "preselected" not in cols:
+            conn.execute(text("ALTER TABLE report_recipients "
+                              "ADD COLUMN preselected BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE report_recipients SET preselected = 1 "
+                              "WHERE preselected IS NULL"))
         # schedule_config: which source(s) the auto-fetch job runs
         cols = _existing_columns(conn, "schedule_config")
         if cols and "fetch_sources" not in cols:

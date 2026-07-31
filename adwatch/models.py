@@ -223,7 +223,16 @@ class ReportRecipient(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     email: Mapped[str] = mapped_column(String(300))
+    # `active` = may this address be mailed at all (a soft delete).
+    # `preselected` = is the send box ticked for them by default. Kept apart on
+    # purpose: unticking someone for one send must NOT quietly stop the weekly
+    # saved-report definitions from reaching them, which is what overloading
+    # `active` would do.
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # server_default as well as default: db.py seeds the configured default
+    # recipient with raw SQL, which never sees the ORM-side default.
+    preselected: Mapped[bool] = mapped_column(Boolean, default=True,
+                                              server_default="1")
     added_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
 

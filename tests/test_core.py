@@ -1059,6 +1059,36 @@ def test_report_shows_enriched_profiles_and_marks_the_estimate(temp_db, tmp_path
     assert "WAREMA" in text
 
 
+def test_recipient_tick_state_persists_and_is_not_active(temp_db):
+    """Unticking a recipient must survive a reload, and must NOT disable the
+    address — a saved weekly definition still has to reach them."""
+    from adwatch import services
+    from adwatch.models import ReportRecipient
+
+    a = services.add_recipient("a@solarlux.com", "A")
+    services.add_recipient("b@solarlux.com", "B")
+    # everyone starts ticked, so behaviour is unchanged until the user acts
+    assert all(r["preselected"] for r in services.list_recipients())
+
+    services.set_recipient_preselected(a["id"], False)
+    rows = {r["email"]: r for r in services.list_recipients()}
+    assert rows["a@solarlux.com"]["preselected"] is False
+    assert rows["b@solarlux.com"]["preselected"] is True
+    # the crucial separation: unticked but still mailable
+    assert rows["a@solarlux.com"]["active"] is True
+    with temp_db.SessionLocal() as s:
+        assert s.get(ReportRecipient, a["id"]).active is True
+
+    # and it toggles back. NB the fixture also seeds the configured default
+    # recipient via raw SQL — it must carry preselected=True too, which is why
+    # the column needs a server default and not just an ORM-side one.
+    services.set_recipient_preselected(a["id"], True)
+    assert all(r["preselected"] for r in services.list_recipients())
+
+    with pytest.raises(ValueError):
+        services.set_recipient_preselected(9999, False)
+
+
 def test_ad_products_are_normalised_to_german_families():
     """Ads are written in the local market's language but the report is German.
     The first Spanish run listed 'cerramiento', 'Porche-Verschluss (porch closure)'

@@ -1096,9 +1096,10 @@
 
   // ------------------------------------------------------------------ Reports tab
   let REPORTS_STATE = null;
-  // Recipients are checked by default; this tracks ones the user explicitly
-  // unchecked, so newly added recipients always start checked too.
-  const uncheckedRecipients = new Set();
+  // The tick state lives on the recipient row (ReportRecipient.preselected) and
+  // is PATCHed on every change — it used to be a JS Set that died on reload, so
+  // an unticked colleague silently came back next time the tab was opened.
+  // A newly added recipient still starts ticked (the column defaults to true).
 
   function fmtSize(bytes) {
     if (bytes < 1024) return `${bytes} B`;
@@ -1121,18 +1122,33 @@
     box.innerHTML = recipients.map(r => `
       <div class="page-item">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" class="recipient-check" data-rid="${r.id}" ${uncheckedRecipients.has(r.id) ? "" : "checked"}>
+          <input type="checkbox" class="recipient-check" data-rid="${r.id}" ${r.preselected === false ? "" : "checked"}>
           <span><b>${esc(r.name || r.email)}</b>${r.name ? ` <span class="muted">${esc(r.email)}</span>` : ""}</span>
         </label>
         <button class="btn btn-sm del-recipient-btn" data-rid="${r.id}">Remove</button>
       </div>`).join("");
-    $$(".recipient-check", box).forEach(cb => cb.addEventListener("change", () => {
+    $$(".recipient-check", box).forEach(cb => cb.addEventListener("change", async () => {
       const rid = Number(cb.dataset.rid);
-      if (cb.checked) uncheckedRecipients.delete(rid); else uncheckedRecipients.add(rid);
+      const on = cb.checked;
+      cb.disabled = true;
+      try {
+        await api(`/api/recipients/${rid}`, "PATCH", { preselected: on });
+        // keep the cached copy in step so the other send boxes agree without a reload
+        const row = (REPORTS_STATE.recipients || []).find(x => x.id === rid);
+        if (row) row.preselected = on;
+        if (SAVED_STATE && SAVED_STATE.recipients) {
+          const r2 = SAVED_STATE.recipients.find(x => x.id === rid);
+          if (r2) r2.preselected = on;
+        }
+      } catch (e) {
+        cb.checked = !on;                 // the choice didn't persist — don't pretend it did
+        toast(`Auswahl konnte nicht gespeichert werden: ${e.message || e}`, "error");
+      } finally {
+        cb.disabled = false;
+      }
     }));
     $$(".del-recipient-btn", box).forEach(btn => btn.addEventListener("click", async () => {
       const rid = Number(btn.dataset.rid);
-      uncheckedRecipients.delete(rid);
       await api(`/api/recipients/${rid}`, "DELETE");
       await loadReports();
     }));
@@ -1202,8 +1218,13 @@
     return activeFilterSummary(filters).join(" · ");
   }
 
+  // `preselected` is an explicit id list (a saved definition's recipients).
+  // Without one, fall back to the remembered per-recipient tick state instead of
+  // ticking everybody, so the inline send and the pipeline panel agree with the
+  // choice made in the Reports tab.
   function renderRecipientChecks(container, recipients, preselected) {
-    const pre = new Set(preselected != null ? preselected : recipients.filter(r => r.active).map(r => r.id));
+    const pre = new Set(preselected != null ? preselected
+                        : recipients.filter(r => r.active && r.preselected !== false).map(r => r.id));
     if (!recipients.length) {
       container.innerHTML = `<p class="hint">Keine Empfänger — im Reports-Tab unter „Recipients" anlegen.</p>`;
       return;

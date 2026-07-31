@@ -99,6 +99,10 @@ class RecipientIn(BaseModel):
     name: str | None = None
 
 
+class RecipientPatchIn(BaseModel):
+    preselected: bool
+
+
 class ScheduleIn(BaseModel):
     fetch_enabled: bool | None = None
     fetch_day: int | None = None      # 0=Mon .. 6=Sun
@@ -899,6 +903,16 @@ def add_recipient_route(payload: RecipientIn):
         return services.add_recipient(payload.email, payload.name)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.patch("/api/recipients/{rid}")
+def update_recipient_route(rid: int, payload: RecipientPatchIn):
+    """Persist the send box's tick state, so a choice made once survives a
+    reload instead of resetting to 'everyone'."""
+    try:
+        return services.set_recipient_preselected(rid, payload.preselected)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.delete("/api/recipients/{rid}")

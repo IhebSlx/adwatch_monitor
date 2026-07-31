@@ -385,7 +385,21 @@ def clear_logs() -> dict:
 def list_recipients() -> list[dict]:
     with SessionLocal() as s:
         rows = s.scalars(select(ReportRecipient).order_by(ReportRecipient.added_at)).all()
-        return [{"id": r.id, "name": r.name, "email": r.email, "active": r.active} for r in rows]
+        return [{"id": r.id, "name": r.name, "email": r.email, "active": r.active,
+                 "preselected": bool(r.preselected)} for r in rows]
+
+
+def set_recipient_preselected(rid: int, preselected: bool) -> dict:
+    """Remember whether this recipient's send box starts ticked. Purely a UI
+    default — it never affects whether the address may be mailed (`active`)."""
+    with SessionLocal() as s:
+        r = s.get(ReportRecipient, rid)
+        if not r:
+            raise ValueError("Recipient not found")
+        r.preselected = bool(preselected)
+        s.commit()
+        return {"id": r.id, "name": r.name, "email": r.email, "active": r.active,
+                "preselected": bool(r.preselected)}
 
 
 def add_recipient(email: str, name: str | None = None) -> dict:
