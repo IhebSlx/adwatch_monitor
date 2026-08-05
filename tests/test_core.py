@@ -962,6 +962,39 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_thinly_known_features_do_not_score(temp_db):
+    """diagnose() refused to trust a feature below 15% coverage, but fit_for used
+    it anyway — so Betriebsgröße, known for 3% of winners (a distribution built
+    from ~20 companies), was shaping EVERY company's fit score. Warning about a
+    number and then scoring with it is worse than not having it at all."""
+    from adwatch.insights.icp import fit_for
+
+    profile = {
+        "weights": {"segment": 1.0, "size_bucket": 1.0},
+        "features": {
+            # solidly known, and discriminating
+            "segment": {"coverage": 1.0, "shares": {"Handel": 0.7, "Verarbeiter": 0.3}},
+            # the live case: a spread that LOOKS informative but rests on ~20 rows
+            "size_bucket": {"coverage": 0.03,
+                            "shares": {"20-49": 0.5, "10-19": 0.3, "50+": 0.2}},
+        },
+    }
+    # a company matching ONLY the thin feature has nothing comparable left
+    fit_thin, bd_thin = fit_for({"segment": None, "size_bucket": "20-49"}, profile)
+    assert fit_thin is None and bd_thin == []
+
+    # and the thin feature cannot inflate a score that rests on the solid one
+    fit_a, _ = fit_for({"segment": "Handel", "size_bucket": "20-49"}, profile)
+    fit_b, _ = fit_for({"segment": "Handel", "size_bucket": None}, profile)
+    assert fit_a == fit_b, "size_bucket must not move the score at 3% coverage"
+
+    # raise its coverage above the floor and it starts counting
+    profile["features"]["size_bucket"]["coverage"] = 0.6
+    fit_c, bd_c = fit_for({"segment": "Handel", "size_bucket": "20-49"}, profile)
+    assert {b["feature"] for b in bd_c} >= {"segment", "size_bucket"}
+    assert fit_c is not None
+
+
 def test_consumers_are_excluded_from_every_count(temp_db):
     """Private Endkunden are 36% of the base and none of them will ever run an ad
     campaign, so including them made every ratio wrong ("14 of 4618"). They stay in

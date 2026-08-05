@@ -221,6 +221,13 @@ def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
 # fit scoring
 # ---------------------------------------------------------------------------
 
+# Shared by SCORING (fit_for) and DIAGNOSIS (diagnose): a feature known for fewer
+# than this share of winners proves nothing, however cleanly it seems to separate
+# those few rows. Defined here because scoring is the more important consumer —
+# diagnose only reports, fit_for changes every number in the app.
+_MIN_COVERAGE = 0.15
+
+
 def fit_for(features: dict, profile: dict) -> tuple[float | None, list[dict]]:
     """(fit 0-100, per-feature breakdown) of one company against a profile.
     Per feature: points = winners' share of the company's value, normalised by
@@ -235,6 +242,13 @@ def fit_for(features: dict, profile: dict) -> tuple[float | None, list[dict]]:
         shares = dist.get("shares") or {}
         if not shares:
             continue                      # winners themselves had no data here
+        # Too thinly known to score with. diagnose() already refuses to trust a
+        # feature below this coverage, but fit_for used it anyway — so
+        # Betriebsgröße (known for 3% of winners, i.e. a distribution built from
+        # ~20 companies) was shaping EVERY company's fit score. Warning about a
+        # number and then scoring with it is worse than not having it.
+        if (dist.get("coverage") or 0) < _MIN_COVERAGE:
+            continue
         max_share = max(shares.values())
         if max_share >= 0.9 and feat != "products":
             # non-discriminating: ~every winner has the same value (live case:
@@ -338,8 +352,6 @@ MIN_WINNERS_USABLE = 30      # below this: indicative only
 MIN_WINNERS_SOLID = 80       # at/above this: stable distributions
 _TVD_NO_SIGNAL = 0.05        # winners vs population distance below this = noise
 _SPLIT_GAP = 25              # self-score minus cross-score above this = mixed set
-_MIN_COVERAGE = 0.15         # a feature known for <15% of winners proves nothing,
-                             # however cleanly it seems to separate those few rows
 
 
 def _distribution(companies: list[Company], feat: str, ads: dict) -> dict[str, float]:
