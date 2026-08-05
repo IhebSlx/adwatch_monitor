@@ -176,11 +176,62 @@ def _migrate(engine) -> None:
                         :city, :phone, :email, :fax, :website,
                         :r0, :r1, :r2, :r3, :r4, :imported_at)
                 """), params)
+        # companies: enrichment fields promoted onto the row (see enrich/ and
+        # models.CompanyEnrichment). Additive + nullable; enrichment_status gets a
+        # DEFAULT so existing rows read as "never enriched" rather than NULL.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("description", "TEXT"), ("products", "JSON"),
+                ("founded_year", "INTEGER"), ("employee_hint", "VARCHAR(120)"),
+                ("enrichment_status", "VARCHAR(20) DEFAULT 'none'"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            conn.execute(text("UPDATE companies SET enrichment_status = 'none' "
+                              "WHERE enrichment_status IS NULL"))
+        # companies: scoring columns (customer lifecycle + ICP fit) — additive.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("customer_state", "VARCHAR(12)"), ("fit_score", "FLOAT"),
+                ("opportunity_score", "FLOAT"), ("target_score", "FLOAT"),
+                ("fit_breakdown", "JSON"), ("scores_updated_at", "DATETIME"),
+                ("is_intercompany", "BOOLEAN DEFAULT 0"),
+                ("crm_id", "VARCHAR(40)"), ("crm_modified_on", "DATETIME"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            # backfill customer_state from the revenue columns (same derivation
+            # as customers.derive_customer_state, inlined as SQL for the one-off)
+            conn.execute(text("""
+                UPDATE companies SET customer_state = CASE
+                  WHEN COALESCE(revenue_y0,0) > 0 AND (COALESCE(revenue_y1,0) > 0 OR COALESCE(revenue_y2,0) > 0
+                       OR COALESCE(revenue_y3,0) > 0 OR COALESCE(revenue_y4,0) > 0) THEN 'active'
+                  WHEN COALESCE(revenue_y0,0) > 0 THEN 'new'
+                  WHEN COALESCE(revenue_y1,0) > 0 OR COALESCE(revenue_y2,0) > 0
+                       OR COALESCE(revenue_y3,0) > 0 OR COALESCE(revenue_y4,0) > 0 THEN 'lapsed'
+                  ELSE 'never' END
+                WHERE customer_state IS NULL
+            """))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
         cols = _existing_columns(conn, "fetch_jobs")
+        if cols and "plan" not in cols:
+            conn.execute(text("ALTER TABLE fetch_jobs ADD COLUMN plan JSON"))
         if cols and "kind" not in cols:
             conn.execute(text("ALTER TABLE fetch_jobs ADD COLUMN kind VARCHAR(20) DEFAULT 'fetch'"))
             conn.execute(text("UPDATE fetch_jobs SET kind = 'fetch' WHERE kind IS NULL"))
+        # report_events is created by create_all — nothing to migrate, but an
+        # existing DB has no history, so the Logs tab starts from this release.
+        # report_recipients: remembered tick state for the send boxes. Existing
+        # rows default to 1 so nobody silently drops out of a send they were
+        # already part of.
+        cols = _existing_columns(conn, "report_recipients")
+        if cols and "preselected" not in cols:
+            conn.execute(text("ALTER TABLE report_recipients "
+                              "ADD COLUMN preselected BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE report_recipients SET preselected = 1 "
+                              "WHERE preselected IS NULL"))
         # schedule_config: which source(s) the auto-fetch job runs
         cols = _existing_columns(conn, "schedule_config")
         if cols and "fetch_sources" not in cols:

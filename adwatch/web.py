@@ -99,6 +99,10 @@ class RecipientIn(BaseModel):
     name: str | None = None
 
 
+class RecipientPatchIn(BaseModel):
+    preselected: bool
+
+
 class ScheduleIn(BaseModel):
     fetch_enabled: bool | None = None
     fetch_day: int | None = None      # 0=Mon .. 6=Sun
@@ -108,6 +112,20 @@ class ScheduleIn(BaseModel):
     send_day: int | None = None
     send_time: str | None = None
     send_report: str | None = None    # top5 | full
+
+
+class ReportDefIn(BaseModel):
+    name: str | None = None
+    report_type: str | None = None          # full | top5
+    filters: dict | None = None             # a Companies-Explorer filter blob
+    recipient_ids: list[int] | None = None
+    schedule_enabled: bool | None = None
+    schedule_day: int | None = None         # 0=Mon .. 6=Sun
+    schedule_time: str | None = None        # 'HH:MM'
+
+
+class RunReportDefIn(BaseModel):
+    send: bool = True
 
 
 class ConfirmIn(BaseModel):
@@ -330,6 +348,15 @@ def remove_company(cid: int):
     return {"ok": True}
 
 
+@app.get("/api/companies/{cid}")
+def get_company_route(cid: int):
+    """Full master-data row incl. candidates + fit_breakdown (drawer only)."""
+    d = customers.get_company(cid)
+    if not d:
+        raise HTTPException(404, "Company not found")
+    return d
+
+
 @app.get("/api/companies/{cid}/detail")
 def company_detail(cid: int):
     metrics = services.latest_metrics([cid])   # scoped — not the whole base
@@ -442,10 +469,78 @@ def list_reports():
 
 @app.post("/api/reports/generate")
 def generate_report(payload: EmailReportIn = EmailReportIn()):
-    from .report import build_report, build_top5_report
+    from .report import build_report, build_top5_report, write_report_meta
     path = build_report(filters=payload.filters) if payload.report == "full" \
         else build_top5_report(filters=payload.filters)
+    # so the Reports list can show the filter used, and the Logs tab the history
+    write_report_meta(path, filters=payload.filters, source="manual")
     return {"filename": Path(path).name}
+
+
+# --- Saved report definitions: a named filter + recipients + optional weekly
+# --- schedule, so a custom filtered report is one-click (or automatic) to send.
+@app.get("/api/report-defs")
+def list_report_defs():
+    from . import report_defs
+    return {"definitions": report_defs.list_definitions(),
+            "recipients": services.list_recipients()}
+
+
+@app.post("/api/report-defs")
+def create_report_def(payload: ReportDefIn):
+    from . import report_defs, scheduler
+    try:
+        d = report_defs.create_definition(
+            name=payload.name, filters=payload.filters or {},
+            report_type=payload.report_type or "full",
+            recipient_ids=payload.recipient_ids or [],
+            schedule_enabled=bool(payload.schedule_enabled),
+            schedule_day=payload.schedule_day or 0,
+            schedule_time=payload.schedule_time or "07:00")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    scheduler.apply_schedule()   # register/refresh this definition's cron if scheduled
+    return d
+
+
+@app.put("/api/report-defs/{def_id}")
+def update_report_def(def_id: int, payload: ReportDefIn):
+    from . import report_defs, scheduler
+    try:
+        d = report_defs.update_definition(def_id, **payload.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    scheduler.apply_schedule()
+    return d
+
+
+@app.delete("/api/report-defs/{def_id}")
+def delete_report_def(def_id: int):
+    from . import report_defs, scheduler
+    report_defs.delete_definition(def_id)
+    scheduler.apply_schedule()
+    return {"ok": True}
+
+
+@app.post("/api/report-defs/{def_id}/run")
+def run_report_def(def_id: int, payload: RunReportDefIn = RunReportDefIn()):
+    from . import report_defs
+    if payload.send and not config.POWER_AUTOMATE_WEBHOOK_URL:
+        raise HTTPException(400, "Email isn't configured (POWER_AUTOMATE_WEBHOOK_URL). "
+                                 "Generate without sending, or set it in Settings.")
+    try:
+        return report_defs.run_definition(def_id, send=payload.send)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/report-events")
+def report_events_route(limit: int = 200):
+    """Report creation + delivery history for the Logs tab."""
+    from . import report_log
+    return {"events": report_log.history(limit)}
 
 
 @app.get("/api/reports/{filename}")
@@ -464,7 +559,8 @@ def send_existing_report(filename: str, payload: SendExistingIn = SendExistingIn
         raise HTTPException(400, "No recipient given and no default is configured")
     subject = payload.subject or subject_for_filename(filename)
     try:
-        send_report_email(str(path), recipient=to, subject=subject)
+        send_report_email(str(path), recipient=to, subject=subject,
+                          source="manual")
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "sent_to": to}
@@ -484,7 +580,7 @@ def send_report_email_route(payload: EmailReportIn = EmailReportIn()):
         raise HTTPException(400, "No recipient given and no default is configured")
     subject = payload.subject or subject_for_filename(os.path.basename(path))
     try:
-        send_report_email(path, recipient=to, subject=subject)
+        send_report_email(path, recipient=to, subject=subject, source="manual")
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "sent_to": to}
@@ -529,6 +625,37 @@ def customer_export_route(payload: CustomerExportIn):
     )
 
 
+# --- ICP: build the Ideal-Customer-Profile from a winners filter, preview it,
+# --- apply it to score the whole base (fit/opportunity/target). Local compute,
+# --- no API cost.
+@app.post("/api/icp/preview")
+def icp_preview_route(payload: SelectTopIn):
+    from .insights import icp
+    return icp.build_profile(payload.filters or None)
+
+
+@app.post("/api/icp/apply")
+def icp_apply_route(payload: SelectTopIn):
+    from .insights import icp
+    try:
+        return icp.apply_profile(payload.filters or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/icp/diagnose")
+def icp_diagnose_route(payload: SelectTopIn):
+    """Is this winners filter worth building a profile from — and why/why not."""
+    from .insights import icp
+    return icp.diagnose(payload.filters or None)
+
+
+@app.get("/api/icp/latest")
+def icp_latest_route():
+    from .insights import icp
+    return icp.latest_profile() or {"id": None}
+
+
 @app.get("/api/customers")
 def list_customers_route(
     q: str | None = None,
@@ -541,7 +668,9 @@ def list_customers_route(
     exclude_sub_segment: list[str] = Query(default=[]),
     resolution_status: list[str] = Query(default=[]),
     tracked: bool | None = None, page_id_state: str | None = None,
-    ad_activity: str | None = None,
+    ad_activity: str | None = None, ad_source: str | None = None,
+    no_website: bool = False, enrichment_status: list[str] = Query(default=[]),
+    customer_state: list[str] = Query(default=[]), fit_min: float | None = None,
     sort: str | None = None, direction: str = "asc", page: int = 1, page_size: int = 50,
 ):
     filters = {"q": q, "kv": kv, "segment": segment, "sub_segment": sub_segment,
@@ -551,7 +680,10 @@ def list_customers_route(
                "exclude_kv": exclude_kv, "exclude_segment": exclude_segment,
                "exclude_sub_segment": exclude_sub_segment,
                "resolution_status": resolution_status, "tracked": tracked,
-               "page_id_state": page_id_state, "ad_activity": ad_activity}
+               "page_id_state": page_id_state, "ad_activity": ad_activity,
+               "ad_source": ad_source, "no_website": no_website,
+               "enrichment_status": enrichment_status,
+               "customer_state": customer_state, "fit_min": fit_min}
     return customers.query_companies(filters, sort, direction, page, page_size)
 
 
@@ -588,6 +720,107 @@ def create_job_route(payload: JobCreateIn):
 @app.get("/api/fetch-jobs")
 def list_jobs_route(kind: str | None = None):
     return jobs.list_jobs(kind=kind)
+
+
+# --- Enrichment: find the missing website + pull useful facts off the company's
+# --- own site (see enrich/). Costs ~$0.001 search + ~$0.003 LLM per company.
+@app.post("/api/enrich-jobs")
+def create_enrich_job_route(payload: IdentityJobIn):
+    if not config.ANTHROPIC_API_KEY:
+        raise HTTPException(400, "ANTHROPIC_API_KEY is not set — needed to extract company facts")
+    try:
+        job = jobs.create_job(payload.company_ids, ["web"], payload.label, kind="enrich")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        return jobs.start_job(job["id"])
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+class CrmShowroomsIn(BaseModel):
+    records: list[dict]          # [{crm_id, dealer_crm_id, product_family, product, installed_on}]
+
+
+@app.post("/api/crm/showrooms")
+def crm_showrooms_route(payload: CrmShowroomsIn):
+    """Ingest CRM dealer-showroom rows (sl_dealer_exposition). Transport-agnostic:
+    a Power-Automate flow, a direct Web API pull, or a one-off export all POST the
+    same shape. Idempotent on crm_id."""
+    from . import crm_sync
+    return crm_sync.upsert_showrooms(payload.records)
+
+
+@app.get("/api/crm/showrooms/overview")
+def crm_showrooms_overview_route():
+    from . import crm_sync
+    o = crm_sync.showroom_overview()
+    o.pop("per_company", None)      # keep the response small; used server-side
+    o.pop("company_names", None)
+    return o
+
+
+class PipelineIn(BaseModel):
+    company_ids: list[int]
+    plan: dict                      # {enrich, identity, ads:[...], report:'full'|'top5', send_to:[ids]}
+    label: str | None = None
+
+
+@app.post("/api/pipeline-jobs")
+def create_pipeline_job_route(payload: PipelineIn):
+    """Run several steps for one company set in the only order that works
+    (enrich -> identity -> ads -> report -> send). See jobs._run_pipeline."""
+    plan = payload.plan or {}
+    if plan.get("enrich") and not config.ANTHROPIC_API_KEY:
+        raise HTTPException(400, "ANTHROPIC_API_KEY ist nicht gesetzt — für die Anreicherung nötig")
+    if plan.get("ads") and not config.APIFY_API_TOKEN:
+        raise HTTPException(400, "APIFY_API_TOKEN ist nicht gesetzt — für den Ad lookup nötig")
+    if plan.get("send_to") and not config.POWER_AUTOMATE_WEBHOOK_URL:
+        raise HTTPException(400, "E-Mail ist nicht konfiguriert (POWER_AUTOMATE_WEBHOOK_URL)")
+    try:
+        job = jobs.create_pipeline_job(payload.company_ids, plan, payload.label)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        return jobs.start_pipeline_job(job["id"])
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/companies/{company_id}/enrichment")
+def get_enrichment_route(company_id: int):
+    from .enrich import service as enrich_service
+    return enrich_service.get_enrichment(company_id) or {"company_id": company_id, "status": "none"}
+
+
+@app.post("/api/companies/{company_id}/enrich")
+def enrich_one_route(company_id: int):
+    """Enrich a single company on demand (the drawer's button)."""
+    from .enrich import service as enrich_service
+    try:
+        return enrich_service.enrich_company(company_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/companies/{company_id}/enrichment/accept")
+def accept_website_route(company_id: int, payload: PageIn):
+    """Human approves a review-queue website candidate (payload.page_id carries
+    the domain), then re-enriches from it."""
+    from .enrich import service as enrich_service
+    try:
+        return enrich_service.accept_candidate(company_id, payload.page_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/companies/{company_id}/enrichment/reject")
+def reject_website_route(company_id: int):
+    from .enrich import service as enrich_service
+    enrich_service.reject_candidates(company_id)
+    return {"ok": True}
 
 
 @app.post("/api/identity-jobs")
@@ -681,6 +914,16 @@ def add_recipient_route(payload: RecipientIn):
         raise HTTPException(400, str(e))
 
 
+@app.patch("/api/recipients/{rid}")
+def update_recipient_route(rid: int, payload: RecipientPatchIn):
+    """Persist the send box's tick state, so a choice made once survives a
+    reload instead of resetting to 'everyone'."""
+    try:
+        return services.set_recipient_preselected(rid, payload.preselected)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @app.delete("/api/recipients/{rid}")
 def delete_recipient_route(rid: int):
     services.delete_recipient(rid)
@@ -706,11 +949,12 @@ def save_schedule_route(payload: ScheduleIn):
 
 @app.on_event("startup")
 def _startup() -> None:
+    from . import scheduler
+    scheduler.setup_logging()   # BEFORE init_db: its backup/migration lines are worth keeping
     init_db()
     seed_companies_if_empty()
     n = jobs.reconcile_on_startup()
     if n:
         import logging
         logging.getLogger("adwatch.jobs").warning("%d fetch job(s) marked 'interrupted' after restart", n)
-    from . import scheduler
     scheduler.start()

@@ -39,9 +39,13 @@ def _record(job: str, ok: bool, detail: str) -> None:
                         "ok": ok, "detail": detail[:300]}
 
 
-def _setup_logging() -> None:
-    """One rotating file handler so scheduled-run outcomes and exceptions are
-    not lost to a closed console (previously nothing was configured)."""
+def setup_logging() -> None:
+    """One rotating file handler so run outcomes and exceptions are not lost to a
+    closed console (previously nothing was configured).
+
+    Called first thing on app startup — not just from start() — because anything
+    logged before the handler exists is gone for good, and startup itself is
+    exactly when you want a record (DB migrations, backups, interrupted jobs)."""
     root = logging.getLogger("adwatch")
     if any(isinstance(h, logging.handlers.RotatingFileHandler) for h in root.handlers):
         return
@@ -104,6 +108,23 @@ def _job_backup() -> None:
     _record("backup", path is not None, path or "backup skipped/failed")
 
 
+def _job_report_def(def_id: int, name: str) -> None:
+    """Fire one saved report definition on its weekly cron: build over its saved
+    filter and email its saved recipients. Read-only against ad data (no fetch),
+    so it needs no busy-lock — it just renders current numbers and mails them."""
+    from . import report_defs
+    try:
+        result = report_defs.run_definition(def_id, send=True)
+        ok = bool(result.get("sent"))
+        detail = (f"{name}: sent to {len(result.get('recipients', []))}" if ok
+                  else f"{name}: not sent — {result.get('reason', '?')}")
+        _record(f"report_def:{def_id}", ok, detail)
+        logger.info("Scheduled report '%s': %s", name, result)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Scheduled report '%s' failed", name)
+        _record(f"report_def:{def_id}", False, f"{name}: failed: {exc}")
+
+
 def apply_schedule() -> dict:
     """Re-read schedule_config and (re)register jobs. Safe to call repeatedly —
     existing jobs are replaced, not duplicated. The nightly backup is always
@@ -122,11 +143,24 @@ def apply_schedule() -> dict:
                            hour=int(hour), minute=int(minute))
     # nightly DB backup at 03:30, always on
     _scheduler.add_job(_job_backup, "cron", id="backup", hour=3, minute=30)
+    # per-definition custom scheduled reports (see models.ReportDefinition) —
+    # each enabled one gets its own weekly cron, independent of the standard send.
+    try:
+        from . import report_defs
+        for d in report_defs.list_definitions():
+            if not d["schedule_enabled"]:
+                continue
+            hour, minute = d["schedule_time"].split(":")
+            _scheduler.add_job(_job_report_def, "cron", id=f"report_def:{d['id']}",
+                               args=[d["id"], d["name"]], day_of_week=d["schedule_day"],
+                               hour=int(hour), minute=int(minute))
+    except Exception:  # noqa: BLE001 — a bad definition must not break the whole schedule
+        logger.exception("Could not register scheduled report definitions")
     return cfg
 
 
 def start() -> None:
-    _setup_logging()
+    setup_logging()
     if not _scheduler.running:
         _scheduler.start()
     apply_schedule()

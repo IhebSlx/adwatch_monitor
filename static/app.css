@@ -285,7 +285,13 @@ select { cursor: pointer; }
   overscroll-behavior: contain;
 }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 10.5px 13px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+/* Dense data tables size to their CONTENT instead of stretching to the
+   container: with a full-width layout (and the nav collapsed) a 100%-wide table
+   distributes all the slack into the columns, which reads as huge empty gaps
+   since long values are rare. Content-width keeps columns tight; .table-wrap
+   still scrolls when the columns genuinely need more room than the screen. */
+#customersTable, #companyTable, #logsTable, #divergenceTable { width: auto; }
+th, td { text-align: left; padding: 7.5px 9px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
 thead th {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 700;
   background: #fafbfc; position: sticky; top: 0; z-index: 2;
@@ -723,6 +729,191 @@ a.link:hover { text-decoration: underline; }
   color: var(--muted); font-size: 13px;
 }
 
+/* ============================== saved reports + recipient checklists ============================== */
+.recipient-checks { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 4px 0 2px; }
+.recipient-check-row { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
+.small { font-size: 12px; }
+.tag {
+  display: inline-block; font-size: 10.5px; font-weight: 650; padding: 1px 7px; border-radius: 999px;
+  background: var(--bg-subtle); color: var(--accent); border: 1px solid var(--border); vertical-align: middle;
+}
+.tag-saved { background: #e9f7ef; color: #1e8f57; border-color: #bfe6cf; }
+.saved-report {
+  display: flex; justify-content: space-between; align-items: center; gap: 14px;
+  padding: 11px 0; border-bottom: 1px solid var(--border);
+}
+.saved-report:last-child { border-bottom: none; }
+.saved-report-main { min-width: 0; }
+.saved-report-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+
+/* ---- enrichment review queue (drawer) ---- */
+.enrich-review {
+  margin-top: 10px; padding: 10px 12px; background: var(--bg);
+  border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px;
+}
+.enrich-review .page-item { padding: 7px 0; }
+
+/* ---- customer state + fit score (Explorer, drawer, Profil tab) ---- */
+.state-chip {
+  display: inline-block; font-size: 10.5px; font-weight: 650; padding: 1.5px 8px;
+  border-radius: 999px; border: 1px solid var(--border); white-space: nowrap;
+}
+.state-active  { background: #e9f7ef; color: #1e8f57; border-color: #bfe6cf; }
+.state-new     { background: #ebf2fb; color: #2b6cb0; border-color: #c4d9f2; }
+.state-lapsed  { background: #fdf1e7; color: #b05e1a; border-color: #f2d7bd; }
+.state-never   { background: var(--bg-subtle); color: var(--muted); }
+.fit-badge {
+  display: inline-block; min-width: 30px; text-align: center; font-weight: 700;
+  font-variant-numeric: tabular-nums; font-size: 12px; padding: 1.5px 7px;
+  border-radius: 999px; border: 1px solid var(--border);
+}
+.fit-high { background: #e9f7ef; color: #1e8f57; border-color: #bfe6cf; }
+.fit-mid  { background: #fdf7e7; color: #9a7b12; border-color: #eee0b0; }
+.fit-low  { background: var(--bg-subtle); color: var(--muted); }
+
+.fit-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 12.5px; }
+.fit-row-label { flex: 0 0 46%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fit-bar { flex: 1; height: 8px; border-radius: 99px; background: var(--bg-subtle); overflow: hidden; }
+.fit-bar-fill { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.fit-row-pct { flex: 0 0 38px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+.icp-feature { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.icp-feature:last-child { border-bottom: none; }
+.icp-feature-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.icp-feature-excluded { opacity: .55; }
+
+/* ---- UX pass: unified add card, filter badge, column priority, infinite scroll ---- */
+.add-company-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.add-divider { color: var(--muted); font-size: 12px; flex: 0 0 auto; }
+.filter-badge {
+  display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 3px;
+  border-radius: 999px; background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 700;
+}
+/* ALL columns are visible by default; the toolbar button hides the secondary
+   ones (SAP, KV, Segmente, Vertriebsweg, Land, Umsatz-Historie) on demand. */
+#customersTable.hide-extra .col-extra { display: none; }
+/* Sensible default column widths: cap the few text-heavy cells so one long
+   value can't blow the column out to 400px. The LINK is truncated rather than
+   the cell, so badges and the ✎ edit button stay visible and clickable.
+   Everything stays adjustable by dragging the header edge. */
+#customersTable .cell-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+/* Facebook + Website sit at the far right as reference links, not reading
+   material: the label is clipped to roughly the first word — enough to
+   recognise and click — with the full value in the tooltip and the href intact. */
+#customersTable .fb-page-cell .link { max-width: 82px; }
+#customersTable .cell-website .link { max-width: 92px; }
+/* the ✎ button and the IG/⚠ badges dominated this cell's width — compact them
+   so the column stays narrow while everything remains clickable */
+#customersTable .fb-page-cell .btn { padding: 2px 6px; font-size: 11px; }
+#customersTable .fb-page-cell .role-badge,
+#customersTable .fb-page-cell .candidate-flag {
+  padding: 0 4px; font-size: 9.5px; margin-left: 3px;
+}
+#customersTable .fb-page-cell .link,
+#customersTable .cell-website .link {
+  display: inline-block; overflow: hidden;
+  text-overflow: ellipsis; vertical-align: middle;
+}
+#customersTable .cell-ort { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+.scroll-sentinel { text-align: center; padding: 14px 0 6px; color: var(--muted); font-size: 12.5px; }
+
+/* ---- collapsible sidebar (icon-only) + full-width content ---- */
+.nav-toggle {
+  margin-left: auto; flex: none; width: 24px; height: 24px; line-height: 1;
+  border: 1px solid var(--side-line); border-radius: 7px; cursor: pointer;
+  background: rgba(255, 255, 255, .05); color: var(--side-muted);
+  font: inherit; font-size: 12px; padding: 0;
+}
+.nav-toggle:hover { color: var(--side-ink); background: rgba(255, 255, 255, .1); }
+.sidebar, .content { transition: width .18s ease, margin-left .18s ease; }
+
+body.nav-collapsed { --sidebar-w: 64px; }
+body.nav-collapsed .brand-text { display: none; }
+body.nav-collapsed .sidebar-brand { padding: 20px 12px 17px; justify-content: center; flex-direction: column; gap: 8px; }
+body.nav-collapsed .nav-toggle { margin-left: 0; }
+/* text nodes inside the tab buttons collapse via font-size:0; the svg keeps its size */
+body.nav-collapsed .tab { font-size: 0; gap: 0; justify-content: center; padding: 10px 0; }
+body.nav-collapsed .tab.active::before { left: -12px; }
+body.nav-collapsed .source-switch { display: none; }
+body.nav-collapsed #fetchBtn { font-size: 0; padding: 9px 0; }
+body.nav-collapsed #fetchBtn::before { content: "📣"; font-size: 15px; line-height: 1.25; }
+
+/* content fills the full width — no artificial cap, less horizontal scrolling
+   inside wide tables; collapsing the nav frees another ~180px */
+main { max-width: none; }
+
+/* ---- Komplett-Pipeline panel ---- */
+.pipe-steps { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+.pipe-step {
+  display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--card);
+  cursor: pointer; font-size: 13px; line-height: 1.45;
+}
+.pipe-step:hover { border-color: var(--border-strong); }
+.pipe-step > input { margin-top: 2px; flex: none; }
+.pipe-sub { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; font-size: 12px; }
+.pipe-inline-sel {
+  font: inherit; font-size: 12px; margin-left: 8px; padding: 2px 6px;
+  border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-subtle);
+}
+
+/* ---- "Aktionen (gefiltert)" dropdown ---- */
+.action-menu { position: relative; display: inline-block; }
+.action-menu-panel {
+  position: absolute; right: 0; top: calc(100% + 5px); z-index: 60; min-width: 230px;
+  background: var(--card); border: 1px solid var(--border-strong); border-radius: 12px;
+  box-shadow: var(--shadow-lg); padding: 5px; display: flex; flex-direction: column;
+}
+.action-menu-item {
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+  background: none; border: none; border-radius: 8px; padding: 8.5px 11px;
+  color: var(--ink); white-space: nowrap;
+}
+.action-menu-item:hover { background: var(--accent-soft); color: var(--accent-ink); }
+
+/* ---- resizable columns (drag the right edge of a header) ---- */
+th { position: relative; }
+.col-grip {
+  position: absolute; top: 0; right: -4px; width: 9px; height: 100%;
+  cursor: col-resize; z-index: 5; user-select: none; touch-action: none;
+}
+.col-grip::after {
+  content: ""; position: absolute; top: 22%; bottom: 22%; right: 4px; width: 1px;
+  background: var(--border-strong); opacity: 0; transition: opacity .12s;
+}
+th:hover .col-grip::after, .col-grip:hover::after { opacity: 1; }
+body.col-resizing { cursor: col-resize; user-select: none; }
+/* frozen (fixed-layout) tables: cells clip instead of reflowing neighbours;
+   colspan cells (e.g. the expandable pages row) keep their natural behaviour */
+table.col-resized td:not([colspan]) { overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- column-header menus (sort + per-column filter) ---- */
+.th-has-menu { cursor: pointer; user-select: none; }
+.th-has-menu:hover { color: var(--accent-ink); }
+.th-caret { font-size: 9px; color: var(--muted-soft); }
+.th-filtered .th-caret { color: var(--accent); }
+.th-filtered::after {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 4px;
+  border-radius: 99px; background: var(--accent); vertical-align: middle;
+}
+.th-menu {
+  position: fixed; z-index: 90; max-height: 420px; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--border-strong);
+  border-radius: 12px; box-shadow: var(--shadow-lg); padding: 10px 12px 12px;
+}
+.thm-head { font-weight: 700; font-size: 12.5px; margin-bottom: 6px; }
+.thm-sec { padding: 8px 0 2px; border-top: 1px solid var(--border); }
+.thm-sec-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-weight: 650; margin-bottom: 5px; }
+.thm-sort { display: flex; gap: 6px; }
+.thm-input { width: 100%; font: inherit; font-size: 13px; padding: 6px 9px;
+  border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-subtle); }
+.thm-row { display: flex; gap: 6px; }
+.thm-list { max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.thm-item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; padding: 2.5px 2px;
+  cursor: pointer; border-radius: 6px; }
+.thm-item:hover { background: var(--bg-subtle); }
+
 /* ============================== responsive ============================== */
 @media (max-width: 960px) {
   .sidebar {
@@ -740,3 +931,13 @@ a.link:hover { text-decoration: underline; }
   .charts-row { grid-template-columns: 1fr; }
   .fetch-panel { padding: 14px 16px; }
 }
+
+/* Logs tab -> "Berichte & Versand": one glanceable tag per event kind, so a
+   failed send is visually distinct from a successful one in a long list. */
+.ev-tag { display: inline-block; padding: 1px 7px; border-radius: 10px;
+          font-size: 11px; font-weight: 600; white-space: nowrap; }
+.ev-created { background: #eef2f7; color: #44536b; }
+.ev-sent    { background: #e6f5ec; color: #1d6b3d; }
+.ev-failed  { background: #fdecec; color: #9d2626; }
+#reportEventsTable td { vertical-align: top; }
+#reportEventsTable td.nowrap { white-space: nowrap; }

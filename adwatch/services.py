@@ -11,15 +11,19 @@ from sqlalchemy import func, select
 
 from . import config
 from .db import SessionLocal
+from .products import canonical_products
 from .models import (
     Ad, CollectionRun, Company, CompanyPage, ReportRecipient, ScheduleConfig, WeeklyCompanyMetric,
 )
 
+# Meta/Facebook-page identity status only — never a whole-company verdict, and
+# unrelated to Google (which is linked separately by website domain).
 STATUS_LABELS = {
-    "pending": "Not fetched yet",
-    "confirmed": "Confirmed page",
-    "ambiguous": "Multiple matches — best guess used, please verify",
-    "no_ads_found": "No ads found under this name — check spelling or verify manually",
+    "pending": "Meta page not checked yet",
+    "confirmed": "Meta page found",
+    "ambiguous": "Meta page unclear — best guess used, please verify",
+    "no_ads_found": "No Meta page found under this name — check spelling or verify manually",
+    "locked": "Meta page locked",
 }
 
 PAGE_STATUS_LABELS = {"confirmed": "confirmed", "auto": "auto-linked", "manual": "manually set"}
@@ -131,13 +135,16 @@ def _merge_week_rows(rows: list[WeeklyCompanyMetric]) -> dict:
     tracked on both platforms gets one coherent weekly number instead of the
     dashboard arbitrarily picking whichever source's row happened to be last."""
     cats = Counter()
-    products: list[str] = []
+    raw_products: list[str] = []
     for r in rows:
         for k, v in (r.ads_by_category or {}).items():
             cats[k] += v
-        for p in (r.products or []):
-            if p not in products:
-                products.append(p)
+        raw_products.extend(r.products or [])
+    # Fold onto the canonical German vocabulary at read time, not just at write
+    # time: rows collected before the vocabulary existed hold free text in the
+    # ad's own language, and re-fetching them just to fix wording would cost
+    # real money. See adwatch/products.py.
+    products = canonical_products(raw_products)
     methods = {r.spend_method for r in rows if r.spend_method}
     by_source = {r.source: r.total_active_ads for r in rows}
     return {
@@ -378,7 +385,21 @@ def clear_logs() -> dict:
 def list_recipients() -> list[dict]:
     with SessionLocal() as s:
         rows = s.scalars(select(ReportRecipient).order_by(ReportRecipient.added_at)).all()
-        return [{"id": r.id, "name": r.name, "email": r.email, "active": r.active} for r in rows]
+        return [{"id": r.id, "name": r.name, "email": r.email, "active": r.active,
+                 "preselected": bool(r.preselected)} for r in rows]
+
+
+def set_recipient_preselected(rid: int, preselected: bool) -> dict:
+    """Remember whether this recipient's send box starts ticked. Purely a UI
+    default — it never affects whether the address may be mailed (`active`)."""
+    with SessionLocal() as s:
+        r = s.get(ReportRecipient, rid)
+        if not r:
+            raise ValueError("Recipient not found")
+        r.preselected = bool(preselected)
+        s.commit()
+        return {"id": r.id, "name": r.name, "email": r.email, "active": r.active,
+                "preselected": bool(r.preselected)}
 
 
 def add_recipient(email: str, name: str | None = None) -> dict:

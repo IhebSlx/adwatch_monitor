@@ -38,8 +38,34 @@
 
   const CATEGORY_LABELS = { recruitment: "Hiring", product_sale: "Selling",
     brand_awareness: "Brand", event_promo: "Event", other: "Other" };
-  const STATUS_LABEL = { confirmed: "confirmed", ambiguous: "ambiguous",
-    no_ads_found: "no ads found", pending: "pending", locked: "locked" };
+  // These describe ONE thing only: whether we found the company's Meta/Facebook
+  // page. They say nothing about Google (a separate per-source link) — so the
+  // labels name Meta explicitly instead of a bare "confirmed" that reads like a
+  // whole-company verdict.
+  const STATUS_LABEL = { confirmed: "Meta page found", ambiguous: "Meta page unclear",
+    no_ads_found: "No Meta page found", pending: "Meta not checked yet", locked: "Meta page locked" };
+  // Enrichment status (see enrich/service.py) — German, user-facing.
+  const ENRICH_STATUS_LABEL = {
+    none: "noch nicht angereichert", enriched: "angereichert",
+    needs_review: "Website-Vorschlag prüfen", no_website_found: "keine Website gefunden",
+    error: "Fehler",
+  };
+  // Customer lifecycle (derived from the Umsatz columns — see customers.py).
+  const CUSTOMER_STATE_LABEL = { active: "Aktiver Kunde", new: "Neukunde",
+    lapsed: "Ehemaliger Kunde", never: "Nie gekauft" };
+  const CUSTOMER_STATE_SHORT = { active: "aktiv", new: "neu", lapsed: "ehemalig", never: "nie" };
+
+  function customerStateChip(state) {
+    if (!state) return '<span class="muted">—</span>';
+    return `<span class="state-chip state-${esc(state)}" title="${esc(CUSTOMER_STATE_LABEL[state] || state)}">${esc(CUSTOMER_STATE_SHORT[state] || state)}</span>`;
+  }
+
+  function fitCell(fit) {
+    if (fit == null) return '<span class="muted">—</span>';
+    const cls = fit >= 85 ? "fit-high" : (fit >= 60 ? "fit-mid" : "fit-low");
+    return `<span class="fit-badge ${cls}">${Math.round(fit)}</span>`;
+  }
+
   const RUN_STATUS_LABEL = { ok: "ok", no_active_ads: "no active ads",
     no_ads_found: "no ads found", ambiguous_match: "ambiguous", error: "error" };
   const FLAG_LABEL = { new_campaign: "New campaign", first_seen: "First activity",
@@ -60,7 +86,18 @@
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body);
     }
-    const r = await fetch(path, opts);
+    let r;
+    try {
+      r = await fetch(path, opts);
+    } catch (e) {
+      // fetch() rejects only when the request never got a response at all —
+      // the server is down or was killed mid-request. "Failed to fetch" alone
+      // doesn't tell you that, and for a send it doesn't say whether the mail
+      // went out, so name both.
+      throw new Error(`Server nicht erreichbar (läuft die App noch?) — Anfrage an ${path} `
+                      + "hat keine Antwort erhalten. Bei einem Versand bitte im Log prüfen, "
+                      + "ob die Mail rausging, bevor du erneut sendest.");
+    }
     if (!r.ok) {
       let msg = r.statusText;
       try { msg = (await r.json()).detail || msg; } catch (e) { /* ignore */ }
@@ -129,15 +166,18 @@
     // real Facebook/Instagram URL but no numeric page_id yet. Falling back to
     // page_id-only would hide a resolved identity behind a blank "+ Link".
     const href = r.page_url || (r.page_id ? fbPageUrl(r.page_id) : null);
-    const editBtn = `<button class="btn btn-sm fb-edit-btn" data-id="${r.id}" title="${href ? "Edit linked page" : "Link a Facebook page"}">${href ? "✎" : "+ Link"}</button>`;
+    // icon-only on purpose: this column sits at the far right as a reference
+    // link, so the affordance lives in the tooltip rather than in column width
+    const editBtn = `<button class="btn btn-sm fb-edit-btn" data-id="${r.id}" title="${href ? "Verknüpfte Meta-Seite bearbeiten" : "Facebook-Seite verknüpfen"}">${href ? "✎" : "+"}</button>`;
     if (!href) return `<span class="muted">—</span> ${editBtn}`;
     const label = r.page_name || r.page_id || r.page_url;
     const isIG = href.includes("instagram.com");
     const platform = isIG ? ` <span class="role-badge" title="Instagram profile — same Meta ad identity as a Facebook page">IG</span>` : "";
+    const titleAttr = ` title="${esc(label)}"`;   // the link is truncated — full name on hover
     const needsId = (!r.page_id && r.resolution_status === "confirmed")
-      ? ` <span class="candidate-flag flag-warn" title="Identity confirmed, but the numeric page ID needed for Ad lookup isn't captured yet — Ad lookup will resolve it, or add it manually with ✎.">⚠ no id</span>`
+      ? ` <span class="candidate-flag flag-warn" title="Meta-Seite bestätigt, aber die numerische Page-ID für den Ad lookup fehlt noch — der Ad lookup ermittelt sie, oder per ✎ manuell eintragen.">⚠</span>`
       : "";
-    return `<a class="link" href="${esc(href)}" target="_blank">${esc(label)}</a>${platform}${needsId} ${editBtn}`;
+    return `<a class="link" href="${esc(href)}" target="_blank"${titleAttr}>${esc(label)}</a>${platform}${needsId} ${editBtn}`;
   }
 
   function spendCell(m) {
@@ -186,6 +226,11 @@
       $$("input[type=checkbox]", listEl).forEach(cb => { cb.checked = false; });
       updateLabel();
     }
+    function setSelected(values) {
+      const want = new Set(values || []);
+      $$("input[type=checkbox]", listEl).forEach(cb => { cb.checked = want.has(cb.value); });
+      updateLabel();
+    }
 
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -206,9 +251,61 @@
     listEl.addEventListener("change", () => { updateLabel(); onChange(); });
 
     updateLabel();
-    return { setOptions, getSelected, clear };
+    return { setOptions, getSelected, clear, setSelected };
   }
   document.addEventListener("click", () => $$(".checkdrop-panel").forEach(p => p.classList.add("hidden")));
+
+  // ------------------------------------------------------------------ resizable columns
+  // Every data table gets drag handles on the RIGHT EDGE of its headers (and
+  // only there). The first drag freezes the current auto-layout widths and
+  // switches the table to table-layout:fixed so one column's width never
+  // reflows the others; double-click on a handle resets the whole table.
+  function makeColumnsResizable(table) {
+    const ths = $$("thead th", table);
+    if (!ths.length || table.dataset.resizable) return;
+    table.dataset.resizable = "1";
+
+    function freeze() {
+      if (table.classList.contains("col-resized")) return;
+      ths.forEach(th => { if (th.offsetParent !== null) th.style.width = th.offsetWidth + "px"; });
+      table.classList.add("col-resized");
+      table.style.tableLayout = "fixed";
+      table.style.width = "max-content";   // grows/shrinks with the columns, scrolls in .table-wrap
+    }
+    function reset() {
+      ths.forEach(th => { th.style.width = ""; });
+      table.classList.remove("col-resized");
+      table.style.tableLayout = "";
+      table.style.width = "";
+    }
+
+    ths.forEach(th => {
+      const grip = document.createElement("span");
+      grip.className = "col-grip";
+      grip.title = "Ziehen: Spaltenbreite · Doppelklick: zurücksetzen";
+      th.appendChild(grip);
+      // a resize gesture must never count as a header CLICK (sort/filter menu)
+      grip.addEventListener("click", e => e.stopPropagation());
+      grip.addEventListener("dblclick", e => { e.stopPropagation(); reset(); });
+      grip.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        freeze();
+        const startX = e.clientX;
+        const startW = th.offsetWidth;
+        const move = (ev) => { th.style.width = Math.max(44, startW + (ev.clientX - startX)) + "px"; };
+        const up = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          document.body.classList.remove("col-resizing");
+        };
+        document.body.classList.add("col-resizing");
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+      });
+    });
+  }
+  // all data tables (each sits in a .table-wrap); decorative info tables are skipped
+  $$(".table-wrap table").forEach(makeColumnsResizable);
 
   // ------------------------------------------------------------------ load + render
   async function loadState() {
@@ -853,13 +950,13 @@
 
   // ------------------------------------------------------------------ identity status labels + page cell (shared by filter + drawer)
   const ID_STATUS_ORDER = ["locked", "confirmed", "ambiguous", "no_ads_found", "pending"];
-  const ID_STATUS_LABEL = { locked: "Locked", confirmed: "Confirmed", ambiguous: "Ambiguous",
-    no_ads_found: "No page found", pending: "Not checked" };
+  const ID_STATUS_LABEL = { locked: "Meta page locked", confirmed: "Meta page found", ambiguous: "Meta page unclear",
+    no_ads_found: "No Meta page found", pending: "Meta not checked" };
   // The identity-status filter dropdown also carries two PSEUDO options that
   // filter on fetch-readiness (numeric page id present) rather than status —
   // they map to the separate page_id_state filter, never to resolution_status.
   const ID_FILTER_OPTIONS = [...ID_STATUS_ORDER, "with_id", "without_id"];
-  const ID_FILTER_LABEL = { ...ID_STATUS_LABEL, with_id: "Mit Page-ID", without_id: "Ohne Page-ID" };
+  const ID_FILTER_LABEL = { ...ID_STATUS_LABEL, with_id: "With Meta page ID", without_id: "Without Meta page ID" };
 
   function idFbCell(r) {
     // Prefer the explicit page_url (serper handle-only confirms have no numeric
@@ -870,7 +967,7 @@
     const isIG = href.includes("instagram.com");
     const platform = isIG ? ` <span class="role-badge" title="Instagram profile — same Meta ad identity as a Facebook page">Instagram</span>` : "";
     const needsId = !r.page_id && (r.resolution_status === "confirmed")
-      ? ` <span class="candidate-flag flag-warn" title="Identity known, but the numeric page ID needed for Ad lookup isn't captured yet — open the page and lock it with the ID, or Ad lookup will resolve it.">⚠ no page id</span>`
+      ? ` <span class="candidate-flag flag-warn" title="Meta page known, but the numeric page ID needed for Ad lookup isn't captured yet — open the page and lock it with the ID, or Ad lookup will resolve it.">⚠ no page id</span>`
       : "";
     return `<a class="link" href="${esc(href)}" target="_blank">${esc(label)}</a>${platform}${needsId}`;
   }
@@ -879,12 +976,25 @@
   function wireStatic() {
     $("#fetchBtn").addEventListener("click", () => startFetch());
 
+    // Collapsible sidebar: icon-only mode, remembered across sessions. Tab
+    // labels become tooltips so the icons stay self-explanatory.
+    const applyNavCollapsed = (on) => {
+      document.body.classList.toggle("nav-collapsed", on);
+      $("#navToggle").textContent = on ? "»" : "«";
+      try { localStorage.setItem("navCollapsed", on ? "1" : ""); } catch { /* private mode */ }
+    };
+    $$(".tab").forEach(t => { t.title = t.textContent.trim(); });
+    $("#navToggle").addEventListener("click", () =>
+      applyNavCollapsed(!document.body.classList.contains("nav-collapsed")));
+    try { if (localStorage.getItem("navCollapsed") === "1") applyNavCollapsed(true); } catch { }
+
     function showTab(name) {
       const btn = $$(".tab").find(t => t.dataset.tab === name);
       if (!btn) return;
       $$(".tab").forEach(t => t.classList.toggle("active", t === btn));
       $$(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
       if (name === "customers") ensureCustomersLoaded();
+      if (name === "profil") loadIcpStatus();
       if (name === "reports") {
         // If a Companies filter is active, default the report to use it — so
         // "generate a report for the filtered companies" just works without
@@ -997,9 +1107,10 @@
 
   // ------------------------------------------------------------------ Reports tab
   let REPORTS_STATE = null;
-  // Recipients are checked by default; this tracks ones the user explicitly
-  // unchecked, so newly added recipients always start checked too.
-  const uncheckedRecipients = new Set();
+  // The tick state lives on the recipient row (ReportRecipient.preselected) and
+  // is PATCHed on every change — it used to be a JS Set that died on reload, so
+  // an unticked colleague silently came back next time the tab was opened.
+  // A newly added recipient still starts ticked (the column defaults to true).
 
   function fmtSize(bytes) {
     if (bytes < 1024) return `${bytes} B`;
@@ -1022,18 +1133,33 @@
     box.innerHTML = recipients.map(r => `
       <div class="page-item">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" class="recipient-check" data-rid="${r.id}" ${uncheckedRecipients.has(r.id) ? "" : "checked"}>
+          <input type="checkbox" class="recipient-check" data-rid="${r.id}" ${r.preselected === false ? "" : "checked"}>
           <span><b>${esc(r.name || r.email)}</b>${r.name ? ` <span class="muted">${esc(r.email)}</span>` : ""}</span>
         </label>
         <button class="btn btn-sm del-recipient-btn" data-rid="${r.id}">Remove</button>
       </div>`).join("");
-    $$(".recipient-check", box).forEach(cb => cb.addEventListener("change", () => {
+    $$(".recipient-check", box).forEach(cb => cb.addEventListener("change", async () => {
       const rid = Number(cb.dataset.rid);
-      if (cb.checked) uncheckedRecipients.delete(rid); else uncheckedRecipients.add(rid);
+      const on = cb.checked;
+      cb.disabled = true;
+      try {
+        await api(`/api/recipients/${rid}`, "PATCH", { preselected: on });
+        // keep the cached copy in step so the other send boxes agree without a reload
+        const row = (REPORTS_STATE.recipients || []).find(x => x.id === rid);
+        if (row) row.preselected = on;
+        if (SAVED_STATE && SAVED_STATE.recipients) {
+          const r2 = SAVED_STATE.recipients.find(x => x.id === rid);
+          if (r2) r2.preselected = on;
+        }
+      } catch (e) {
+        cb.checked = !on;                 // the choice didn't persist — don't pretend it did
+        toast(`Auswahl konnte nicht gespeichert werden: ${e.message || e}`, "error");
+      } finally {
+        cb.disabled = false;
+      }
     }));
     $$(".del-recipient-btn", box).forEach(btn => btn.addEventListener("click", async () => {
       const rid = Number(btn.dataset.rid);
-      uncheckedRecipients.delete(rid);
       await api(`/api/recipients/${rid}`, "DELETE");
       await loadReports();
     }));
@@ -1042,16 +1168,22 @@
   function renderReportsTable() {
     const reports = REPORTS_STATE.reports;
     $("#reportsEmptyHint").classList.toggle("hidden", reports.length > 0);
-    $("#reportsTableBody").innerHTML = reports.map(r => `
+    $("#reportsTableBody").innerHTML = reports.map(r => {
+      // ② make filtered/saved reports identifiable instead of an anonymous "Report — KW30".
+      const tag = r.definition ? `<span class="tag tag-saved">gespeichert</span>`
+                : (r.filter_label ? `<span class="tag tag-filtered">gefiltert</span>` : "");
+      const scope = r.definition ? `„${esc(r.definition)}"` : (r.filter_label ? esc(r.filter_label) : "");
+      return `
       <tr data-filename="${esc(r.filename)}">
-        <td>${esc(r.label)}</td>
+        <td>${esc(r.label)} ${tag}${scope ? `<div class="muted small">${scope}</div>` : ""}</td>
         <td>${esc(r.created_at)}</td>
         <td class="num">${fmtSize(r.size_bytes)}</td>
         <td style="white-space:nowrap">
           <a class="btn btn-sm" href="/api/reports/${encodeURIComponent(r.filename)}" target="_blank">Download</a>
           <button class="btn btn-sm send-report-btn">Send</button>
         </td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
     $$(".send-report-btn", $("#reportsTableBody")).forEach(btn => {
       btn.addEventListener("click", async () => {
         const filename = btn.closest("tr").dataset.filename;
@@ -1076,6 +1208,256 @@
     });
   }
 
+  // ---------------- Saved reports + inline send (Companies-tab report flow) ----------
+  // These let a filtered report be emailed right after generating (no tab hop),
+  // and let a filter be saved as a named, re-runnable, optionally-scheduled report.
+  let SAVED_STATE = null;        // { definitions, recipients } from /api/report-defs
+  let LAST_REPORT = null;        // { filename, filters, reportType } of the just-generated report
+  let SAVE_FILTERS = null;       // the filter blob currently being saved
+  let EDIT_DEF_ID = null;        // non-null while editing an existing definition
+
+  async function ensureRecipients() {
+    if (!SAVED_STATE) { try { await loadSavedReports(); } catch { SAVED_STATE = { definitions: [], recipients: [] }; } }
+    return (SAVED_STATE && SAVED_STATE.recipients) || [];
+  }
+
+  // Human-readable scope for a saved/loaded filter (reuses the Explorer summary,
+  // plus the explicit-selection case the summary doesn't cover).
+  function describeScope(filters) {
+    if (!filters || !Object.keys(filters).length) return "";
+    if (filters.ids && filters.ids.length) return `${filters.ids.length} ausgewählte Firmen`;
+    return activeFilterSummary(filters).join(" · ");
+  }
+
+  // `preselected` is an explicit id list (a saved definition's recipients).
+  // Without one, fall back to the remembered per-recipient tick state instead of
+  // ticking everybody, so the inline send and the pipeline panel agree with the
+  // choice made in the Reports tab.
+  function renderRecipientChecks(container, recipients, preselected) {
+    const pre = new Set(preselected != null ? preselected
+                        : recipients.filter(r => r.active && r.preselected !== false).map(r => r.id));
+    if (!recipients.length) {
+      container.innerHTML = `<p class="hint">Keine Empfänger — im Reports-Tab unter „Recipients" anlegen.</p>`;
+      return;
+    }
+    container.innerHTML = recipients.map(r => `
+      <label class="recipient-check-row">
+        <input type="checkbox" class="rc-check" data-rid="${r.id}" ${pre.has(r.id) ? "checked" : ""}>
+        <span>${esc(r.name || r.email)}${r.name ? ` <span class="muted">${esc(r.email)}</span>` : ""}${r.active ? "" : ` <span class="muted">(inaktiv)</span>`}</span>
+      </label>`).join("");
+  }
+
+  function checkedRecipientIds(container) {
+    return [...container.querySelectorAll(".rc-check:checked")].map(cb => Number(cb.dataset.rid));
+  }
+
+  function hideCompanyPanels() {
+    ["#fetchPlanPanel", "#reportReadyPanel", "#saveReportPanel"].forEach(s => { const el = $(s); if (el) el.classList.add("hidden"); });
+  }
+
+  // ① After a report is generated (Companies tab): show download + inline send.
+  async function showReportReadyPanel(filename, infoText) {
+    const recipients = await ensureRecipients();
+    $("#reportReadyInfo").textContent = infoText || "";
+    $("#reportReadyDownload").href = `/api/reports/${encodeURIComponent(filename)}`;
+    renderRecipientChecks($("#reportReadyRecipients"), recipients);
+    // "Save as report" only makes sense for a reusable filter, not a one-off id selection.
+    const savable = !(LAST_REPORT && LAST_REPORT.filters && LAST_REPORT.filters.ids);
+    $("#reportReadySaveBtn").classList.toggle("hidden", !savable);
+    hideCompanyPanels();
+    const p = $("#reportReadyPanel");
+    p.classList.remove("hidden");
+    p.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  async function sendReportReady() {
+    if (!LAST_REPORT) return;
+    const ids = checkedRecipientIds($("#reportReadyRecipients"));
+    if (!ids.length) { toast("Mindestens einen Empfänger auswählen.", "error"); return; }
+    const btn = $("#reportReadySendBtn"); btn.disabled = true; btn.textContent = "Senden…";
+    try {
+      await api(`/api/reports/${encodeURIComponent(LAST_REPORT.filename)}/send-email`, "POST", { recipient_ids: ids });
+      toast(`✓ Bericht an ${ids.length} Empfänger gesendet.`, "info");
+      $("#reportReadyPanel").classList.add("hidden");
+    } catch (e) {
+      toast(`Senden fehlgeschlagen: ${e.message}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "Senden"; }
+  }
+
+  // ③ Save-as-report panel (create from current filter, or edit an existing def).
+  async function openSaveReportPanel({ filters, reportType, def } = {}) {
+    const recipients = await ensureRecipients();
+    EDIT_DEF_ID = def ? def.id : null;
+    SAVE_FILTERS = def ? (def.filters || {}) : (filters || currentCustomerFilters());
+    $("#saveReportTitle").textContent = def ? "Bericht bearbeiten" : "Als wiederkehrenden Bericht speichern";
+    $("#saveReportName").value = def ? def.name : "";
+    $("#saveReportType").value = def ? def.report_type : (reportType || "full");
+    $("#saveReportScope").textContent = "Umfang: " + (describeScope(SAVE_FILTERS) || "alle Firmen");
+    renderRecipientChecks($("#saveReportRecipients"), recipients, def ? def.recipient_ids : undefined);
+    $("#saveReportSchedule").checked = def ? def.schedule_enabled : false;
+    $("#saveReportDay").value = def ? def.schedule_day : 0;
+    $("#saveReportTime").value = def ? def.schedule_time : "07:00";
+    // the panel lives in the Companies (customers) tab — make sure it's showing
+    // (matters when editing from the Reports tab). Clicking the tab button reuses
+    // the app's own tab-switch logic.
+    const custTab = $$(".tab").find(t => t.dataset.tab === "customers");
+    if (custTab && !custTab.classList.contains("active")) custTab.click();
+    hideCompanyPanels();
+    const p = $("#saveReportPanel");
+    p.classList.remove("hidden");
+    p.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    $("#saveReportName").focus();
+  }
+
+  async function saveReportDef() {
+    const name = $("#saveReportName").value.trim();
+    if (!name) { toast("Bitte einen Namen eingeben.", "error"); return; }
+    const payload = {
+      name,
+      report_type: $("#saveReportType").value,
+      filters: SAVE_FILTERS || {},
+      recipient_ids: checkedRecipientIds($("#saveReportRecipients")),
+      schedule_enabled: $("#saveReportSchedule").checked,
+      schedule_day: Number($("#saveReportDay").value),
+      schedule_time: $("#saveReportTime").value || "07:00",
+    };
+    const btn = $("#saveReportSaveBtn"); btn.disabled = true; btn.textContent = "Speichern…";
+    try {
+      if (EDIT_DEF_ID) await api(`/api/report-defs/${EDIT_DEF_ID}`, "PUT", payload);
+      else await api("/api/report-defs", "POST", payload);
+      toast(`✓ Bericht „${name}" gespeichert${payload.schedule_enabled ? " (mit Zeitplan)" : ""}.`, "info");
+      $("#saveReportPanel").classList.add("hidden");
+      await loadSavedReports();
+    } catch (e) {
+      toast(`Speichern fehlgeschlagen: ${e.message}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "Speichern"; }
+  }
+
+  async function loadSavedReports() {
+    SAVED_STATE = await api("/api/report-defs");
+    renderSavedReports();
+  }
+
+  function renderSavedReports() {
+    const defs = (SAVED_STATE && SAVED_STATE.definitions) || [];
+    const recips = (SAVED_STATE && SAVED_STATE.recipients) || [];
+    const byId = Object.fromEntries(recips.map(r => [r.id, r]));
+    const empty = $("#savedReportsEmpty"), list = $("#savedReportsList");
+    if (empty) empty.classList.toggle("hidden", defs.length > 0);
+    if (!list) return;
+    list.innerHTML = defs.map(d => {
+      const rnames = (d.recipient_ids || []).map(id => byId[id] ? (byId[id].name || byId[id].email) : `#${id}`).join(", ") || "—";
+      const sched = d.schedule_enabled ? `${DAY_NAMES[d.schedule_day]} ${d.schedule_time}` : "manuell";
+      const scope = describeScope(d.filters) || "alle Firmen";
+      return `<div class="saved-report" data-id="${d.id}">
+        <div class="saved-report-main">
+          <b>${esc(d.name)}</b> <span class="muted">· ${d.report_type === "full" ? "Voll" : "Top 5"} · ${esc(scope)}</span>
+          <div class="muted small">Empfänger: ${esc(rnames)} · Zeitplan: ${esc(sched)}${d.last_status ? ` · zuletzt: ${esc(d.last_status)}` : ""}</div>
+        </div>
+        <div class="saved-report-actions">
+          <button class="btn btn-sm sr-run" title="Jetzt erstellen und an die Empfänger senden">▶ Jetzt senden</button>
+          <button class="btn btn-sm sr-edit">Bearbeiten</button>
+          <button class="btn btn-sm btn-danger sr-del">Löschen</button>
+        </div>
+      </div>`;
+    }).join("");
+    $$(".saved-report", list).forEach(row => {
+      const id = Number(row.dataset.id);
+      const def = defs.find(d => d.id === id);
+      $(".sr-run", row).addEventListener("click", async (e) => {
+        const btn = e.currentTarget; btn.disabled = true; btn.textContent = "Senden…";
+        try {
+          const res = await api(`/api/report-defs/${id}/run`, "POST", { send: true });
+          toast(res.sent ? `✓ „${def.name}" an ${res.recipients.length} gesendet.`
+                         : `Bericht erstellt, nicht gesendet (${res.reason || "keine Empfänger"}).`,
+                res.sent ? "info" : "error");
+          await loadReports();
+        } catch (err) { toast(`Fehlgeschlagen: ${err.message}`, "error"); }
+        finally { btn.disabled = false; btn.textContent = "▶ Jetzt senden"; await loadSavedReports(); }
+      });
+      $(".sr-edit", row).addEventListener("click", () => openSaveReportPanel({ def }));
+      $(".sr-del", row).addEventListener("click", async () => {
+        if (!confirm(`Bericht „${def.name}" löschen?`)) return;
+        await api(`/api/report-defs/${id}`, "DELETE");
+        toast("Bericht gelöscht.", "info");
+        await loadSavedReports();
+      });
+    });
+  }
+
+  // ---------------- Profil tab (Ideal Customer Profile) ----------------
+  let ICP_FILTERS = null;   // the winners filter behind the current preview
+
+  function icpWinnersFilters() {
+    return $("#icpWinnersMode").value === "filter" ? currentCustomerFilters() : {};
+  }
+
+  function renderIcpFeatures(p) {
+    $("#icpProfileTitle").textContent =
+      `Profil aus ${p.winners_count.toLocaleString("de-DE")} Gewinnern`;
+    $("#icpFeatures").innerHTML = Object.entries(p.features).map(([key, d]) => {
+      const maxShare = d.top.length ? d.top[0][1] : 0;
+      const excluded = maxShare >= 0.9 && key !== "products";
+      const rows = d.top.slice(0, 5).map(([v, share]) => `
+        <div class="fit-row">
+          <span class="fit-row-label">${esc(v)}</span>
+          <span class="fit-bar"><span class="fit-bar-fill" style="width:${Math.round(share * 100)}%"></span></span>
+          <span class="fit-row-pct">${Math.round(share * 100)}%</span>
+        </div>`).join("");
+      return `<div class="icp-feature${excluded ? " icp-feature-excluded" : ""}">
+        <div class="icp-feature-head"><b>${esc(d.label)}</b>
+          <span class="muted small">bekannt bei ${Math.round(d.coverage * 100)}% der Gewinner</span>
+          ${excluded ? `<span class="tag" title="Fast alle Gewinner haben denselben Wert — trennt nicht, fließt nicht in den Score ein">nicht trennscharf</span>` : ""}
+        </div>
+        ${rows || '<p class="hint">keine Daten — Anreicherung erhöht die Abdeckung</p>'}
+      </div>`;
+    }).join("");
+    $("#icpProfileCard").classList.remove("hidden");
+  }
+
+  // ONE action: compute the profile AND immediately score every company with
+  // it — after "berechnen" the Fit column is simply there, no second click.
+  async function icpPreview() {
+    const btn = $("#icpPreviewBtn");
+    btn.disabled = true; btn.textContent = "Berechne & bewerte…";
+    try {
+      ICP_FILTERS = icpWinnersFilters();
+      const p = await api("/api/icp/preview", "POST", { filters: ICP_FILTERS });
+      if (p.winners_count < 5) {
+        $("#icpWinnersHint").textContent =
+          `Nur ${p.winners_count} Firmen im Gewinner-Filter — zu wenige für ein belastbares Profil.`;
+        return;
+      }
+      $("#icpWinnersHint").textContent = "";
+      renderIcpFeatures(p);
+      const res = await api("/api/icp/apply", "POST", { filters: ICP_FILTERS || {} });
+      toast(`✓ Profil angewendet — ${res.companies_scored.toLocaleString("de-DE")} Firmen bewertet. `
+        + `Die Fit-Spalte im Companies-Tab ist aktuell.`, "info");
+      await loadIcpStatus();
+      loadCustomers().catch(() => {});   // Fit column changed
+    } catch (e) {
+      toast(`Profil fehlgeschlagen: ${e.message}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "Profil berechnen & anwenden"; }
+  }
+
+  async function loadIcpStatus() {
+    const box = $("#icpStatus");
+    try {
+      const p = await api("/api/icp/latest");
+      if (!p.id) {
+        box.innerHTML = `<p class="hint">Noch kein Profil angewendet — oben berechnen &amp; anwenden.
+          Danach hat jede Firma einen <b>Fit</b>-Wert (Spalte im Companies-Tab, sortierbar).</p>`;
+        return;
+      }
+      box.innerHTML = `<p><b>${esc(p.name)}</b> · aus ${p.winners_count.toLocaleString("de-DE")} Gewinnern
+        · angewendet ${esc(p.applied_at || p.created_at)}</p>
+        <p class="hint">Beste Ziele finden: im Companies-Tab nach <b>Fit</b> sortieren und z. B. auf
+        „Ehemaliger Kunde" filtern — oder nach dem Ziel-Score (Fit × Chance) in der Firmenakte schauen.</p>`;
+    } catch (e) {
+      box.innerHTML = `<p class="hint status-error">${esc(e.message)}</p>`;
+    }
+  }
+
   // ------------------------------------------------------------------ Companies tab (Explorer)
   const CUST = {
     loaded: false,
@@ -1094,6 +1476,9 @@
     // options — split them apart here (both/neither id option = no restriction)
     const idSel = CUST_DROP.status.getSelected();
     const withId = idSel.includes("with_id"), withoutId = idSel.includes("without_id");
+    // The ad-activity dropdown packs both dimensions into one value
+    // ("active:meta" = running ads, Meta only); split into orthogonal params.
+    const [adAct, adSrc] = ($("#custAdActivity").value || "").split(":");
     return {
       q: $("#custSearch").value.trim() || null,
       resolution_status: idSel.filter(v => v !== "with_id" && v !== "without_id"),
@@ -1104,10 +1489,15 @@
       sales_channel: CUST_DROP.salesChannel.getSelected(),
       country: CUST_DROP.country.getSelected(),
       has_website: $("#custHasWebsite").checked,
+      no_website: $("#custNoWebsite").checked,
+      enrichment_status: $("#custEnrichStatus").value ? [$("#custEnrichStatus").value] : [],
+      customer_state: $("#custCustomerState").value ? [$("#custCustomerState").value] : [],
+      fit_min: $("#custFitMin").value ? Number($("#custFitMin").value) : null,
       revenue_min: $("#custRevenueMin").value ? Number($("#custRevenueMin").value) : null,
       revenue_max: $("#custRevenueMax").value ? Number($("#custRevenueMax").value) : null,
       revenue_history: $("#custRevenueHistory").value || null,
-      ad_activity: $("#custAdActivity").value || null,
+      ad_activity: adAct || null,
+      ad_source: adSrc || null,
       exclude_kv: CUST_DROP.excludeKv.getSelected(),
       exclude_segment: CUST_DROP.excludeSegment.getSelected(),
       exclude_sub_segment: CUST_DROP.excludeSubSegment.getSelected(),
@@ -1130,13 +1520,23 @@
     else if (f.revenue_min != null) parts.push(`revenue ≥ €${f.revenue_min}`);
     else if (f.revenue_max != null) parts.push(`revenue ≤ €${f.revenue_max}`);
     if (f.revenue_history) parts.push(REVENUE_HISTORY_LABEL[f.revenue_history] || f.revenue_history);
-    if (f.ad_activity) parts.push({ active: "running ads", any: "any ads ever", none: "no active ads" }[f.ad_activity] || f.ad_activity);
+    if (f.ad_activity) {
+      const base = { active: "running ads", any: "any ads ever", none: "no active ads" }[f.ad_activity] || f.ad_activity;
+      const src = { meta: "Meta", google: "Google" }[f.ad_source];
+      parts.push(src ? `${base} (${src})` : base);
+    }
     if (f.exclude_kv?.length) parts.push(`excl. KV: ${f.exclude_kv.join(", ")}`);
     if (f.exclude_segment?.length) parts.push(`excl. segment: ${f.exclude_segment.join(", ")}`);
     if (f.exclude_sub_segment?.length) parts.push(`excl. sub-segment: ${f.exclude_sub_segment.join(", ")}`);
     if (f.has_website) parts.push("has website");
-    if (f.page_id_state === "with") parts.push("with page ID");
-    if (f.page_id_state === "without") parts.push("without page ID");
+    if (f.no_website) parts.push("without website");
+    if (f.enrichment_status?.length)
+      parts.push(`enrichment: ${f.enrichment_status.map(s => ENRICH_STATUS_LABEL[s] || s).join(", ")}`);
+    if (f.customer_state?.length)
+      parts.push(f.customer_state.map(s => CUSTOMER_STATE_LABEL[s] || s).join(", "));
+    if (f.fit_min != null) parts.push(`Fit ≥ ${f.fit_min}`);
+    if (f.page_id_state === "with") parts.push("with Meta page ID");
+    if (f.page_id_state === "without") parts.push("without Meta page ID");
     if (f.tracked === true) parts.push("tracked only");
     if (f.tracked === false) parts.push("untracked only");
     return parts;
@@ -1167,7 +1567,53 @@
     loadLogs();
   }
 
+  // ---- Berichte & Versand: the report audit trail (ReportEvent) -------------
+  const REV_KIND = {
+    created:     { label: "erstellt",       cls: "ev-created" },
+    sent:        { label: "gesendet ✓",     cls: "ev-sent" },
+    send_failed: { label: "Versand ✗",      cls: "ev-failed" },
+  };
+  const REV_SOURCE = {
+    manual: "manuell", pipeline: "Pipeline", schedule: "Zeitplan",
+    definition: "gespeicherter Bericht",
+  };
+
+  async function loadReportEvents() {
+    let events = [];
+    try {
+      events = (await api("/api/report-events?limit=200")).events || [];
+    } catch (e) {
+      toast(`Berichts-Historie nicht ladbar: ${e.message || e}`, "error");
+      return;
+    }
+    const want = $("#revKind").value;
+    const rows = want ? events.filter(e => e.kind === want) : events;
+    const body = $("#reportEventsBody");
+    $("#reportEventsEmpty").style.display = rows.length ? "none" : "";
+    body.innerHTML = rows.map(e => {
+      const k = REV_KIND[e.kind] || { label: e.kind, cls: "" };
+      const to = (e.recipients || []).join(", ");
+      return `<tr>
+        <td class="nowrap">${esc(fmtDateTime(e.at))}</td>
+        <td><span class="ev-tag ${k.cls}">${esc(k.label)}</span></td>
+        <td>${esc(e.filename)}${e.report_type ? ` <span class="muted">(${esc(e.report_type)})</span>` : ""}</td>
+        <td class="muted small">${esc(e.scope || "—")}</td>
+        <td>${to ? esc(to) : "<span class='muted'>—</span>"}</td>
+        <td class="muted small">${esc(REV_SOURCE[e.source] || e.source || "—")}</td>
+        <td class="muted small">${esc(e.detail || "")}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function fmtDateTime(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleString("de-DE",
+      { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
   async function loadLogs() {
+    loadReportEvents();          // independent of the fetch-log query below
     const params = new URLSearchParams();
     const status = $("#logStatus").value, source = $("#logSource").value, q = $("#logSearch").value.trim();
     if (status) params.set("status", status);
@@ -1217,6 +1663,8 @@
   }
 
   function wireLogsTabControls() {
+    $("#revKind").addEventListener("change", loadReportEvents);
+    $("#revRefresh").addEventListener("click", loadReportEvents);
     $("#logSearch").addEventListener("keydown", (e) => {
       if (e.key === "Enter") { LOGS.page = 1; loadLogs(); }
     });
@@ -1384,19 +1832,35 @@
     $$(".settings-save-btn").forEach(b => b.classList.add("has-changes"));
   }
 
+  // DEFAULT FILTER: "Private Endkunden" is excluded from the start — BD hunts
+  // trade partners, not consumers. Undoable in the Segment column menu
+  // ("Ausschließen" abhaken); Zurücksetzen restores this default.
+  const DEFAULT_EXCLUDE_SEGMENTS = ["Private Endkunden"];
+  function applyDefaultExclusion() {
+    const available = new Set(CUST_OPTS.segment || []);
+    const wanted = DEFAULT_EXCLUDE_SEGMENTS.filter(s => available.has(s));
+    if (wanted.length) CUST_DROP.excludeSegment.setSelected(wanted);
+  }
+
   function ensureCustomersLoaded() {
     if (CUST.loaded) return;
     CUST.loaded = true;
-    loadCustomerFilterOptions();
-    loadCustomers();
+    loadCustomerFilterOptions().then(() => {
+      applyDefaultExclusion();          // options must exist before they can be checked
+      loadCustomers();
+    });
     loadJobs().then(jobs => {
       if (jobs.some(j => j.status === "running" || j.status === "queued")) startJobPolling();
     });
   }
 
+  // distinct filter values, cached for the column-header menus
+  let CUST_OPTS = { kv: [], segment: [], sub_segment: [], sales_channel: [], country: [] };
+
   async function loadCustomerFilterOptions() {
     try {
       const opts = await api("/api/customers/filter-options");
+      CUST_OPTS = opts;
       CUST_DROP.kv.setOptions(opts.kv);
       CUST_DROP.segment.setOptions(opts.segment);
       CUST_DROP.subSegment.setOptions(opts.sub_segment);
@@ -1411,7 +1875,8 @@
     } catch (e) { /* no data yet */ }
   }
 
-  async function loadCustomers() {
+  async function loadCustomers(append = false) {
+    if (!append) CUST.page = 1;   // any filter/sort reload starts from the top
     CUST.filters = currentCustomerFilters();
     const params = new URLSearchParams();
     Object.entries(CUST.filters).forEach(([k, v]) => {
@@ -1424,44 +1889,91 @@
     params.set("page_size", CUST.pageSize);
     const data = await api(`/api/customers?${params.toString()}`);
     CUST.total = data.total;
-    renderCustomers(data);
+    renderCustomers(data, append);
+    updateFilterBadge();
   }
 
-  function renderCustomers(data) {
-    CUST.lastRows = data.rows;
+  // Infinite scroll: when the sentinel below the table comes into view and more
+  // rows exist, the next page is fetched and APPENDED — no pager clicks.
+  let _custLoadingMore = false;
+  async function loadMoreCustomers() {
+    if (_custLoadingMore) return;
+    if ((CUST.page * CUST.pageSize) >= CUST.total) return;   // everything is loaded
+    _custLoadingMore = true;
+    try { CUST.page++; await loadCustomers(true); }
+    catch { CUST.page--; }
+    finally { _custLoadingMore = false; }
+  }
+
+  // which header owns which filter keys — powers the per-column active marker
+  const _COL_FILTER_KEYS = {
+    name: ["q"], kunde: ["customer_state"], fit: ["fit_min"], anzeigen: ["ad_activity"],
+    fb: ["resolution_status", "page_id_state", "tracked"],
+    website: ["has_website", "no_website", "enrichment_status"],
+    umsatz: ["revenue_min", "revenue_max", "revenue_history"],
+    kv: ["kv", "exclude_kv"], segment: ["segment", "exclude_segment"],
+    subseg: ["sub_segment", "exclude_sub_segment"], kanal: ["sales_channel"], land: ["country"],
+  };
+  function _filterActive(f, key) {
+    const v = f[key];
+    return Array.isArray(v) ? v.length > 0 : (v !== null && v !== undefined && v !== "" && v !== false);
+  }
+
+  function updateFilterBadge() {
+    const f = currentCustomerFilters();
+    const parts = activeFilterSummary(f);
+    const info = $("#custFilterInfo");
+    if (info) info.textContent = parts.length
+      ? `${parts.length} Filter aktiv: ${parts.join(" · ").slice(0, 90)}${parts.join(" · ").length > 90 ? "…" : ""}`
+      : "";
+    // mark filtered columns in the header (little dot via CSS)
+    $$("#customersTable thead th[data-col]").forEach(th => {
+      const keys = _COL_FILTER_KEYS[th.dataset.col] || [];
+      th.classList.toggle("th-filtered", keys.some(k => _filterActive(f, k)));
+    });
+  }
+
+  function renderCustomers(data, append = false) {
+    CUST.lastRows = append ? (CUST.lastRows || []).concat(data.rows) : data.rows;
     const body = $("#customersTableBody");
     $("#customersEmptyHint").classList.toggle("hidden", data.total > 0);
-    body.innerHTML = data.rows.map(r => {
+    // Always render the FULL accumulated list (not just the new page): rebuilding
+    // the tbody keeps row event wiring single-bound — appending HTML and re-running
+    // the $$(...) wiring below would double-bind listeners on the older rows.
+    const html = CUST.lastRows.map(r => {
       const open = expandedPages.has(r.id);
       const website = r.website_domain
-        ? `<a class="link" href="${esc(/^https?:\/\//.test(r.website_domain) ? r.website_domain : "https://" + r.website_domain)}" target="_blank">${esc(r.website_domain)}</a>`
+        ? `<a class="link" href="${esc(/^https?:\/\//.test(r.website_domain) ? r.website_domain : "https://" + r.website_domain)}" target="_blank" title="${esc(r.website_domain)}">${esc(r.website_domain)}</a>`
         : "";
       return `
       <tr data-id="${r.id}" class="${CUST.selected.has(r.id) ? "selected" : ""}">
         <td class="col-check"><input type="checkbox" class="cust-check" ${CUST.selected.has(r.id) ? "checked" : ""}></td>
         <td class="col-dot"><span class="dot dot-${r.resolution_status}" title="${esc(STATUS_LABEL[r.resolution_status] || r.resolution_status)}"></span></td>
-        <td>${esc(r.sap_number || "")}</td>
-        <td>${esc(r.name)}</td>
-        <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
+        <td class="cell-name">${esc(r.name)}</td>
+        <td>${customerStateChip(r.customer_state)}</td>
+        <td class="num">${fitCell(r.fit_score)}</td>
         <td class="num">${r.active_ads == null ? '<span class="muted">—</span>' : (r.active_ads > 0 ? `<strong>${r.active_ads}</strong>` : '<span class="muted">0</span>')}</td>
-        <td>${esc(r.kv || "")}</td>
-        <td>${esc(r.segment || "")}</td>
-        <td>${esc(r.sub_segment || "")}</td>
-        <td>${esc(r.sales_channel || "")}</td>
-        <td>${esc(r.city || "")}</td>
-        <td>${esc(r.country || "")}</td>
-        <td>${website}</td>
+        <td class="cell-ort">${esc(r.city || "")}</td>
         <td class="num">${eur(r.revenue_y0)}</td>
-        <td class="num">${eur(r.revenue_y1)}</td>
-        <td class="num">${eur(r.revenue_y2)}</td>
-        <td class="num">${eur(r.revenue_y3)}</td>
-        <td class="num">${eur(r.revenue_y4)}</td>
+        <td class="col-extra">${esc(r.kv || "")}</td>
+        <td class="col-extra">${esc(r.segment || "")}</td>
+        <td class="col-extra">${esc(r.sub_segment || "")}</td>
+        <td class="col-extra">${esc(r.sales_channel || "")}</td>
+        <td class="col-extra">${esc(r.country || "")}</td>
+        <td class="col-extra num">${eur(r.revenue_y1)}</td>
+        <td class="col-extra num">${eur(r.revenue_y2)}</td>
+        <td class="col-extra num">${eur(r.revenue_y3)}</td>
+        <td class="col-extra num">${eur(r.revenue_y4)}</td>
+        <td class="fb-page-cell">${fbPageCellHtml(r)}</td>
+        <td class="cell-website">${website}</td>
+        <td class="col-extra">${esc(r.sap_number || "")}</td>
         <td><button class="btn btn-sm pages-toggle-row" data-id="${r.id}">${open ? "Hide" : "Pages"}</button></td>
       </tr>
       <tr class="pages-row ${open ? "" : "hidden"}" data-pages-for="${r.id}">
-        <td colspan="19"><div class="pages-body-inline" id="pages-${r.id}"></div></td>
+        <td colspan="21"><div class="pages-body-inline" id="pages-${r.id}"></div></td>
       </tr>`;
     }).join("");
+    body.innerHTML = html;
 
     $$(".cust-check", body).forEach(cb => cb.addEventListener("change", () => {
       const tr = cb.closest("tr"); const id = Number(tr.dataset.id);
@@ -1533,13 +2045,12 @@
       th.classList.toggle("sorted-desc", th.dataset.sort === CUST.sort && CUST.direction === "desc");
     });
 
-    const from = data.total ? (data.page - 1) * data.page_size + 1 : 0;
-    const to = Math.min(data.page * data.page_size, data.total);
-    $("#custTotal").textContent = `${data.total.toLocaleString("de-DE")} companies`;
-    $("#custPageInfo").textContent = `${from}–${to} of ${data.total.toLocaleString("de-DE")}`;
-    $("#custPrevBtn").disabled = data.page <= 1;
-    $("#custNextBtn").disabled = to >= data.total;
-    $("#custSelectPage").checked = data.rows.length > 0 && data.rows.every(r => CUST.selected.has(r.id));
+    const shown = CUST.lastRows.length;
+    $("#custTotal").textContent = `${data.total.toLocaleString("de-DE")} Firmen`;
+    $("#custPageInfo").textContent = data.total > shown
+      ? `${shown.toLocaleString("de-DE")} von ${data.total.toLocaleString("de-DE")} geladen — weiter scrollen lädt mehr…`
+      : (data.total ? `alle ${data.total.toLocaleString("de-DE")} geladen` : "");
+    $("#custSelectPage").checked = CUST.lastRows.length > 0 && CUST.lastRows.every(r => CUST.selected.has(r.id));
     updateSelectionUI();
   }
 
@@ -1564,10 +2075,159 @@
     try {
       await api("/api/identity-jobs", "POST", { company_ids: ids });
       CUST.selected.clear();
-      await loadCustomers();
-      await loadJobs();
-      startJobPolling();
+      await showJobProgressNow();          // progress modal first, table after
     } catch (e) { alert(`Could not start identity check: ${e.message}`); }
+  }
+
+  // Enrichment for a set of companies: find the missing website, then read facts
+  // off the company's own site. Costs ~$0.001 (search) + ~$0.003 (LLM) each, so
+  // the confirm states the rough total rather than hiding it.
+  async function runEnrichForIds(ids) {
+    if (!ids.length) return;
+    const est = (ids.length * 0.004).toFixed(2);
+    if (!await appConfirm(
+      `Daten für ${ids.length} Firma/Firmen anreichern?\n\n`
+      + `• Fehlende Website: erst aus der E-Mail-Domain (kostenlos), sonst per Websuche\n`
+      + `• Danach werden Beschreibung, Produkte, Gründungsjahr, Größe und genannte `
+      + `Marken (Solarlux/Wettbewerber) von der eigenen Website gelesen\n`
+      + `• Eine gefundene Website wird nur automatisch übernommen, wenn Telefon/PLZ/Straße `
+      + `auf der Seite bestätigt werden — sonst landet sie zur Prüfung in der Warteschlange\n`
+      + `• Vorhandene Websites und Stammdaten werden nie überschrieben\n\n`
+      + `Geschätzte Kosten: ca. $${est}. Läuft im Hintergrund (abbrechbar).`,
+      { title: "Daten anreichern", confirmText: "Anreichern" })) return;
+    try {
+      await api("/api/enrich-jobs", "POST", { company_ids: ids });
+      CUST.selected.clear();
+      await showJobProgressNow();          // progress modal first, table after
+    } catch (e) { alert(`Anreicherung konnte nicht gestartet werden: ${e.message}`); }
+  }
+
+  // Every company id under the current filter, WITHOUT touching the user's
+  // selection. (selectAllMatching() lives inside wireStatic() and is therefore
+  // not reachable from here — calling it threw "selectAllMatching is not
+  // defined" and silently killed both this panel and the filtered-enrich
+  // button.) Reading the scope is also simply the right behaviour: acting on
+  // "everything filtered" shouldn't mutate what the user had ticked.
+  async function filteredCompanyIds() {
+    const n = CUST.total || 0;
+    if (!n) return [];
+    const { ids } = await api("/api/customers/select-top", "POST",
+      { filters: currentCustomerFilters(), sort: CUST.sort, direction: CUST.direction, n });
+    return ids || [];
+  }
+
+  // ---------------- Komplett-Pipeline ----------------
+  let PIPE_IDS = [];
+
+  function pipelinePlan() {
+    const ads = [];
+    if ($("#pipeAdsMeta").checked) ads.push("meta");
+    if ($("#pipeAdsGoogle").checked) ads.push("google");
+    return {
+      enrich: $("#pipeEnrich").checked,
+      identity: $("#pipeIdentity").checked,
+      ads: $("#pipeAds").checked ? ads : [],
+      report: $("#pipeReport").checked ? $("#pipeReportType").value : null,
+      send_to: $("#pipeSend").checked ? checkedRecipientIds($("#pipeRecipients")) : [],
+    };
+  }
+
+  // Mirrors jobs.resolve_step_order() — the backend stays the authority, this
+  // only shows the user which order their selection will actually run in.
+  function pipelineOrder(p) {
+    const order = [];
+    if (p.enrich && p.identity) order.push("Domains ableiten (gratis)");
+    if (p.identity) order.push("Identität");
+    if (p.enrich) order.push("Anreichern");
+    if (p.ads.length) order.push(`Anzeigen (${p.ads.join("+")})`);
+    if (p.report) order.push("Bericht");
+    if (p.send_to.length) order.push(`Senden (${p.send_to.length})`);
+    return order;
+  }
+
+  function renderPipelineSummary() {
+    const p = pipelinePlan();
+    const n = PIPE_IDS.length;
+    // per-company cost/time, deliberately rough and labelled as an estimate.
+    // The free domain pre-pass costs nothing but does fetch each candidate page
+    // to validate it, so it costs TIME — don't hide that.
+    let cost = 0, secs = 0;
+    if (p.enrich && p.identity) secs += n * 4;
+    if (p.enrich) { cost += n * 0.004; secs += n * 8; }
+    if (p.identity) { cost += n * 0.005; secs += n * 15; }
+    if (p.ads.includes("meta")) { cost += n * 0.004; secs += n * 20; }
+    if (p.ads.includes("google")) { cost += n * 0.012; secs += n * 110; }
+    const steps = pipelineOrder(p);
+    const orderEl = $("#pipelineOrder");
+    if (orderEl) {
+      orderEl.innerHTML = steps.length
+        ? `<b>Reihenfolge:</b> ${steps.map(esc).join(" → ")}`
+        : "";
+    }
+    const fmt = s => s < 90 ? `${Math.round(s)} s` : (s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
+    $("#pipelineSummary").innerHTML = `
+      <div><div class="stat-label">Firmen</div><div class="stat-value">${n.toLocaleString("de-DE")}</div></div>
+      <div><div class="stat-label">Schritte</div><div class="stat-value">${steps.length}</div></div>
+      <div><div class="stat-label">Geschätzte Dauer</div><div class="stat-value">${secs ? fmt(secs) : "—"}</div></div>
+      <div><div class="stat-label">Geschätzte Kosten</div><div class="stat-value">${cost ? "$" + cost.toFixed(2) : "$0"}</div></div>
+      <p class="hint" style="flex-basis:100%">Ablauf: ${steps.join(" → ") || "— kein Schritt gewählt"}</p>`;
+    $("#pipelineStartBtn").disabled = !steps.length || !n;
+    $("#pipeRecipientsWrap").classList.toggle("hidden", !$("#pipeSend").checked);
+    // sending needs a report in the same run
+    if ($("#pipeSend").checked && !$("#pipeReport").checked) {
+      $("#pipelineSummary").innerHTML +=
+        `<p class="hint status-error" style="flex-basis:100%">Zum Senden muss Schritt 4 (Bericht erstellen) aktiv sein.</p>`;
+      $("#pipelineStartBtn").disabled = true;
+    }
+  }
+
+  async function openPipelinePanel() {
+    // scope = current selection if any, else the whole filtered set
+    PIPE_IDS = CUST.selected.size ? [...CUST.selected] : await filteredCompanyIds();
+    $("#pipelineScope").textContent =
+      `Umfang: ${PIPE_IDS.length.toLocaleString("de-DE")} Firmen` +
+      (activeFilterSummary(currentCustomerFilters()).length
+        ? ` · Filter: ${activeFilterSummary(currentCustomerFilters()).join(" · ")}` : "");
+    renderRecipientChecks($("#pipeRecipients"), await ensureRecipients());
+    hideCompanyPanels();
+    $("#pipelinePanel").classList.remove("hidden");
+    renderPipelineSummary();
+    $("#pipelinePanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  async function startPipeline() {
+    const p = pipelinePlan();
+    const n = PIPE_IDS.length;
+    const order = [p.enrich && "1 Daten anreichern", p.identity && "2 Identitätsprüfung",
+                   p.ads.length && `3 Ad lookup (${p.ads.join(" + ")})`,
+                   p.report && `4 Bericht (${p.report === "full" ? "vollständig" : "Top 5"})`,
+                   p.send_to.length && `5 Senden an ${p.send_to.length} Empfänger`].filter(Boolean);
+    if (!await appConfirm(
+      `Pipeline für ${n} Firmen starten?\n\n${order.join("\n")}\n\n`
+      + `Die Schritte laufen in dieser Reihenfolge im Hintergrund. Fortschritt und `
+      + `jede einzelne Firma siehst du live; abbrechen ist jederzeit möglich.`,
+      { title: "Komplett-Pipeline", confirmText: "Pipeline starten" })) return;
+    const btn = $("#pipelineStartBtn");
+    btn.disabled = true; btn.textContent = "Startet…";
+    try {
+      await api("/api/pipeline-jobs", "POST", {
+        company_ids: PIPE_IDS, plan: p,
+        label: `Pipeline: ${order.length} Schritte · ${n} Firmen`,
+      });
+      $("#pipelinePanel").classList.add("hidden");
+      CUST.selected.clear();
+      await showJobProgressNow();
+    } catch (e) {
+      toast(`Pipeline konnte nicht gestartet werden: ${e.message}`, "error");
+    } finally { btn.disabled = false; btn.textContent = "Pipeline starten"; }
+  }
+
+  async function runEnrichAction() {
+    await runEnrichForIds([...CUST.selected]);
+  }
+
+  async function runEnrichForFilter() {
+    await runEnrichForIds(await filteredCompanyIds());   // every company under the current filter
   }
 
   async function runDeleteAction() {
@@ -1601,11 +2261,9 @@
     try {
       const { filename } = await api("/api/reports/generate", "POST", body);
       toast(successMsg, "info");
-      // Open the finished PDF (same behaviour as the Download links in history).
-      const a = document.createElement("a");
-      a.href = `/api/reports/${encodeURIComponent(filename)}`;
-      a.target = "_blank"; a.rel = "noopener";
-      document.body.appendChild(a); a.click(); a.remove();
+      LAST_REPORT = { filename, filters: body.filters || {}, reportType: body.report || "full" };
+      // Inline panel: download AND email it right here — no hop to the Reports tab.
+      await showReportReadyPanel(filename, successMsg);
       try { await loadReports(); } catch { /* Reports tab refresh is best-effort */ }
     } catch (e) {
       toast(`Report failed: ${e.message}`, "error");
@@ -1639,6 +2297,87 @@
   function closeCompanyDrawer() {
     $("#companyDrawer").classList.add("hidden");
     $("#drawerBackdrop").classList.add("hidden");
+  }
+
+  // ---------------- enrichment (drawer section + review queue) ----------------
+  function enrichFieldsHtml(e) {
+    const f = e.fields || {};
+    const prov = e.provenance || {};
+    // every value shows WHERE it came from — hover gives the source + the quote
+    const kv = (label, value, key) => {
+      if (value === undefined || value === null || value === "" ||
+          (Array.isArray(value) && !value.length)) return "";
+      const p = prov[key];
+      const tip = p ? `${p.source}${p.confidence ? ` · ${Math.round(p.confidence * 100)}%` : ""}${p.evidence ? ` · „${p.evidence}"` : ""}` : "";
+      const shown = Array.isArray(value) ? value.join(", ") : value;
+      return `<div class="drawer-kv"><dt>${esc(label)}</dt><dd${tip ? ` title="${esc(tip)}"` : ""}>${esc(String(shown))}${p ? ` <span class="tag">${esc(p.source)}</span>` : ""}</dd></div>`;
+    };
+    const solarlux = f.mentions_solarlux === true
+      ? `<span class="tag tag-saved">nennt Solarlux</span>`
+      : (f.mentions_solarlux === false ? `<span class="tag">nennt Solarlux nicht</span>` : "");
+    const comps = (f.competitor_brands || []).length
+      ? `<span class="tag tag-filtered">Wettbewerber: ${esc(f.competitor_brands.join(", "))}</span>` : "";
+    const body = [
+      kv("Beschreibung", f.description_de, "description_de"),
+      kv("Produkte", f.products, "products"),
+      kv("Gegründet", f.founded_year, "founded_year"),
+      kv("Größe", f.employee_hint, "employee_hint"),
+      kv("Rechtsform", f.legal_form, "legal_form"),
+      kv("Einsatzgebiet", f.service_area, "service_area"),
+    ].join("");
+    return `${solarlux || comps ? `<p style="margin:0 0 8px">${solarlux} ${comps}</p>` : ""}
+      ${body ? `<dl class="drawer-grid">${body}</dl>` : `<p class="hint">Noch keine Felder extrahiert.</p>`}
+      <p class="hint" style="margin-top:6px">Status: <b>${esc(ENRICH_STATUS_LABEL[e.status] || e.status || "—")}</b>${
+        e.website_source ? ` · Website-Quelle: ${esc(e.website_source)}${e.website_validated_by ? ` (${esc(e.website_validated_by)})` : ""}` : ""}${
+        e.enriched_at ? ` · ${esc(e.enriched_at)}` : ""}${e.error ? ` · <span class="status-error">${esc(e.error)}</span>` : ""}</p>`;
+  }
+
+  // needs_review: show each unproven candidate with why it failed + accept/reject.
+  // Same plausibility rule as the backend: own-data candidates always, search
+  // hits only when a name signal ties them to the company — unrelated portals
+  // stay in the audit blob but are not offered for review.
+  function enrichCandidatesHtml(e) {
+    const worthy = c => c && c.domain && (
+      ["email_domain", "sap_salvaged"].includes(c.origin)
+      || c.signals?.name_in_text || c.signals?.name_in_domain);
+    const cands = (e.website_candidates || []).filter(worthy);
+    if (e.status !== "needs_review" || !cands.length) return "";
+    return `<div class="enrich-review">
+      <p class="hint"><b>Website-Vorschläge</b> — nicht automatisch bestätigt, weil Telefon/PLZ/Straße auf der Seite nicht gefunden wurden. Bitte prüfen:</p>
+      ${cands.map(c => `
+        <div class="page-item" data-domain="${esc(c.domain)}">
+          <span><a class="link" href="https://${esc(c.domain)}" target="_blank" rel="noopener">${esc(c.domain)}</a>
+            <span class="muted small">${esc(c.origin || "")}${c.reachable === false ? " · nicht erreichbar" : ""}</span></span>
+          <button class="btn btn-sm enrich-accept">Das ist die richtige</button>
+        </div>`).join("")}
+      <button class="btn btn-sm btn-ghost enrich-reject" style="margin-top:6px">Keine davon</button>
+    </div>`;
+  }
+
+  async function loadDrawerEnrichment(id) {
+    const box = $("#drawerEnrichBody");
+    if (!box) return;
+    try {
+      const e = await api(`/api/companies/${id}/enrichment`);
+      box.innerHTML = enrichFieldsHtml(e) + enrichCandidatesHtml(e);
+      $$(".enrich-accept", box).forEach(btn => btn.addEventListener("click", async () => {
+        const domain = btn.closest("[data-domain]").dataset.domain;
+        btn.disabled = true; btn.textContent = "Übernehme…";
+        try {
+          await api(`/api/companies/${id}/enrichment/accept`, "POST", { page_id: domain });
+          toast(`✓ ${domain} übernommen.`, "info");
+          await loadDrawerEnrichment(id); await loadCustomers();
+        } catch (err) { toast(`Fehlgeschlagen: ${err.message}`, "error"); btn.disabled = false; btn.textContent = "Das ist die richtige"; }
+      }));
+      const rej = $(".enrich-reject", box);
+      if (rej) rej.addEventListener("click", async () => {
+        await api(`/api/companies/${id}/enrichment/reject`, "POST");
+        toast("Vorschläge verworfen.", "info");
+        await loadDrawerEnrichment(id); await loadCustomers();
+      });
+    } catch (e) {
+      box.innerHTML = `<p class="hint status-error">Konnte Firmeninfos nicht laden: ${esc(e.message)}</p>`;
+    }
   }
 
   async function openCompanyDrawer(id) {
@@ -1759,6 +2498,23 @@
           ${adListHtml}
         </div>` : ""}
         <div class="drawer-section">
+          <h3>Score</h3>
+          <dl class="drawer-grid">
+            ${drawerKv("Kundenstatus", customerStateChip(row.customer_state))}
+            ${drawerKv("Fit zum Kundenprofil", row.fit_score != null ? fitCell(row.fit_score) : "")}
+            ${drawerKv("Chance (Divergenz)", row.opportunity_score != null ? String(Math.round(row.opportunity_score)) : "")}
+            ${drawerKv("Ziel-Score", row.target_score != null ? `<b>${Math.round(row.target_score)}</b>` : "")}
+          </dl>
+          <div id="drawerFitBreakdown"></div>
+        </div>
+        <div class="drawer-section" id="drawerEnrichSection">
+          <div class="drawer-section-head">
+            <h3>Firmeninfos (angereichert)</h3>
+            <button id="drawerEnrichBtn" class="btn btn-sm" title="Website finden (falls fehlend) und Firmeninfos von der eigenen Website lesen">✨ Anreichern</button>
+          </div>
+          <div id="drawerEnrichBody"><p class="hint">Lade…</p></div>
+        </div>
+        <div class="drawer-section">
           <h3>Master data</h3>
           <dl class="drawer-grid">
             ${drawerKv("KV", esc(row.kv))}
@@ -1823,14 +2579,49 @@
       btn.disabled = true; btn.textContent = "Checking…";
       try {
         const r = await api(`/api/companies/${id}/identity-check`, "POST");
-        const label = { confirmed: "confirmed", locked: "locked", ambiguous: "still ambiguous",
-          no_ads_found: "no page found", skipped_locked: "locked (skipped)" }[r.status] || r.status;
+        const label = { confirmed: "Meta page found", locked: "Meta page locked", ambiguous: "Meta page still unclear",
+          no_ads_found: "no Meta page found", skipped_locked: "Meta page locked (skipped)" }[r.status] || r.status;
         toast(`Identity rechecked → ${label}${r.page_name ? " · " + r.page_name : ""}`, "info");
         await refresh();
       } catch (err) {
         btn.disabled = false; btn.textContent = "↻ Recheck";
         alert(err.message);
       }
+    });
+
+    // Score breakdown ("Warum dieser Fit?") — per-feature bars from the applied profile.
+    (async () => {
+      const box = $("#drawerFitBreakdown");
+      if (!box || row.fit_score == null) return;
+      try {
+        const full = await api(`/api/companies/${id}`);
+        const feats = full?.fit_breakdown?.features || [];
+        if (!feats.length) return;
+        box.innerHTML = `<p class="hint" style="margin:8px 0 4px"><b>Warum dieser Fit?</b> (Übereinstimmung mit den Gewinnern je Merkmal)</p>`
+          + feats.map(f => `
+            <div class="fit-row" title="Gewicht ${f.weight}">
+              <span class="fit-row-label">${esc(f.label)}: ${esc(String(f.value))}</span>
+              <span class="fit-bar"><span class="fit-bar-fill" style="width:${Math.round(f.points * 100)}%"></span></span>
+              <span class="fit-row-pct">${Math.round(f.points * 100)}%</span>
+            </div>`).join("");
+      } catch { /* breakdown is optional */ }
+    })();
+
+    // Enrichment: load this company's enriched facts, and allow a manual re-run.
+    loadDrawerEnrichment(id);
+    $("#drawerEnrichBtn", drawer)?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true; btn.textContent = "Anreichern…";
+      try {
+        const r = await api(`/api/companies/${id}/enrich`, "POST");
+        toast(r.website ? `✓ ${r.website} (${r.validated_by}) · ${r.fields_found} Felder`
+                        : `${ENRICH_STATUS_LABEL[r.status] || r.status}`,
+              r.status === "enriched" ? "info" : "error");
+        await loadDrawerEnrichment(id);
+        await loadCustomers();
+      } catch (err) {
+        toast(`Anreichern fehlgeschlagen: ${err.message}`, "error");
+      } finally { btn.disabled = false; btn.textContent = "✨ Anreichern"; }
     });
 
     // Use a candidate — set it as the verified (human-confirmed) page.
@@ -1918,6 +2709,10 @@
     applyOnChange("#custHasWebsite");
     applyOnChange("#custTracked");
     applyOnChange("#custAdActivity");
+    applyOnChange("#custNoWebsite");
+    applyOnChange("#custEnrichStatus");
+    applyOnChange("#custCustomerState");
+    applyOnChange("#custFitMin");
 
     $("#custClearBtn").addEventListener("click", () => {
       $("#custSearch").value = "";
@@ -1928,18 +2723,180 @@
       $("#custRevenueMin").value = ""; $("#custRevenueMax").value = ""; $("#custRevenueHistory").value = "";
       $("#custHasWebsite").checked = false; $("#custTracked").value = "";
       $("#custAdActivity").value = "";
+      $("#custNoWebsite").checked = false; $("#custEnrichStatus").value = "";
+      $("#custCustomerState").value = ""; $("#custFitMin").value = "";
+      applyDefaultExclusion();   // Zurücksetzen = back to DEFAULT, incl. "ohne Private Endkunden"
       CUST.page = 1; loadCustomers();
     });
 
-    $("#custPrevBtn").addEventListener("click", () => { if (CUST.page > 1) { CUST.page--; loadCustomers(); } });
-    $("#custNextBtn").addEventListener("click", () => { CUST.page++; loadCustomers(); });
+    // Infinite scroll replaces the pager: the sentinel under the table triggers
+    // the next page ~600px before it becomes visible. IntersectionObserver is
+    // the primary signal; a throttled scroll listener backs it up because IO
+    // callbacks are throttled/paused in backgrounded or embedded windows.
+    const _sentinelNear = () => {
+      const el = $("#custScrollSentinel");
+      if (!el || !$("#tab-customers").classList.contains("active")) return false;
+      return el.getBoundingClientRect().top < window.innerHeight + 600;
+    };
+    new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) loadMoreCustomers();
+    }, { rootMargin: "600px" }).observe($("#custScrollSentinel"));
+    let _scrollTick = false;
+    window.addEventListener("scroll", () => {
+      if (_scrollTick) return;
+      _scrollTick = true;
+      setTimeout(() => { _scrollTick = false; if (_sentinelNear()) loadMoreCustomers(); }, 150);
+    }, { passive: true });
 
-    $$("#customersTable th[data-sort]").forEach(th => th.addEventListener("click", () => {
-      const key = th.dataset.sort;
-      if (CUST.sort === key) CUST.direction = CUST.direction === "asc" ? "desc" : "asc";
-      else { CUST.sort = key; CUST.direction = key.startsWith("revenue") ? "desc" : "asc"; }
-      CUST.page = 1; loadCustomers();
-    }));
+    // All columns show by default; this hides the secondary ones on demand.
+    $("#custColsBtn").addEventListener("click", () => {
+      const hidden = $("#customersTable").classList.toggle("hide-extra");
+      $("#custColsBtn").textContent = hidden ? "Alle Spalten ▾" : "Weniger Spalten ▴";
+    });
+
+    // "⚡ Aktionen (gefiltert)" dropdown — the five filtered-set actions in one
+    // place. The item buttons keep their original ids/handlers; this wiring
+    // only opens/closes the panel (and closes it once an action is picked).
+    const actionsPanel = $("#custActionsMenu .action-menu-panel");
+    $("#custActionsBtn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      actionsPanel.classList.toggle("hidden");
+    });
+    actionsPanel.addEventListener("click", () => actionsPanel.classList.add("hidden"));
+    document.addEventListener("click", () => actionsPanel.classList.add("hidden"));
+
+    // ---------------- column-header menus: click a header -> sort + THAT
+    // column's filter, Excel-style. The controls proxy into the hidden
+    // state-holders (#custFilterState), so currentCustomerFilters() and all
+    // report/export/job flows keep working unchanged. ----------------
+    const _setVal = (sel, v) => { const el = $(sel); el.value = v; el.dispatchEvent(new Event("change", { bubbles: true })); };
+    const _chk = (sel, on) => { $(sel).checked = on; };
+
+    function _optionsHtml(el) {
+      return [...$(el).options].map(o => `<option value="${esc(o.value)}"${$(el).value === o.value ? " selected" : ""}>${esc(o.textContent)}</option>`).join("");
+    }
+    function _checkListHtml(values, selected, cls) {
+      const sel = new Set(selected);
+      return `<div class="thm-list">` + values.map(v => `
+        <label class="thm-item"><input type="checkbox" class="${cls}" value="${esc(v)}" ${sel.has(v) ? "checked" : ""}> <span>${esc(v)}</span></label>`).join("") + `</div>`;
+    }
+    function _incExcSection(title, dropGetter, values, cls) {
+      return `<div class="thm-sec"><div class="thm-sec-title">${title}</div>${_checkListHtml(values, dropGetter().getSelected(), cls)}</div>`;
+    }
+
+    const COL_MENUS = {
+      name: () => `<div class="thm-sec"><div class="thm-sec-title">Suche</div>
+        <input type="text" class="thm-input" id="thmSearch" value="${esc($("#custSearch").value)}" placeholder="Name oder SAP…"></div>`,
+      kunde: () => `<div class="thm-sec"><div class="thm-sec-title">Kundenstatus</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custCustomerState">${_optionsHtml("#custCustomerState")}</select></div>`,
+      fit: () => `<div class="thm-sec"><div class="thm-sec-title">Fit mindestens (0–100)</div>
+        <input type="number" min="0" max="100" class="thm-input" id="thmFitMin" value="${esc($("#custFitMin").value)}"></div>`,
+      anzeigen: () => `<div class="thm-sec"><div class="thm-sec-title">Anzeigen-Aktivität</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custAdActivity">${_optionsHtml("#custAdActivity")}</select></div>`,
+      fb: () => _incExcSection("Meta-Identität", () => CUST_DROP.status,
+            ID_FILTER_OPTIONS, "thm-inc-status")
+        + `<div class="thm-sec"><div class="thm-sec-title">Tracking</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custTracked">${_optionsHtml("#custTracked")}</select></div>`,
+      website: () => `<div class="thm-sec"><div class="thm-sec-title">Website</div>
+        <select class="thm-input" id="thmWebsite">
+          <option value="">alle</option>
+          <option value="with"${$("#custHasWebsite").checked ? " selected" : ""}>nur mit Website</option>
+          <option value="without"${$("#custNoWebsite").checked ? " selected" : ""}>nur ohne Website</option>
+        </select></div>
+        <div class="thm-sec"><div class="thm-sec-title">Anreicherung</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custEnrichStatus">${_optionsHtml("#custEnrichStatus")}</select></div>`,
+      umsatz: () => `<div class="thm-sec"><div class="thm-sec-title">Umsatz akt. Jahr (€)</div>
+        <div class="thm-row"><input type="number" class="thm-input" id="thmRevMin" placeholder="von" value="${esc($("#custRevenueMin").value)}">
+        <input type="number" class="thm-input" id="thmRevMax" placeholder="bis" value="${esc($("#custRevenueMax").value)}"></div></div>
+        <div class="thm-sec"><div class="thm-sec-title">Umsatz-Historie</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custRevenueHistory">${_optionsHtml("#custRevenueHistory")}</select></div>`,
+      kv: () => _incExcSection("Nur diese KV", () => CUST_DROP.kv, CUST_OPTS.kv, "thm-inc-kv")
+        + _incExcSection("Ausschließen", () => CUST_DROP.excludeKv, CUST_OPTS.kv, "thm-exc-kv"),
+      segment: () => _incExcSection("Nur diese Segmente", () => CUST_DROP.segment, CUST_OPTS.segment, "thm-inc-seg")
+        + _incExcSection("Ausschließen", () => CUST_DROP.excludeSegment, CUST_OPTS.segment, "thm-exc-seg"),
+      subseg: () => _incExcSection("Nur diese Untersegmente", () => CUST_DROP.subSegment, CUST_OPTS.sub_segment, "thm-inc-sub")
+        + _incExcSection("Ausschließen", () => CUST_DROP.excludeSubSegment, CUST_OPTS.sub_segment, "thm-exc-sub"),
+      kanal: () => _incExcSection("Nur diese Vertriebswege", () => CUST_DROP.salesChannel, CUST_OPTS.sales_channel, "thm-inc-chan"),
+      land: () => _incExcSection("Nur diese Länder", () => CUST_DROP.country, CUST_OPTS.country, "thm-inc-land"),
+    };
+    const _CHECK_BINDINGS = {
+      "thm-inc-status": () => CUST_DROP.status, "thm-inc-kv": () => CUST_DROP.kv,
+      "thm-exc-kv": () => CUST_DROP.excludeKv, "thm-inc-seg": () => CUST_DROP.segment,
+      "thm-exc-seg": () => CUST_DROP.excludeSegment, "thm-inc-sub": () => CUST_DROP.subSegment,
+      "thm-exc-sub": () => CUST_DROP.excludeSubSegment, "thm-inc-chan": () => CUST_DROP.salesChannel,
+      "thm-inc-land": () => CUST_DROP.country,
+    };
+
+    const thMenu = document.createElement("div");
+    thMenu.id = "thMenu"; thMenu.className = "th-menu hidden";
+    document.body.appendChild(thMenu);
+    thMenu.addEventListener("click", e => e.stopPropagation());
+    const closeThMenu = () => thMenu.classList.add("hidden");
+    document.addEventListener("click", closeThMenu);
+    document.addEventListener("keydown", e => { if (e.key === "Escape") closeThMenu(); });
+
+    function openThMenu(th) {
+      const col = th.dataset.col;
+      const sortKey = th.dataset.sort;
+      const label = ID_FILTER_LABEL;   // ensure closure keeps labels for status list
+      let html = `<div class="thm-head">${esc(th.textContent.replace("▾", "").trim())}</div>`;
+      if (sortKey) {
+        html += `<div class="thm-sec thm-sort">
+          <button class="btn btn-sm thm-sort-btn${CUST.sort === sortKey && CUST.direction === "asc" ? " btn-primary" : ""}" data-dir="asc">↑ Aufsteigend</button>
+          <button class="btn btn-sm thm-sort-btn${CUST.sort === sortKey && CUST.direction === "desc" ? " btn-primary" : ""}" data-dir="desc">↓ Absteigend</button>
+        </div>`;
+      }
+      if (COL_MENUS[col]) html += COL_MENUS[col]();
+      thMenu.innerHTML = html;
+
+      // position under the header, clamped to the viewport
+      const r = th.getBoundingClientRect();
+      thMenu.classList.remove("hidden");
+      const w = Math.min(300, window.innerWidth - 24);
+      thMenu.style.width = w + "px";
+      thMenu.style.top = Math.round(r.bottom + 4) + "px";
+      thMenu.style.left = Math.round(Math.min(r.left, window.innerWidth - w - 12)) + "px";
+
+      // wiring — everything applies live via the hidden state-holders
+      $$(".thm-sort-btn", thMenu).forEach(b => b.addEventListener("click", () => {
+        CUST.sort = sortKey; CUST.direction = b.dataset.dir;
+        closeThMenu(); loadCustomers();
+      }));
+      $$("#thmProxySel", thMenu).forEach(sel => sel.addEventListener("change",
+        () => _setVal(sel.dataset.target, sel.value)));
+      $("#thmSearch", thMenu)?.addEventListener("keydown", e => {
+        if (e.key === "Enter") { $("#custSearch").value = e.target.value; closeThMenu(); applyNow(); }
+      });
+      $("#thmFitMin", thMenu)?.addEventListener("change", e => _setVal("#custFitMin", e.target.value));
+      $("#thmWebsite", thMenu)?.addEventListener("change", e => {
+        _chk("#custHasWebsite", e.target.value === "with");
+        _chk("#custNoWebsite", e.target.value === "without");
+        applyNow();
+      });
+      $("#thmRevMin", thMenu)?.addEventListener("change", e => { $("#custRevenueMin").value = e.target.value; applyNow(); });
+      $("#thmRevMax", thMenu)?.addEventListener("change", e => { $("#custRevenueMax").value = e.target.value; applyNow(); });
+      Object.entries(_CHECK_BINDINGS).forEach(([cls, getDrop]) => {
+        const boxes = $$(`.${cls}`, thMenu);
+        if (!boxes.length) return;
+        boxes.forEach(cb => cb.addEventListener("change", () => {
+          getDrop().setSelected($$(`.${cls}:checked`, thMenu).map(x => x.value));
+          applyNow();
+        }));
+      });
+    }
+
+    // decorate headers: caret + click-to-open (replaces sort-on-click)
+    $$("#customersTable thead th[data-col]").forEach(th => {
+      th.classList.add("th-has-menu");
+      th.insertAdjacentHTML("beforeend", ` <span class="th-caret">▾</span>`);
+      th.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = !thMenu.classList.contains("hidden") && thMenu.dataset.col === th.dataset.col;
+        closeThMenu();
+        if (!open) { thMenu.dataset.col = th.dataset.col; openThMenu(th); }
+      });
+    });
+    $(".table-wrap", $("#tab-customers"))?.addEventListener("scroll", closeThMenu, { passive: true });
 
     // Select every row currently rendered on this page (in-memory, instant).
     function selectPage(checked) {
@@ -2022,8 +2979,34 @@
     $("#planCancelBtn").addEventListener("click", () => $("#fetchPlanPanel").classList.add("hidden"));
     $("#planConfirmBtn").addEventListener("click", confirmFetchPlan);
 
+    // Save-as-report + inline send-after-generate wiring
+    fillDaySelect($("#saveReportDay"));
+    $("#custSaveReportBtn").addEventListener("click",
+      () => openSaveReportPanel({ filters: currentCustomerFilters(), reportType: "full" }));
+    $("#reportReadySendBtn").addEventListener("click", sendReportReady);
+    $("#reportReadySaveBtn").addEventListener("click",
+      () => openSaveReportPanel({ filters: (LAST_REPORT && LAST_REPORT.filters) || currentCustomerFilters(),
+                                  reportType: (LAST_REPORT && LAST_REPORT.reportType) || "full" }));
+    $("#reportReadyCloseBtn").addEventListener("click", () => $("#reportReadyPanel").classList.add("hidden"));
+    $("#saveReportSaveBtn").addEventListener("click", saveReportDef);
+    $("#saveReportCancelBtn").addEventListener("click", () => $("#saveReportPanel").classList.add("hidden"));
+
+    // Komplett-Pipeline
+    $("#custPipelineBtn").addEventListener("click", openPipelinePanel);
+    $("#pipelineStartBtn").addEventListener("click", startPipeline);
+    $("#pipelineCancelBtn").addEventListener("click", () => $("#pipelinePanel").classList.add("hidden"));
+    ["#pipeEnrich", "#pipeIdentity", "#pipeAds", "#pipeAdsMeta", "#pipeAdsGoogle",
+     "#pipeReport", "#pipeReportType", "#pipeSend"].forEach(sel =>
+      $(sel).addEventListener("change", renderPipelineSummary));
+    $("#pipeRecipients").addEventListener("change", renderPipelineSummary);
+
+    // ICP tab
+    $("#icpPreviewBtn").addEventListener("click", icpPreview);
+
     // selection actions + drawer chrome
     $("#custIdentityBtn").addEventListener("click", runIdentityAction);
+    $("#custEnrichBtn").addEventListener("click", runEnrichAction);
+    $("#custEnrichAllBtn").addEventListener("click", runEnrichForFilter);
     $("#custReportBtn").addEventListener("click", runReportForSelected);
     $("#custDeleteBtn").addEventListener("click", runDeleteAction);
     $("#custEditBtn").addEventListener("click", () => {
@@ -2060,24 +3043,32 @@
       return;
     }
     const est = await api("/api/fetch-jobs/estimate", "POST", { company_ids: PLAN_COMPANY_IDS, sources });
+    // Per-source routing: Meta runs only where a page was found, Google only
+    // where a website is set — so we show what will actually be fetched.
+    const routeStats = [];
+    if (est.meta_fetchable != null)
+      routeStats.push(`<div><div class="stat-label">Meta pages ready</div><div class="stat-value">${est.meta_fetchable}</div></div>`);
+    if (est.google_fetchable != null)
+      routeStats.push(`<div><div class="stat-label">Websites (Google)</div><div class="stat-value">${est.google_fetchable}</div></div>`);
     summaryBox.innerHTML = `
       <div><div class="stat-label">Companies</div><div class="stat-value">${est.company_count}</div></div>
-      ${est.meta_fetchable != null ? `
-      <div><div class="stat-label">Confirmed Meta pages</div><div class="stat-value">${est.meta_fetchable}</div></div>` : ""}
+      ${routeStats.join("")}
+      <div><div class="stat-label">Fetches to run</div><div class="stat-value">${est.total_units}</div></div>
       <div><div class="stat-label">Sources</div><div class="stat-value">${est.sources.join(" + ")}</div></div>
       <div><div class="stat-label">Est. time</div><div class="stat-value">${fmtDuration(est.est_seconds_low)}–${fmtDuration(est.est_seconds_high)}</div></div>
       <div><div class="stat-label">Est. Apify cost</div><div class="stat-value">$${est.est_cost_usd_low.toFixed(2)}–$${est.est_cost_usd_high.toFixed(2)}</div></div>
     `;
-    if (est.meta_skipped) {
-      summaryBox.innerHTML += `
-        <p class="hint" style="flex-basis:100%">⏭ ${est.meta_skipped} of the selected
-        compan${est.meta_skipped === 1 ? "y has" : "ies have"} no confirmed Meta page and will be
-        <b>skipped</b> — run the <b>Identity check</b> on them first.</p>`;
-    }
-    $("#planConfirmBtn").disabled = est.meta_fetchable === 0 && sources.length === 1 && sources[0] === "meta";
-    if ($("#planConfirmBtn").disabled) {
-      summaryBox.innerHTML += `<p class="hint" style="flex-basis:100%">Nothing to fetch —
-        none of the selection has a confirmed Meta page.</p>`;
+    const skips = [];
+    if (est.meta_skipped)
+      skips.push(`<b>${est.meta_skipped}</b> without a Meta page (Meta skipped — run the <b>Identity check</b> first)`);
+    if (est.google_skipped)
+      skips.push(`<b>${est.google_skipped}</b> without a website (Google skipped)`);
+    if (skips.length)
+      summaryBox.innerHTML += `<p class="hint" style="flex-basis:100%">⏭ ${skips.join("; ")}.</p>`;
+    $("#planConfirmBtn").disabled = est.total_units === 0;
+    if (est.total_units === 0) {
+      summaryBox.innerHTML += `<p class="hint" style="flex-basis:100%">Nothing to fetch — the selection
+        has no Meta page and no website for the chosen source${sources.length === 1 ? "" : "s"}.</p>`;
     }
   }
 
@@ -2096,12 +3087,26 @@
       // up across views) — but once a job locks in its company list, leaving
       // old picks checked would silently pad the NEXT fetch you start.
       CUST.selected.clear();
-      await loadCustomers();
-      await loadJobs();
-      startJobPolling();
+      await showJobProgressNow();          // progress modal first, table after
     } catch (e) {
       alert(`Could not start job: ${e.message}`);
     } finally { btn.disabled = false; btn.textContent = "Start fetch"; }
+  }
+
+  // After starting ANY background job (ad lookup, identity check, enrichment) the
+  // progress modal must appear at once. It used to be rendered only after
+  // loadCustomers() had finished re-fetching the whole table, which on a few
+  // thousand rows left a second or two of "did my click do anything?" — the ad
+  // lookup masked it with its plan panel, the other two showed nothing at all.
+  // So: jobs first (that paints the modal), table refresh afterwards in the
+  // background. Also clears the dismiss/hide flags so a NEW job is never
+  // suppressed by a previous one the user had hidden.
+  async function showJobProgressNow() {
+    _stripHiddenJobId = null;
+    _stripDismissedJobId = null;
+    await loadJobs();          // -> updateJobStrip() paints the spinner + bar
+    startJobPolling();
+    loadCustomers().catch(() => { /* table refresh is cosmetic here */ });
   }
 
   let _jobPollTimer = null;
@@ -2110,6 +3115,13 @@
     if (_jobPollTimer) return;
     _jobPollTimer = setInterval(async () => {
       const jobs = await loadJobs();
+      // Confirm (or stop tracking) any cancellation the user requested.
+      for (const jid of [..._cancelRequestedJobs]) {
+        const j = jobs.find(x => x.id === jid);
+        if (!j || ["running", "queued", "cancelling"].includes(j.status)) continue;  // still finishing
+        if (j.status === "cancelled") toast(`✓ ${jobKindLabel(j)} abgebrochen.`, "info");
+        _cancelRequestedJobs.delete(jid);
+      }
       if (!jobs.some(j => j.status === "running" || j.status === "queued" || j.status === "cancelling")) {
         clearInterval(_jobPollTimer);
         _jobPollTimer = null;
@@ -2132,8 +3144,12 @@
   let _stripActiveJobId = null;     // job the overlay is/was following
   let _stripDismissedJobId = null;  // finished job the user dismissed
   let _stripHiddenJobId = null;     // job the user hid while it runs
+  const _cancelRequestedJobs = new Set();  // jobs the user asked to cancel — toast once cancelled
 
-  function jobKindLabel(j) { return j.kind === "identity" ? "Identity check" : "Ad lookup"; }
+  function jobKindLabel(j) {
+    return { identity: "Identity check", enrich: "Datenanreicherung",
+             pipeline: "Komplett-Pipeline" }[j.kind] || "Ad lookup";
+  }
 
   function hideJobStrip() { $("#jobStrip").classList.add("hidden"); }
 
@@ -2180,7 +3196,20 @@
           </div>`;
         $(".job-strip-cancel", strip).addEventListener("click", async (ev) => {
           const b = ev.currentTarget; b.disabled = true; b.textContent = "Cancelling…";
-          await api(`/api/fetch-jobs/${active.id}/cancel`, "POST");
+          const jid = active.id;
+          try {
+            await api(`/api/fetch-jobs/${jid}/cancel`, "POST");
+          } catch (e) {
+            toast(`Could not cancel: ${e.message}`, "error");
+            b.disabled = false; b.textContent = "Cancel"; return;
+          }
+          // Unblock the app right away — the in-flight fetch finishes in the
+          // background, then the job stops. A toast confirms once it's cancelled.
+          _cancelRequestedJobs.add(jid);
+          _stripHiddenJobId = jid;
+          hideJobStrip();
+          toast("Abbruch angefordert — der laufende Abruf wird noch beendet, dann stoppt der Job. "
+            + "Du kannst normal weiterarbeiten.", "info");
           await loadJobs();
         });
         const hide = () => { _stripHiddenJobId = active.id; hideJobStrip(); };
@@ -2210,7 +3239,7 @@
           <div class="job-modal job-modal-result">
             <div class="result-icon">${ok ? "✓" : "⚠"}</div>
             <b>${jobKindLabel(j)} ${esc(JOB_STATUS_LABEL[j.status] || j.status).toLowerCase()}</b>
-            <span class="job-strip-note">${j.completed}/${j.total} processed · ${j.errors} error(s)${j.kind !== "identity" ? ` · ${j.ads_collected} ads` : ""}</span>
+            <span class="job-strip-note">${j.completed}/${j.total} processed · ${j.errors} error(s)${j.kind === "fetch" ? ` · ${j.ads_collected} ads` : ""}</span>
             <div class="job-modal-actions"><button class="btn btn-sm btn-primary job-strip-dismiss">Done</button></div>
           </div>`;
         const jid = j.id;
@@ -2226,17 +3255,34 @@
     cancelled: "Cancelled", interrupted: "Interrupted", cancelling: "Cancelling…",
   };
 
+  let JOBS_EXPANDED = false;
+
   function renderJobs(jobList) {
     const box = $("#jobsList");
-    if (!jobList.length) { box.innerHTML = `<p class="hint">No jobs yet — select companies above and pick an action.</p>`; return; }
-    box.innerHTML = jobList.map(j => {
+    if (!jobList.length) { box.innerHTML = `<p class="hint">Noch keine Jobs — oben Firmen auswählen und eine Aktion starten.</p>`; return; }
+    // Day-to-day only the CURRENT job matters: show anything still live, else
+    // just the newest — the older history sits behind one expander instead of
+    // a wall of cards.
+    const live = jobList.filter(j => ["running", "queued", "cancelling"].includes(j.status));
+    const shownJobs = JOBS_EXPANDED ? jobList : (live.length ? live : jobList.slice(0, 1));
+    const hiddenCount = jobList.length - shownJobs.length;
+    box.innerHTML = shownJobs.map(j => {
       const pct = j.total ? Math.round(100 * j.completed / j.total) : 0;
       const canResume = j.status === "interrupted" || j.status === "queued";
       const canCancel = j.status === "running" || j.status === "queued";
       const logTail = (j.log || []).slice(-8);
       const isIdentity = j.kind === "identity";
-      const what = isIdentity ? "identity check" : `ad lookup · ${j.sources.join(" + ")}`;
-      const stats = `${j.completed}/${j.total} · ${j.errors} error(s)` + (isIdentity ? "" : ` · ${j.ads_collected} ads`);
+      const isFetch = j.kind === "fetch" || !j.kind;
+      const what = isIdentity ? "identity check"
+                 : j.kind === "enrich" ? "Datenanreicherung · Website + Firmeninfos"
+                 : j.kind === "pipeline" ? "Komplett-Pipeline · " + [
+                     (j.plan || {}).enrich && "anreichern", (j.plan || {}).identity && "Identität",
+                     ((j.plan || {}).ads || []).length && "Anzeigen",
+                     (j.plan || {}).report && "Bericht",
+                     ((j.plan || {}).send_to || []).length && "senden"].filter(Boolean).join(" → ")
+                 : `ad lookup · ${j.sources.join(" + ")}`;
+      // an ad count is only meaningful for a real ad fetch
+      const stats = `${j.completed}/${j.total} · ${j.errors} error(s)` + (isFetch ? ` · ${j.ads_collected} ads` : "");
       return `<div class="job-item" data-job="${j.id}">
         <div class="job-item-head">
           <span class="job-status job-status-${j.status}">${esc(JOB_STATUS_LABEL[j.status] || j.status)}</span>
@@ -2251,7 +3297,10 @@
         <div class="job-progress-track"><div class="job-progress-fill" style="width:${pct}%"></div></div>
         <div class="job-log">${logTail.map(e => `<div>${esc(e.text)}</div>`).join("")}</div>
       </div>`;
-    }).join("");
+    }).join("")
+      + (hiddenCount > 0 ? `<button class="btn btn-sm btn-ghost" id="jobsMoreBtn">${hiddenCount} ältere Jobs anzeigen ▾</button>` : "")
+      + (JOBS_EXPANDED && jobList.length > 1 ? `<button class="btn btn-sm btn-ghost" id="jobsMoreBtn">Nur aktuellen Job anzeigen ▴</button>` : "");
+    $("#jobsMoreBtn")?.addEventListener("click", () => { JOBS_EXPANDED = !JOBS_EXPANDED; renderJobs(jobList); });
 
     $$(".job-resume-btn", box).forEach(btn => btn.addEventListener("click", async () => {
       const jobId = Number(btn.closest(".job-item").dataset.job);
@@ -2260,14 +3309,20 @@
     }));
     $$(".job-cancel-btn", box).forEach(btn => btn.addEventListener("click", async () => {
       const jobId = Number(btn.closest(".job-item").dataset.job);
-      await api(`/api/fetch-jobs/${jobId}/cancel`, "POST");
+      btn.disabled = true; btn.textContent = "Cancelling…";
+      try { await api(`/api/fetch-jobs/${jobId}/cancel`, "POST"); }
+      catch (e) { toast(`Could not cancel: ${e.message}`, "error"); return; }
+      _cancelRequestedJobs.add(jobId);
+      toast("Abbruch angefordert — der laufende Abruf wird noch beendet, dann stoppt der Job.", "info");
       await loadJobs();
+      startJobPolling();   // ensure we detect the final 'cancelled' and confirm it
     }));
   }
 
   wireStatic();
   loadState();
   loadReports();
+  loadSavedReports().catch(() => { /* saved-reports list is best-effort at boot */ });
   loadSchedule();
   loadCustomerFilterOptions();
 })();

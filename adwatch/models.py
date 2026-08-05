@@ -40,6 +40,13 @@ class Company(Base):
 
     # ---- Master data (from the Excel import / SAP) — optional, since the
     # original hand-added companies predate this and have none of it. ----
+    # The Dataverse `accountid` GUID — the only truly durable identity. SAP
+    # numbers are missing on ~25% of rows (they appear at first order) and names
+    # change and collide; the GUID never does. Present in every CRM export as
+    # the "(Nicht ändern) Firma" column, so it can be backfilled offline.
+    # Matching order everywhere: crm_id -> sap_number -> exact name.
+    crm_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    crm_modified_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)  # CRM `modifiedon` = delta watermark
     sap_number: Mapped[str | None] = mapped_column(String(40), nullable=True)   # SAP Nummer
     kv: Mapped[str | None] = mapped_column(String(120), nullable=True)          # KV (account owner)
     segment: Mapped[str | None] = mapped_column(String(120), nullable=True)     # Kundensegment
@@ -59,6 +66,36 @@ class Company(Base):
     imported_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     website_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)  # e.g. 'solarlux.com' — used to resolve the Google Ads advertiser (no name search available there)
+
+    # ---- Enrichment (see enrich/ + models.CompanyEnrichment) — the few fields
+    # promoted onto Company because the Explorer filters/sorts and the PDF report
+    # use them directly. The full extracted blob + per-field provenance lives in
+    # CompanyEnrichment; these are a denormalised convenience copy. ----
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)          # 1-2 Sätze, from the company's own site
+    products: Mapped[list | None] = mapped_column(JSON, nullable=True)            # ['Fenster','Wintergarten',...]
+    founded_year: Mapped[int | None] = mapped_column(Integer, nullable=True)      # only when literally stated ('seit 1952')
+    employee_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)  # verbatim ('15 Mitarbeiter'), never an LLM estimate
+    enrichment_status: Mapped[str] = mapped_column(String(20), default="none")
+    # none = never enriched | enriched = data found & accepted | needs_review = a
+    # candidate website failed deterministic validation (a human decides)
+    # no_website_found = searched, nothing credible found | error
+
+    # ---- Scoring (see insights/icp.py + insights/divergence.py) ----
+    # customer_state: lifecycle derived from the imported Umsatz columns at
+    # import time — active (buys now, bought before) | new (first revenue this
+    # year) | lapsed (bought before, nothing this year) | never (no revenue on
+    # record). Stored so the Explorer can filter/sort on it directly.
+    customer_state: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    # Own group / intercompany entity (Linara, NanaWall, Solarlux Vertriebsbüros,
+    # subsidiaries). They appear as ordinary customers with large revenue, so
+    # without this flag the ICP learns to love the group's own companies and
+    # recommends them as acquisition targets. Never a winner, never a target.
+    is_intercompany: Mapped[bool] = mapped_column(Boolean, default=False)
+    fit_score: Mapped[float | None] = mapped_column(Float, nullable=True)          # 0-100 vs the applied ICP
+    opportunity_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-100, Divergenz (needs ad data)
+    target_score: Mapped[float | None] = mapped_column(Float, nullable=True)       # combined priority (see icp.apply)
+    fit_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True)        # per-feature 'Warum' for the drawer
+    scores_updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     page_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     page_name: Mapped[str | None] = mapped_column(String(300), nullable=True)   # matched Facebook page name
@@ -186,7 +223,16 @@ class ReportRecipient(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     email: Mapped[str] = mapped_column(String(300))
+    # `active` = may this address be mailed at all (a soft delete).
+    # `preselected` = is the send box ticked for them by default. Kept apart on
+    # purpose: unticking someone for one send must NOT quietly stop the weekly
+    # saved-report definitions from reaching them, which is what overloading
+    # `active` would do.
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # server_default as well as default: db.py seeds the configured default
+    # recipient with raw SQL, which never sees the ORM-side default.
+    preselected: Mapped[bool] = mapped_column(Boolean, default=True,
+                                              server_default="1")
     added_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
 
@@ -206,8 +252,14 @@ class FetchJob(Base):
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="queued")
     # queued | running | cancelling | done | failed | cancelled | interrupted
-    kind: Mapped[str] = mapped_column(String(20), default="fetch")     # fetch (ads) | identity (page resolution only)
+    kind: Mapped[str] = mapped_column(String(20), default="fetch")
+    # fetch (ads) | identity (page resolution) | enrich (website + facts)
+    # | pipeline (several of the above in the correct order, see jobs._run_pipeline)
     sources: Mapped[list] = mapped_column(JSON, default=list)          # ['meta','google']
+    # For kind='pipeline': which steps to run and their options, e.g.
+    # {"enrich":true,"identity":true,"ads":["meta","google"],"report":"full",
+    #  "send_to":[3,7]}. Kept as data so the run is reproducible and auditable.
+    plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     company_ids: Mapped[list] = mapped_column(JSON, default=list)      # the scoped set, fixed at creation
     label: Mapped[str | None] = mapped_column(String(300), nullable=True)  # e.g. filter description, for history
 
@@ -245,3 +297,136 @@ class ScheduleConfig(Base):
     send_day: Mapped[int] = mapped_column(Integer, default=0)    # Monday
     send_time: Mapped[str] = mapped_column(String(5), default="07:00")
     send_report: Mapped[str] = mapped_column(String(10), default="top5")  # top5 | full
+
+
+class CompanyEnrichment(Base):
+    """Everything enrichment learned about one company, plus WHY we believe it.
+
+    `fields` is the extracted blob (description, products, founded_year,
+    employee_hint, legal_form, service_area, mentions_solarlux,
+    competitor_brands, ...). `provenance` maps each field name ->
+    {source, confidence, evidence, fetched_at}, so any value can be audited and
+    a wrong one traced back — the same auditability that CompanyPage.evidence
+    gives identity. Enrichment NEVER overwrites SAP/human-entered data; it only
+    fills blanks (see enrich/service.py).
+
+    `website_source` records how the website itself was determined:
+      email_domain = derived from the SAP contact email (free, Tier 0)
+      serper       = found via a web search (Tier 1)
+      sap          = came with the import — authoritative, never replaced
+      manual       = a human set/approved it
+    """
+    __tablename__ = "company_enrichment"
+    __table_args__ = (UniqueConstraint("company_id", name="uq_enrichment_company"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
+
+    fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    website_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    website_candidates: Mapped[list | None] = mapped_column(JSON, nullable=True)  # rejected/unvalidated options, for the review queue
+    website_validated_by: Mapped[str | None] = mapped_column(String(40), nullable=True)  # phone | plz_street | name_tokens | none
+
+    status: Mapped[str] = mapped_column(String(20), default="none")   # mirrors Company.enrichment_status
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(60), nullable=True)   # which model produced `fields`
+    enriched_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CrmShowroom(Base):
+    """One product family (and concrete system) a dealer exhibits in their
+    showroom — mirrored from the CRM table `sl_dealer_exposition` (1,739 rows,
+    207 dealers, actively maintained).
+
+    Why this matters more than it looks: the per-deal product table
+    (`sl_opportunityproduct`) exists but is permission-denied, and the SAP order
+    mirror is header-level only — so this is the best readable evidence of which
+    product families a partner actually commits to. It is the basis of the
+    cross-sell matrix: a dealer exhibiting Glas-Faltwand but NOT Wintergarten,
+    who otherwise resembles Wintergarten buyers, is a concrete, named
+    cross-sell target — revenue from a partner you already have.
+
+    Joined to Company via `dealer_crm_id` -> `Company.crm_id` (the Dataverse
+    accountid), which is exactly why the durable key had to come first."""
+    __tablename__ = "crm_showrooms"
+    __table_args__ = (UniqueConstraint("crm_id", name="uq_showroom_crm_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    crm_id: Mapped[str] = mapped_column(String(40))          # sl_dealer_expositionid
+    dealer_crm_id: Mapped[str | None] = mapped_column(String(40), nullable=True)   # accountid
+    company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True)
+    product_family: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    product: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    installed_on: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
+class IcpProfile(Base):
+    """A computed Ideal-Customer-Profile: WHICH companies defined it (the
+    winners filter), what their feature distributions look like, and when it was
+    applied to score the whole base. Kept as rows (not a single config) so a
+    score on a company is always traceable to the exact profile that produced
+    it — same auditability rule as enrichment provenance."""
+    __tablename__ = "icp_profiles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), default="ICP")
+    winners_filter: Mapped[dict] = mapped_column(JSON, default=dict)   # the Explorer filter that selected the winners
+    winners_count: Mapped[int] = mapped_column(Integer, default=0)
+    features: Mapped[dict] = mapped_column(JSON, default=dict)         # per-feature value distributions of the winners
+    weights: Mapped[dict] = mapped_column(JSON, default=dict)          # feature weights used when scoring
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    applied_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ReportDefinition(Base):
+    """A saved, re-runnable (and optionally scheduled) report over a custom
+    Companies-Explorer filter: a name + the exact filter blob + which recipients
+    to email + an optional weekly cron. It turns 'filter → report → send' into a
+    one-click action or a hands-off automatic one, so a BD user never has to
+    re-filter and hand-mail a PDF for a recurring custom scope. Independent of
+    ScheduleConfig, which still drives the single standard weekly report."""
+    __tablename__ = "report_definitions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    report_type: Mapped[str] = mapped_column(String(10), default="full")   # full | top5
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)               # a currentCustomerFilters() blob
+    recipient_ids: Mapped[list] = mapped_column(JSON, default=list)         # ReportRecipient ids to email
+    schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    schedule_day: Mapped[int] = mapped_column(Integer, default=0)           # 0=Mon .. 6=Sun
+    schedule_time: Mapped[str] = mapped_column(String(5), default="07:00")  # 'HH:MM'
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    last_run_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+class ReportEvent(Base):
+    """An audit trail of report creation and delivery: what was built, when, and
+    who it was mailed to.
+
+    Exists because a send used to leave no record anywhere. When a send failed
+    with the browser's bare "failed to fetch", there was no way to answer the
+    only question that mattered — did the mail go out? — which risks sending a
+    colleague the same report twice. The rotating log file records it now, but a
+    log file is not something a BD user reads, so the same facts are stored here
+    and shown in the Logs tab.
+
+    One row per event, never updated: 'created' when a PDF is written, 'sent' or
+    'send_failed' per delivery attempt. A single report therefore has one
+    'created' row and one row per attempt to mail it.
+    """
+    __tablename__ = "report_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20))            # created | sent | send_failed
+    filename: Mapped[str] = mapped_column(String(200))
+    report_type: Mapped[str | None] = mapped_column(String(10), nullable=True)   # full | top5
+    scope: Mapped[str | None] = mapped_column(String(400), nullable=True)        # the filter label
+    recipients: Mapped[list | None] = mapped_column(JSON, nullable=True)         # addresses mailed to
+    subject: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(30), nullable=True)  # manual|pipeline|schedule|definition
+    detail: Mapped[str | None] = mapped_column(String(600), nullable=True)      # error text on failure
+    at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)

@@ -31,6 +31,10 @@ from .models import Company
 # still line up. Each model field lists the header variants that map to it.
 # ---------------------------------------------------------------------------
 _FIELD_HEADERS: dict[str, tuple[str, ...]] = {
+    # The Dataverse accountid, shipped in every CRM export as "(Nicht ändern) Firma".
+    # Captured so the durable key lands in the DB on any import, with no CRM call.
+    "crm_id": ("(nicht ändern) firma", "(nicht andern) firma", "accountid", "crm id", "crm-id"),
+    "crm_modified_on": ("(nicht ändern) geändert am", "(nicht andern) geandert am", "modifiedon"),
     "sap_number": ("sap nummer", "sap-nummer", "sapnummer", "sap"),
     "name": ("firmenname", "firma", "name"),
     "kv": ("kv",),
@@ -61,7 +65,51 @@ SORTABLE = {
     "revenue_y2": Company.revenue_y2, "revenue_y3": Company.revenue_y3,
     "revenue_y4": Company.revenue_y4, "imported_at": Company.imported_at,
     "resolution_status": Company.resolution_status,
+    "customer_state": Company.customer_state, "fit_score": Company.fit_score,
+    "opportunity_score": Company.opportunity_score, "target_score": Company.target_score,
 }
+
+
+# Own-group entities that appear in the CRM as ordinary customers. Confirmed
+# against the CRM: Linara entities, NanaWall Systems and Solarlux Vertriebsbüros
+# show up with large revenue — Linara Kaufbeuren alone was the single biggest
+# "customer" (EUR 1.35M) and ranked #3 in the target list before this flag.
+# Matched case-insensitively as a whole word / prefix of the company name.
+INTERCOMPANY_NAME_PATTERNS = (
+    "linara", "nana wall", "nanawall", "solarlux", "slect",
+)
+
+
+def looks_intercompany(name: str | None) -> bool:
+    n = _norm(name)
+    return bool(n) and any(p in n for p in INTERCOMPANY_NAME_PATTERNS)
+
+
+def flag_intercompany() -> int:
+    """(Re)set Company.is_intercompany from the name patterns. Idempotent, and
+    run on every import so newly synced group companies are caught too."""
+    with SessionLocal() as s:
+        n = 0
+        for c in s.scalars(select(Company)):
+            flag = looks_intercompany(c.name)
+            if bool(c.is_intercompany) != flag:
+                c.is_intercompany = flag
+                n += 1
+        s.commit()
+        return n
+
+
+def derive_customer_state(y0, y1, y2, y3, y4) -> str:
+    """Customer lifecycle from the imported Umsatz columns (NULL counts as €0):
+    active = buys now AND bought before | new = first revenue this year |
+    lapsed = bought before, nothing this year | never = no revenue on record."""
+    now = (y0 or 0) > 0
+    before = any((v or 0) > 0 for v in (y1, y2, y3, y4))
+    if now and before:
+        return "active"
+    if now:
+        return "new"
+    return "lapsed" if before else "never"
 
 
 def _norm(s) -> str:
@@ -101,6 +149,62 @@ def _clean_str(value) -> str | None:
     return s or None
 
 
+def _parse_dt(value):
+    """CRM `modifiedon` — already a datetime from openpyxl, or an ISO string."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, dt.datetime):
+        return value
+    try:
+        return dt.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00").replace(" ", "T", 1))
+    except ValueError:
+        return None
+
+
+# The CRM's Land column holds full names ("Spanien", "Deutschland"), but every
+# downstream consumer needs an ISO-2 code: Company.country is what the Meta and
+# Google ad lookups pass as their country parameter, so a Spanish company left
+# at the "DE" default would be searched in the GERMAN ad library.
+_COUNTRY_CODES = {
+    "deutschland": "DE", "germany": "DE",
+    "spanien": "ES", "españa": "ES", "espana": "ES", "spain": "ES",
+    "portugal": "PT",
+    "österreich": "AT", "oesterreich": "AT", "austria": "AT",
+    "schweiz": "CH", "switzerland": "CH", "suisse": "CH",
+    "frankreich": "FR", "france": "FR",
+    "italien": "IT", "italia": "IT", "italy": "IT",
+    "niederlande": "NL", "nederland": "NL", "netherlands": "NL", "holland": "NL",
+    "belgien": "BE", "belgium": "BE", "belgique": "BE",
+    "luxemburg": "LU", "luxembourg": "LU",
+    "polen": "PL", "poland": "PL", "polska": "PL",
+    "tschechien": "CZ", "czechia": "CZ", "czech republic": "CZ",
+    "dänemark": "DK", "daenemark": "DK", "denmark": "DK",
+    "schweden": "SE", "sweden": "SE", "norwegen": "NO", "norway": "NO",
+    "finnland": "FI", "finland": "FI",
+    "großbritannien": "GB", "grossbritannien": "GB", "vereinigtes königreich": "GB",
+    "united kingdom": "GB", "england": "GB",
+    "irland": "IE", "ireland": "IE",
+    "ungarn": "HU", "hungary": "HU", "rumänien": "RO", "romania": "RO",
+    "slowakei": "SK", "slovakia": "SK", "slowenien": "SI", "slovenia": "SI",
+    "kroatien": "HR", "croatia": "HR", "griechenland": "GR", "greece": "GR",
+    "usa": "US", "vereinigte staaten": "US", "united states": "US",
+}
+
+
+def _country_code(value) -> str | None:
+    """'Spanien' -> 'ES', 'ES' -> 'ES', unknown full name -> None (keep the
+    existing value rather than guess)."""
+    s = _norm(value)
+    if not s:
+        return None
+    code = _COUNTRY_CODES.get(s)
+    if code:
+        return code
+    if 2 <= len(s) <= 3 and s.isalpha():
+        return s.upper()          # already a code (possibly one not listed here)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Import
 # ---------------------------------------------------------------------------
@@ -131,18 +235,32 @@ def parse_excel(file_bytes: bytes) -> tuple[list[dict], list[str]]:
         raise ValueError("Could not find a 'SAP Nummer' column in the file's header row.")
 
     records, warnings = [], []
+    no_sap = no_key = 0
     for line_no, row in enumerate(rows, start=2):
         rec: dict = {}
         for idx, field in col_field.items():
             value = row[idx] if idx < len(row) else None
             rec[field] = _parse_number(value) if field in _REVENUE_FIELDS else _clean_str(value)
+        # A row needs SOME key to be identifiable: the SAP number, or failing
+        # that its name (upsert_companies matches those by exact name). Rows with
+        # neither are blank/trailing rows and are dropped — but the count is
+        # REPORTED, never silent: a CRM view can legitimately hold thousands of
+        # rows without a SAP number, and quietly discarding them once looked like
+        # "the import worked" while 90% of the file vanished.
         if not rec.get("sap_number"):
-            continue  # silently skip rows with no SAP key (blank trailing rows, etc.)
+            if not rec.get("name"):
+                no_key += 1
+                continue
+            no_sap += 1
         records.append(rec)
 
     missing = [f for f in _FIELD_HEADERS if f not in col_field.values()]
     if missing:
         warnings.append(f"{len(missing)} column(s) not found and left blank: {', '.join(missing)}")
+    if no_sap:
+        warnings.append(f"{no_sap} row(s) have no SAP Nummer — matched by Firmenname instead")
+    if no_key:
+        warnings.append(f"{no_key} row(s) skipped: neither SAP Nummer nor Firmenname")
     return records, warnings
 
 
@@ -157,14 +275,22 @@ def upsert_companies(records: list[dict]) -> dict:
     now = dt.datetime.utcnow()
     inserted = updated = skipped_no_name = name_collisions = 0
     with SessionLocal() as s:
+        by_crm = {c.crm_id: c for c in
+                  s.scalars(select(Company).where(Company.crm_id.is_not(None)))}
         by_sap = {c.sap_number: c for c in
                   s.scalars(select(Company).where(Company.sap_number.is_not(None)))}
         by_name = {c.name: c for c in s.scalars(select(Company))}
 
         for rec in records:
             sap = rec.get("sap_number")
+            crm = (rec.get("crm_id") or "").strip() or None
             name = (rec.get("name") or "").strip()
-            row = by_sap.get(sap) if sap else None
+            # crm_id first: it is the only key that never changes. SAP number and
+            # exact name remain as fallbacks for rows imported before the GUID
+            # was captured (and for hand-added companies).
+            row = by_crm.get(crm) if crm else None
+            if row is None and sap:
+                row = by_sap.get(sap)
             if row is None and name:
                 row = by_name.get(name)   # fold into a pre-existing un-SAP'd row by exact name
 
@@ -189,7 +315,8 @@ def upsert_companies(records: list[dict]) -> dict:
                     s.add(row)
                     s.flush()
                     name_collisions += 1
-                by_sap[sap] = row
+                if sap:
+                    by_sap[sap] = row
                 by_name[row.name] = row
                 inserted += 1
             else:
@@ -200,16 +327,31 @@ def upsert_companies(records: list[dict]) -> dict:
                     if field == "sap_number" and value and row.sap_number != value:
                         row.sap_number = value
                     continue
+                if field == "crm_id":
+                    # write-once: the GUID is immutable, and overwriting it would
+                    # silently repoint a row at a different CRM account
+                    if value and not row.crm_id:
+                        row.crm_id = str(value).strip()
+                    continue
+                if field == "crm_modified_on":
+                    row.crm_modified_on = _parse_dt(value)
+                    continue
                 if field == "website_domain":
                     if value and not row.website_domain:
                         row.website_domain = value
                     continue
                 if field == "country":
-                    if value and len(value) <= 3:
-                        row.country = value
+                    code = _country_code(value)
+                    if code:
+                        row.country = code
                     continue
                 setattr(row, field, value)
             row.imported_at = now
+            # lifecycle is pure derived data — recomputed on every import so a
+            # partner whose revenue reappears flips lapsed -> active by itself
+            row.customer_state = derive_customer_state(
+                row.revenue_y0, row.revenue_y1, row.revenue_y2, row.revenue_y3, row.revenue_y4)
+            row.is_intercompany = looks_intercompany(row.name)
         s.commit()
     return {"received": len(records), "inserted": inserted, "updated": updated,
            "skipped_no_name": skipped_no_name, "name_collisions": name_collisions}
@@ -255,6 +397,20 @@ def _apply_filters(stmt, f: dict):
                           if isinstance(values, list) else Company.resolution_status == values)
     if f.get("has_website"):
         stmt = stmt.where(Company.website_domain.is_not(None), Company.website_domain != "")
+    if f.get("no_website"):
+        # the enrichment target set: rows the Explorer can hand straight to an
+        # enrich job to have their website found
+        stmt = stmt.where(or_(Company.website_domain.is_(None), Company.website_domain == ""))
+    if f.get("enrichment_status"):
+        values = f["enrichment_status"]
+        stmt = stmt.where(Company.enrichment_status.in_(values) if isinstance(values, list)
+                          else Company.enrichment_status == values)
+    if f.get("customer_state"):
+        values = f["customer_state"]
+        stmt = stmt.where(Company.customer_state.in_(values) if isinstance(values, list)
+                          else Company.customer_state == values)
+    if f.get("fit_min") is not None:
+        stmt = stmt.where(Company.fit_score >= float(f["fit_min"]))
     # Identity fetch-readiness: a numeric page_id is what the Ad Library scrape
     # needs — "without" surfaces the ⚠ no-id rows (confirmed but not fetch-ready).
     if f.get("page_id_state") == "with":
@@ -269,15 +425,25 @@ def _apply_filters(stmt, f: dict):
     #   any:    any real ad ever on record (active or ended)
     #   none:   fetched at least once but no active ad in the latest week
     # Companies never fetched have no metric, so they match none of these.
+    # `ad_source` ("meta"/"google") narrows every part to one platform: the
+    # "latest week", the active-ad sum, and the ever-advertised check all look
+    # only at that source's rows — so active+meta = "running Meta ads now"
+    # irrespective of Google, and none+google = "fetched on Google but no live
+    # Google ad". No source (or an unknown one) keeps the all-platforms totals.
     aa = f.get("ad_activity")
     if aa in ("active", "any", "none"):
         from sqlalchemy import and_ as _and
         from .models import Ad as _Ad, CollectionRun as _CR, WeeklyCompanyMetric as _WCM
+        src = f.get("ad_source") if f.get("ad_source") in ("meta", "google") else None
+        _wcm_src = (_WCM.source == src,) if src else ()   # empty -> no-op .where(), all sources
+        _cr_src = (_CR.source == src,) if src else ()
         _latest = (select(_WCM.company_id, func.max(_WCM.week_start).label("wk"))
+                   .where(*_wcm_src)
                    .group_by(_WCM.company_id).subquery())
         _running = (select(_WCM.company_id)
                     .join(_latest, _and(_WCM.company_id == _latest.c.company_id,
                                         _WCM.week_start == _latest.c.wk))
+                    .where(*_wcm_src)
                     .group_by(_WCM.company_id)
                     .having(func.sum(_WCM.total_active_ads) > 0))
         if aa == "active":
@@ -286,11 +452,11 @@ def _apply_filters(stmt, f: dict):
             # ever advertised: a real ad on record (incl. ended) OR any week with
             # active ads. Union guarantees "any" is a superset of "active".
             _real_ad = (select(_CR.company_id).join(_Ad, _Ad.run_id == _CR.id)
-                        .where(_Ad.external_ad_id.is_not(None)))
-            _ever_active = select(_WCM.company_id).where(_WCM.total_active_ads > 0)
+                        .where(_Ad.external_ad_id.is_not(None), *_cr_src))
+            _ever_active = select(_WCM.company_id).where(_WCM.total_active_ads > 0, *_wcm_src)
             stmt = stmt.where(or_(Company.id.in_(_real_ad), Company.id.in_(_ever_active)))
         else:  # none — fetched but not currently advertising
-            stmt = stmt.where(Company.id.in_(select(_WCM.company_id)),
+            stmt = stmt.where(Company.id.in_(select(_WCM.company_id).where(*_wcm_src)),
                               Company.id.not_in(_running))
     if f.get("revenue_min") is not None:
         stmt = stmt.where(func.coalesce(Company.revenue_y0, 0) >= f["revenue_min"])
@@ -338,6 +504,12 @@ def _to_dict(c: Company) -> dict:
         "revenue_y3": c.revenue_y3, "revenue_y4": c.revenue_y4,
         "resolution_status": c.resolution_status, "tracked": c.resolution_status != "pending",
         "page_id": c.page_id, "page_name": c.page_name, "page_url": c.page_url,
+        "customer_state": c.customer_state,
+        "fit_score": c.fit_score, "opportunity_score": c.opportunity_score,
+        "target_score": c.target_score,
+        "description": c.description, "products": c.products,
+        "founded_year": c.founded_year, "employee_hint": c.employee_hint,
+        "enrichment_status": c.enrichment_status,
     }
 
 
@@ -353,6 +525,7 @@ def get_company(company_id: int) -> dict | None:
             return None
         d = _to_dict(c)
         d["candidates"] = c.candidates or []
+        d["fit_breakdown"] = c.fit_breakdown   # per-feature 'Warum' for the drawer (single-fetch only)
         return d
 
 
@@ -428,14 +601,29 @@ _EXPORT_COLUMNS = [
     ("revenue_y0", "Umsatz aktuelles Jahr"), ("revenue_y1", "Umsatz aktuelles Jahr -1"),
     ("revenue_y2", "Umsatz aktuelles Jahr -2"), ("revenue_y3", "Umsatz aktuelles Jahr -3"),
     ("revenue_y4", "Umsatz aktuelles Jahr -4"),
+    # enriched fields (see enrich/) — without these an export of a freshly
+    # enriched market would carry none of the information that was just gathered
+    ("customer_state", "Kundenstatus"),
+    ("description", "Beschreibung (Website)"),
+    ("assessment", "Einschätzung (KI, unbestätigt)"),
+    ("products_str", "Produkte"),
+    ("founded_year", "Gegründet"),
+    ("employee_hint", "Betriebsgröße (Angabe)"),
+    ("mentions_solarlux_str", "Nennt Solarlux"),
+    ("competitor_brands_str", "Wettbewerber auf Website"),
+    ("active_ads", "Aktive Anzeigen"),
+    ("enrichment_status", "Anreicherungs-Status"),
 ]
 
 
 def export_xlsx(filters: dict | None = None, ids: list[int] | None = None,
                 sort: str | None = None, direction: str = "asc") -> bytes:
-    """Export either an explicit selection (ids) or the whole filtered set,
-    as a .xlsx matching the original column layout."""
+    """Export either an explicit selection (ids) or the whole filtered set, as a
+    .xlsx. Carries the master data AND the enriched fields (description, the
+    marked AI assessment, products, brand mentions, ad count) — an export of a
+    freshly enriched market is otherwise missing everything just gathered."""
     import openpyxl
+    from .models import CompanyEnrichment
     with SessionLocal() as s:
         stmt = select(Company)
         if ids is not None:
@@ -444,13 +632,28 @@ def export_xlsx(filters: dict | None = None, ids: list[int] | None = None,
             stmt = _apply_filters(stmt, filters or {})
         stmt = _apply_sort(stmt, sort, direction)
         companies = list(s.scalars(stmt))
+        rows = [_to_dict(c) for c in companies]
+        _attach_active_ads(s, rows)
+        enr = {e.company_id: (e.fields or {}) for e in s.scalars(
+            select(CompanyEnrichment).where(
+                CompanyEnrichment.company_id.in_([c.id for c in companies])))} if companies else {}
+
+    def _yesno(v):
+        return "ja" if v is True else ("nein" if v is False else None)
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Companies"
     ws.append([label for _, label in _EXPORT_COLUMNS])
-    for c in companies:
-        d = _to_dict(c)
+    for d in rows:
+        f = enr.get(d["id"], {})
+        d = dict(d)
+        # the AI assessment is exported in its own clearly-labelled column so it
+        # can never be read as a verified fact
+        d["assessment"] = f.get("assessment_de")
+        d["products_str"] = ", ".join(d.get("products") or f.get("products") or [])
+        d["mentions_solarlux_str"] = _yesno(f.get("mentions_solarlux"))
+        d["competitor_brands_str"] = ", ".join(f.get("competitor_brands") or [])
         ws.append([d.get(field) for field, _ in _EXPORT_COLUMNS])
     buf = io.BytesIO()
     wb.save(buf)

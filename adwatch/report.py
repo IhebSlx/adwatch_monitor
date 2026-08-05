@@ -8,8 +8,10 @@ stays available in output/."""
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from pathlib import Path
+from urllib.parse import unquote
 from xml.sax.saxutils import escape as _xml_escape
 
 from reportlab.lib import colors
@@ -55,8 +57,8 @@ _FILTER_FIELD_LABEL_DE = {
     "sales_channel": "Vertriebsweg", "country": "Land",
 }
 _STATUS_LABEL_DE = {
-    "locked": "gesperrt", "confirmed": "bestätigt", "ambiguous": "mehrdeutig",
-    "no_ads_found": "keine Seite gefunden", "pending": "nicht geprüft",
+    "locked": "Meta-Seite gesperrt", "confirmed": "Meta-Seite gefunden", "ambiguous": "Meta-Seite unklar",
+    "no_ads_found": "keine Meta-Seite gefunden", "pending": "Meta nicht geprüft",
 }
 
 
@@ -83,8 +85,10 @@ def _describe_filters_de(filters: dict | None) -> str | None:
         vals = vals if isinstance(vals, list) else [vals]
         bits.append("Status: " + ", ".join(_STATUS_LABEL_DE.get(v, v) for v in vals))
     if filters.get("ad_activity"):
-        bits.append({"active": "nur mit aktiven Anzeigen", "any": "nur je beworben",
-                     "none": "nur ohne aktive Anzeigen"}.get(filters["ad_activity"], filters["ad_activity"]))
+        _aa = {"active": "nur mit aktiven Anzeigen", "any": "nur je beworben",
+               "none": "nur ohne aktive Anzeigen"}.get(filters["ad_activity"], filters["ad_activity"])
+        _src = {"meta": "Meta", "google": "Google"}.get(filters.get("ad_source"))
+        bits.append(f"{_aa} ({_src})" if _src else _aa)
     rmin, rmax = filters.get("revenue_min"), filters.get("revenue_max")
     if rmin is not None and rmax is not None:
         bits.append(f"Umsatz: {_eur(rmin)}–{_eur(rmax)}")
@@ -103,9 +107,9 @@ def _describe_filters_de(filters: dict | None) -> str | None:
     if filters.get("has_website"):
         bits.append("nur mit Website")
     if filters.get("page_id_state") == "with":
-        bits.append("nur mit Page-ID")
+        bits.append("nur mit Meta-Page-ID")
     elif filters.get("page_id_state") == "without":
-        bits.append("nur ohne Page-ID")
+        bits.append("nur ohne Meta-Page-ID")
     if filters.get("tracked") is not None:
         bits.append("nur getrackte Firmen" if filters["tracked"] else "nur ungetrackte Firmen")
     return "Gefiltert nach: " + "; ".join(bits) if bits else None
@@ -199,6 +203,20 @@ def _esc(text) -> str:
     return _xml_escape(str(text if text is not None else ""))
 
 
+def _page_label(name) -> str:
+    """A Facebook page slug is URL-encoded and hyphenated, so a Spanish page
+    printed as 'Dise%C3%B1a-Soluciones-En-Vidrio-175791052761874'. Decode it,
+    drop the trailing numeric id and turn hyphens back into spaces so the report
+    shows 'Diseña Soluciones En Vidrio'."""
+    label = unquote(str(name or ""))
+    if "-" in label:
+        parts = label.split("-")
+        if parts[-1].isdigit() and len(parts) > 1:
+            parts = parts[:-1]                    # the page id, not part of the name
+        label = " ".join(p for p in parts if p)
+    return label.strip() or str(name or "")
+
+
 def _link(text, url: str | None) -> str:
     """A clickable link paragraph fragment; plain escaped text when no URL."""
     safe = _esc(text)
@@ -217,6 +235,13 @@ def _ad_library_url(page_id: str | None, country: str | None = "DE") -> str | No
             f"&country={country or 'DE'}&view_all_page_id={page_id}&search_type=page&media_type=all")
 
 
+def _google_transparency_url(advertiser_id: str | None, country: str | None = "DE") -> str | None:
+    """Deep link to a company's ads in the Google Ads Transparency Center."""
+    if not advertiser_id:
+        return None
+    return f"https://adstransparency.google.com/advertiser/{advertiser_id}?region={country or 'DE'}"
+
+
 def _web_url(domain: str | None) -> str | None:
     if not domain:
         return None
@@ -224,17 +249,23 @@ def _web_url(domain: str | None) -> str | None:
 
 
 def _page_link_map(company_ids) -> dict:
-    """{company_id: {page_id, country, website}} for the given companies — used to
-    turn names into Ad-Library / website links without an extra query per row."""
+    """{company_id: {page_id, country, website, google_id}} for the given
+    companies — used to turn names into Ad-Library / Google-Transparency links
+    without an extra query per row. `page_id` is the Meta (Facebook) page id;
+    `google_id` is the Google advertiser id (from its source='google' page)."""
     if not company_ids:
         return {}
     from sqlalchemy import select as _select
     from .db import SessionLocal as _SessionLocal
-    from .models import Company as _Company
+    from .models import Company as _Company, CompanyPage as _CompanyPage
     with _SessionLocal() as s:
         rows = s.execute(_select(_Company.id, _Company.page_id, _Company.country,
                                  _Company.website_domain).where(_Company.id.in_(company_ids))).all()
-    return {cid: {"page_id": pid, "country": ctry, "website": web}
+        gp = s.execute(_select(_CompanyPage.company_id, _CompanyPage.page_id).where(
+            _CompanyPage.source == "google", _CompanyPage.active,
+            _CompanyPage.company_id.in_(company_ids))).all()
+    gmap = {cid: pid for cid, pid in gp}
+    return {cid: {"page_id": pid, "country": ctry, "website": web, "google_id": gmap.get(cid)}
             for cid, pid, ctry, web in rows}
 
 
@@ -246,12 +277,19 @@ def _company_link(name: str, info: dict | None) -> str:
 
 
 def _ads_cta(info: dict | None) -> str:
-    """German call-to-action link to a company's ACTIVE ads in the Meta Ad
-    Library — only when a numeric page id is resolved (otherwise ''). The link
-    TEXT is the CTA, not the company name/URL."""
+    """German call-to-action link(s) to a company's ACTIVE ads. The link TEXT is
+    the CTA, not the company name/URL. Adds a Meta link when a numeric page id is
+    resolved and a Google link when a Google advertiser id is resolved — so a
+    Google-only advertiser still gets a working link. '' when neither exists."""
     info = info or {}
-    url = _ad_library_url(info.get("page_id"), info.get("country"))
-    return _link("» Aktive Anzeigen ansehen", url) if url else ""
+    parts = []
+    meta = _ad_library_url(info.get("page_id"), info.get("country"))
+    if meta:
+        parts.append(_link("» Aktive Anzeigen ansehen", meta))
+    google = _google_transparency_url(info.get("google_id"), info.get("country"))
+    if google:
+        parts.append(_link("» Google-Anzeigen ansehen", google))
+    return " &nbsp;·&nbsp; ".join(parts)
 
 
 def _scope_banner(filters: dict | None, n_companies: int, n_active: int, styles) -> Table:
@@ -351,6 +389,125 @@ def _delta_frag(delta) -> str:
     return f' <font color="{"#2f855a" if up else "#b04a3a"}">({"+" if up else "-"}{abs(delta)})</font>'
 
 
+def _source_label(rows) -> str:
+    """Name the ad sources that actually contributed to this report — credit
+    Google only when Google ads are present, so a Meta-only report isn't
+    mislabelled as using Google."""
+    has_google = any((d.get("google_active_ads") or 0) > 0 for d in rows)
+    return "Meta Ad Library + Google Ads Transparency" if has_google else "Meta Ad Library"
+
+
+def _enrichment_map(company_ids: list[int] | None) -> dict[int, dict]:
+    """company_id -> enriched fields (see enrich/). Empty dict when a company was
+    never enriched, so callers can simply skip it."""
+    from sqlalchemy import select as _select
+
+    from .db import SessionLocal as _S
+    from .models import Company as _C, CompanyEnrichment as _E
+    out: dict[int, dict] = {}
+    with _S() as s:
+        stmt = _select(_E, _C).join(_C, _C.id == _E.company_id)
+        if company_ids is not None:
+            stmt = stmt.where(_E.company_id.in_(company_ids))
+        for enr, comp in s.execute(stmt):
+            f = enr.fields or {}
+            out[enr.company_id] = {
+                "description": f.get("description_de") or comp.description,
+                "assessment": f.get("assessment_de"),
+                "products": f.get("products") or comp.products or [],
+                "founded_year": f.get("founded_year") or comp.founded_year,
+                "employee_hint": f.get("employee_hint") or comp.employee_hint,
+                "legal_form": f.get("legal_form"),
+                "service_area": f.get("service_area"),
+                "mentions_solarlux": f.get("mentions_solarlux"),
+                "competitor_brands": f.get("competitor_brands") or [],
+                "website": comp.website_domain,
+                "status": enr.status,
+            }
+    return out
+
+
+def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int = 80) -> list:
+    """FIRMENPROFILE — one compact block per enriched company: what the website
+    says (belegt), then the AI assessment (clearly marked as an estimate), then
+    the hard fields and any ad activity.
+
+    Deliberately driven by the company scope, not by ad metrics: a market that has
+    never been fetched (e.g. Spain) still gets full profiles."""
+    enr = _enrichment_map([d["company_id"] for d in data])
+    rows = [d for d in data if enr.get(d["company_id"], {}).get("description")
+            or enr.get(d["company_id"], {}).get("assessment")]
+    if not rows:
+        return []
+
+    h2 = ParagraphStyle("ph2", parent=styles["Heading2"], textColor=INK, fontSize=13,
+                        spaceBefore=16, spaceAfter=4)
+    nm = ParagraphStyle("pnm", parent=styles["Normal"], textColor=INK, fontSize=10,
+                        leading=13, spaceBefore=7, spaceAfter=1)
+    fact = ParagraphStyle("pfact", parent=styles["Normal"], textColor=INK, fontSize=8.8,
+                          leading=12, leftIndent=6)
+    est = ParagraphStyle("pest", parent=styles["Normal"], textColor=colors.HexColor("#4a5568"),
+                         fontSize=8.8, leading=12, leftIndent=6)
+    meta = ParagraphStyle("pmeta", parent=styles["Normal"], textColor=MUTED, fontSize=8,
+                          leading=11, leftIndent=6, spaceAfter=2)
+    note = ParagraphStyle("pnote", parent=styles["Normal"], textColor=MUTED, fontSize=7.5,
+                          leading=11, spaceBefore=2)
+
+    story: list = [
+        Paragraph("Firmenprofile", h2),
+        Paragraph("Je Firma: <b>Beschreibung</b> = wörtlich von der eigenen Website belegt. "
+                  "<b>Einschätzung</b> = KI-gestützte Ableitung aus dem Seiteninhalt "
+                  "(Größenklasse, Zielkundschaft, Positionierung) — plausibel, aber "
+                  "<b>keine belegte Angabe</b> und vor einer Ansprache zu prüfen.", note),
+        Spacer(1, 4),
+    ]
+
+    for d in rows[:limit]:
+        e = enr[d["company_id"]]
+        head = _esc(d["company"])
+        if e.get("website"):
+            head += f' &nbsp;·&nbsp; {_link(_web_url(e["website"]), _esc(e["website"]))}'
+        story.append(Paragraph(f"<b>{head}</b>", nm))
+
+        if e.get("description"):
+            story.append(Paragraph(f'<b>Beschreibung:</b> {_esc(e["description"])}', fact))
+        if e.get("assessment"):
+            story.append(Paragraph(f'<b>Einschätzung:</b> <i>{_esc(e["assessment"])}</i>', est))
+
+        bits = []
+        if e.get("products"):
+            bits.append("Produkte: " + _esc(", ".join(e["products"][:6])))
+        if e.get("founded_year"):
+            bits.append(f'Gegründet: {e["founded_year"]}')
+        if e.get("employee_hint"):
+            bits.append("Größe: " + _esc(str(e["employee_hint"])))
+        if e.get("legal_form"):
+            bits.append("Rechtsform: " + _esc(e["legal_form"]))
+        if e.get("service_area"):
+            bits.append("Gebiet: " + _esc(str(e["service_area"])[:60]))
+        if bits:
+            story.append(Paragraph(" &nbsp;·&nbsp; ".join(bits), meta))
+
+        brands = []
+        if e.get("mentions_solarlux") is True:
+            brands.append("<b>nennt Solarlux</b>")
+        elif e.get("mentions_solarlux") is False:
+            brands.append("nennt Solarlux nicht")
+        if e.get("competitor_brands"):
+            brands.append("Wettbewerber auf der Website: <b>"
+                          + _esc(", ".join(e["competitor_brands"][:6])) + "</b>")
+        act = d.get("total_active_ads") or 0
+        if d.get("has_data"):
+            brands.append(f"Anzeigen: {act} aktiv" if act else "keine aktiven Anzeigen")
+        if brands:
+            story.append(Paragraph(" &nbsp;·&nbsp; ".join(brands), meta))
+
+    if len(rows) > limit:
+        story.append(Paragraph(f"… {len(rows) - limit} weitere angereicherte Firmen nicht "
+                               "dargestellt — vollständig im Excel-Export.", note))
+    return story
+
+
 def build_report(path: str | None = None, filters: dict | None = None) -> str:
     if path is None:
         path = str(next_report_path("adwatch_report"))
@@ -359,6 +516,7 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     data = latest_metrics(_filtered_company_ids(filters))
     links = _page_link_map([d["company_id"] for d in data])
     n_active = sum(1 for d in data if d.get("has_data") and (d.get("total_active_ads") or 0) > 0)
+    source_label = _source_label(data)
 
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=21, spaceAfter=2, alignment=0)
@@ -380,7 +538,7 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     story = [
         Paragraph("Anzeigen-Aktivitätsbericht", h1),
         Paragraph(f"Erstellt am {_de_datetime(dt.datetime.now())} &nbsp;·&nbsp; "
-                  f"live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: Meta Ad Library", sub),
+                  f"live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: {source_label}", sub),
         Spacer(1, 9),
         _scope_banner(filters, len(data), n_active, styles),
         Spacer(1, 13),
@@ -438,6 +596,11 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     table.setStyle(TableStyle(style))
     story.append(table)
 
+    # ---- Firmenprofile: the enriched picture per company. Comes BEFORE the ad
+    # detail blocks and does not depend on ad data, so a market that has never
+    # been fetched still produces a substantive report. ----
+    story += _profiles_story(data, filters, styles)
+
     # ---- detail: only the active advertisers (keeps the report uncluttered) ----
     active_rows = [d for d in data if d.get("has_data") and (d.get("total_active_ads") or 0) > 0]
     if active_rows:
@@ -445,7 +608,8 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
         for d in active_rows:
             cats = d.get("ads_by_category") or {}
             method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method") or "")
-            page = f' &nbsp;·&nbsp; Seite: {_esc(d["page_name"])}' if d.get("page_name") else ""
+            page = (f' &nbsp;·&nbsp; Seite: {_esc(_page_label(d["page_name"]))}'
+                    if d.get("page_name") else "")
             cat_str = " · ".join(f"{_CATEGORY_LABEL_DE.get(k, k)} {v}"
                                  for k, v in cats.items() if v) or "—"
             products = ", ".join(d.get("products") or [])
@@ -462,12 +626,12 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
 
     story.append(Spacer(1, 6))
     story.append(Paragraph(
-        "Der Link <b>„Aktive Anzeigen ansehen“</b> öffnet die aktuell laufenden Anzeigen der Firma "
-        "in der Meta Ad Library — verfügbar, sobald eine numerische Seiten-ID hinterlegt ist. "
-        "(+/-) = Veränderung ggü. Vorwoche. Ausgaben sind ein <b>geschätzter</b> Intervallwert "
-        "(von–bis), keine von Meta veröffentlichte Zahl — Meta legt Ausgaben nur für regulierte "
-        "Kategorien offen, sonst geschätzt aus EU-Reichweite/Anzeigenzahl "
-        "(Annahmen: spend_assumptions.yaml).", note))
+        "Die Links <b>„Aktive Anzeigen ansehen“</b> (Meta Ad Library) und <b>„Google-Anzeigen "
+        "ansehen“</b> (Google Ads Transparency) öffnen die laufenden Anzeigen der Firma — sobald eine "
+        "Meta-Seiten- bzw. Google-Advertiser-ID hinterlegt ist. (+/-) = Veränderung ggü. Vorwoche. "
+        "Ausgaben sind ein <b>geschätzter</b> Intervallwert (von–bis), keine offiziell veröffentlichte "
+        "Zahl — nur regulierte Kategorien werden offengelegt, sonst geschätzt aus "
+        "EU-Reichweite/Anzeigenzahl (Annahmen: spend_assumptions.yaml).", note))
 
     doc.build(story)
     return path
@@ -501,6 +665,7 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
     top = data[:5]
     n_active = len(data)
     card_links = _page_link_map([d["company_id"] for d in top])
+    source_label = _source_label(all_metrics)
 
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=20, spaceAfter=2)
@@ -508,18 +673,26 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
     rank = ParagraphStyle("rank", parent=styles["Heading2"], textColor=ACCENT, fontSize=14, spaceBefore=12, spaceAfter=2)
     body = ParagraphStyle("body", parent=styles["Normal"], textColor=INK, fontSize=10, leading=14)
     note = ParagraphStyle("note", parent=styles["Normal"], textColor=MUTED, fontSize=8, leading=11)
+    fact = ParagraphStyle("t5fact", parent=body, fontSize=9, leading=12.5)
+    est = ParagraphStyle("t5est", parent=body, fontSize=9, leading=12.5,
+                         textColor=colors.HexColor("#4a5568"))
 
     doc = SimpleDocTemplate(path, pagesize=A4,
                             leftMargin=18 * mm, rightMargin=18 * mm,
                             topMargin=18 * mm, bottomMargin=18 * mm)
     week = next((d["week_start"] for d in top if d.get("week_start")), None)
     week_de = _de_date(dt.date.fromisoformat(week)) if week else None
+    # Don't promise five when the data holds two: say what is actually shown, so
+    # a short list reads as a finding about the market rather than a broken report.
+    shown = len(top)
     story = [
-        Paragraph("Top 5 Werbetreibende — Anzeigen-Aktivitätsbericht", h1),
+        Paragraph("Top 5 Werbetreibende — Anzeigen-Aktivitätsbericht" if shown >= 5
+                  else f"Werbetreibende mit aktiven Anzeigen ({shown}) — "
+                       "Anzeigen-Aktivitätsbericht", h1),
         Paragraph(
             f"Erstellt am {_de_datetime(dt.datetime.now())}"
             + (f" &nbsp;·&nbsp; Woche vom {week_de}" if week_de else "")
-            + f" &nbsp;·&nbsp; live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: Meta Ad Library", sub),
+            + f" &nbsp;·&nbsp; live · {config.LIVE_SOURCE} &nbsp;·&nbsp; Quelle: {source_label}", sub),
         Spacer(1, 9),
         _scope_banner(filters, len(all_metrics), n_active, styles),
         Spacer(1, 13),
@@ -531,12 +704,22 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         doc.build(story)
         return path
 
+    if shown < 5:
+        story.append(Paragraph(
+            f"<b>Hinweis:</b> Es werden {shown} Firmen gezeigt, weil in der letzten Erfassung "
+            f"nur {n_active} von {len(all_metrics)} Firmen im Bericht-Umfang aktive Anzeigen "
+            "hatten — die Liste ist nicht gekürzt.", note))
+        story.append(Spacer(1, 8))
+
+    enr = _enrichment_map([d["company_id"] for d in top])
+
     for i, d in enumerate(top, start=1):
         cats = d.get("ads_by_category") or {}
         products = d.get("products") or []
         score_tag = f" &nbsp;·&nbsp; Score {d['score']:.0f}/100" if d.get("score") is not None else ""
         story.append(Paragraph(f"{i}. {_esc(d['company'])}{score_tag}", rank))
-        matched = f" &nbsp;·&nbsp; Seite: {_esc(d['page_name'])}" if d.get("page_name") else ""
+        matched = (f" &nbsp;·&nbsp; Seite: {_esc(_page_label(d['page_name']))}"
+                   if d.get("page_name") else "")
         story.append(Paragraph(
             f"<b>{d['total_active_ads']} aktive Anzeigen</b>"
             + (f" &nbsp;({'+' if (d.get('delta_ads') or 0) > 0 else ''}{d['delta_ads']} ggü. Vorwoche)"
@@ -545,6 +728,30 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         cta = _ads_cta(card_links.get(d["company_id"]))
         if cta:
             story.append(Paragraph(cta, body))
+
+        # Who the company is, before what it advertises: the enrichment is the
+        # only part of this report that explains WHY the ad activity matters.
+        e = enr.get(d["company_id"]) or {}
+        if e.get("description"):
+            story.append(Paragraph(f'<b>Beschreibung:</b> {_esc(e["description"])}', fact))
+        if e.get("assessment"):
+            story.append(Paragraph("<b>Einschätzung (KI, unbestätigt):</b> "
+                                   f'<i>{_esc(e["assessment"])}</i>', est))
+        profile_bits = []
+        if e.get("products"):
+            profile_bits.append("Produkte (Website): " + _esc(", ".join(e["products"][:6])))
+        if e.get("employee_hint"):
+            profile_bits.append("Größe: " + _esc(str(e["employee_hint"])))
+        if e.get("founded_year"):
+            profile_bits.append(f'Gegründet: {e["founded_year"]}')
+        if e.get("mentions_solarlux") is True:
+            profile_bits.append("<b>nennt Solarlux</b>")
+        if e.get("competitor_brands"):
+            profile_bits.append("Wettbewerber auf der Website: <b>"
+                                + _esc(", ".join(e["competitor_brands"][:5])) + "</b>")
+        if profile_bits:
+            story.append(Paragraph(" &nbsp;·&nbsp; ".join(profile_bits), note))
+
         story.append(Paragraph(f"<b>Signal:</b> {_esc(_signal(cats, products))}", body))
         method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method"))
         story.append(Paragraph(
@@ -560,15 +767,61 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
 
     story.append(Spacer(1, 10))
     story.append(Paragraph(
-        "Der Link <b>„Aktive Anzeigen ansehen“</b> öffnet die aktuell laufenden Anzeigen in der Meta "
-        "Ad Library (sobald eine numerische Seiten-ID vorliegt). Ausgaben sind ein <b>geschätzter</b> "
-        "Intervallwert (von–bis), nicht von Meta veröffentlicht. Rangfolge nach Aktivität in der "
-        "letzten wöchentlichen Erfassung.", note))
+        "Die Links <b>„Aktive Anzeigen ansehen“</b> (Meta Ad Library) und <b>„Google-Anzeigen "
+        "ansehen“</b> (Google Ads Transparency) öffnen die laufenden Anzeigen der Firma. Ausgaben sind "
+        "ein <b>geschätzter</b> Intervallwert (von–bis), nicht offiziell veröffentlicht. Rangfolge "
+        "nach Aktivität in der letzten wöchentlichen Erfassung. <b>Beschreibung</b> und "
+        "<b>Produkte (Website)</b> sind von der eigenen Website der Firma belegt; die "
+        "<b>Einschätzung</b> ist eine KI-gestützte Ableitung daraus — plausibel, aber "
+        "<b>keine belegte Angabe</b> und vor einer Ansprache zu prüfen. <b>Beworbene "
+        "Produkte</b> stammen aus dem Anzeigentext und sind auf die deutschen "
+        "Produktfamilien normalisiert.", note))
     doc.build(story)
     return path
 
 
 REPORT_TYPE_LABEL = {"top5": "Top 5", "full": "Full report"}
+
+
+def _meta_path(pdf_path) -> Path:
+    """Sidecar file that records WHY a report looks the way it does (the filter
+    scope, and the saved-definition name if any) — a plain `<pdf>.meta.json`
+    next to the PDF, so it never matches the `adwatch_*.pdf` report glob."""
+    return Path(str(pdf_path) + ".meta.json")
+
+
+def write_report_meta(pdf_path, filters: dict | None = None,
+                      definition_name: str | None = None,
+                      source: str | None = None) -> None:
+    """Persist the filter scope of a just-generated report so the Reports list
+    can label it (e.g. 'Gefiltert nach: …') instead of an indistinguishable
+    'Report — KW30'. Best-effort: a failure here must never break generation.
+
+    Also records the 'created' audit event for the Logs tab — every build path
+    already calls this, which makes it the one place that cannot be forgotten."""
+    label = None
+    try:
+        label = _describe_filters_de(filters)
+        meta = {"filter_label": label, "definition": definition_name}
+        _meta_path(pdf_path).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    except Exception:  # noqa: BLE001 — labelling is cosmetic, never fatal
+        pass
+    from . import report_log
+    name = Path(str(pdf_path)).name
+    report_log.record("created", name, scope=label,
+                      report_type=(parse_report_filename(name) or {}).get("report_type"),
+                      source=source or ("definition" if definition_name else None),
+                      detail=(f"Definition: {definition_name}" if definition_name else None))
+
+
+def _read_report_meta(pdf_path) -> dict:
+    try:
+        p = _meta_path(pdf_path)
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
 
 
 def list_reports() -> list[dict]:
@@ -583,10 +836,13 @@ def list_reports() -> list[dict]:
         label = f"{REPORT_TYPE_LABEL.get((parsed or {}).get('report_type'), 'Report')} — {week or f.stem}"
         if version:
             label += f" (v{version})"
+        meta = _read_report_meta(f)
         out.append({
             "filename": f.name,
             "report_type": (parsed or {}).get("report_type", "unknown"),
             "label": label,
+            "filter_label": meta.get("filter_label"),   # None -> a plain, unfiltered report
+            "definition": meta.get("definition"),       # set when produced by a saved ReportDefinition
             "size_bytes": stat.st_size,
             "created_at": dt.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="minutes"),
         })
