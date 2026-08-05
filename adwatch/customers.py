@@ -22,7 +22,7 @@ import re
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from . import config, scope
+from . import config, markets, scope
 from .db import SessionLocal
 from .models import Company
 
@@ -165,44 +165,15 @@ def _parse_dt(value):
 # downstream consumer needs an ISO-2 code: Company.country is what the Meta and
 # Google ad lookups pass as their country parameter, so a Spanish company left
 # at the "DE" default would be searched in the GERMAN ad library.
-_COUNTRY_CODES = {
-    "deutschland": "DE", "germany": "DE",
-    "spanien": "ES", "españa": "ES", "espana": "ES", "spain": "ES",
-    "portugal": "PT",
-    "österreich": "AT", "oesterreich": "AT", "austria": "AT",
-    "schweiz": "CH", "switzerland": "CH", "suisse": "CH",
-    "frankreich": "FR", "france": "FR",
-    "italien": "IT", "italia": "IT", "italy": "IT",
-    "niederlande": "NL", "nederland": "NL", "netherlands": "NL", "holland": "NL",
-    "belgien": "BE", "belgium": "BE", "belgique": "BE",
-    "luxemburg": "LU", "luxembourg": "LU",
-    "polen": "PL", "poland": "PL", "polska": "PL",
-    "tschechien": "CZ", "czechia": "CZ", "czech republic": "CZ",
-    "dänemark": "DK", "daenemark": "DK", "denmark": "DK",
-    "schweden": "SE", "sweden": "SE", "norwegen": "NO", "norway": "NO",
-    "finnland": "FI", "finland": "FI",
-    "großbritannien": "GB", "grossbritannien": "GB", "vereinigtes königreich": "GB",
-    "united kingdom": "GB", "england": "GB",
-    "irland": "IE", "ireland": "IE",
-    "ungarn": "HU", "hungary": "HU", "rumänien": "RO", "romania": "RO",
-    "slowakei": "SK", "slovakia": "SK", "slowenien": "SI", "slovenia": "SI",
-    "kroatien": "HR", "croatia": "HR", "griechenland": "GR", "greece": "GR",
-    "usa": "US", "vereinigte staaten": "US", "united states": "US",
-}
 
 
 def _country_code(value) -> str | None:
     """'Spanien' -> 'ES', 'ES' -> 'ES', unknown full name -> None (keep the
-    existing value rather than guess)."""
-    s = _norm(value)
-    if not s:
-        return None
-    code = _COUNTRY_CODES.get(s)
-    if code:
-        return code
-    if 2 <= len(s) <= 3 and s.isalpha():
-        return s.upper()          # already a code (possibly one not listed here)
-    return None
+    existing value rather than guess).
+
+    The alias table lives in config/markets.yaml so a new market needs no code
+    change — see adwatch/markets.py."""
+    return markets.code_for(value)
 
 
 # ---------------------------------------------------------------------------

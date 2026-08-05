@@ -1,0 +1,103 @@
+# MÄRKTE — alles, was AdWatch pro Land wissen muss, an EINER Stelle.
+#
+# Diese Datei ist DATEN, kein Code. Ein neuer Markt braucht keine
+# Programmierung: Block kopieren, anpassen, App neu starten. Vorher war dasselbe
+# Wissen auf drei Stellen im Code verteilt (customers._COUNTRY_CODES,
+# website_finder._LEGAL_PAGE_TERM und ._UI_LANG) — ein neues Land zu ergänzen
+# bedeutete drei Code-Änderungen, und wer eine vergaß, bekam stille Fehler.
+# Genau so landeten 982 spanische Firmen zuerst als "DE" in der Datenbank.
+#
+# Felder je Land:
+#   aliases      Schreibweisen, die im Excel/CRM als Land auftauchen können.
+#                Dataverse liefert Freitext auf Deutsch ("Deutschland"), das
+#                Excel manchmal englisch — beide müssen hier stehen.
+#                Kleinschreibung, Umlaute wie geschrieben UND umschrieben.
+#   search_lang  Sprache für Websuchen (Serper "hl"). Bestimmt, in welcher
+#                Sprache nach der Firmenwebsite gesucht wird.
+#   legal_page   Wie die Impressum-/Kontaktseite in diesem Land heißt. Wird als
+#                Suchbegriff verwendet — nach "Impressum" in Spanien zu suchen
+#                findet nichts.
+#   ad_region    Ländercode für die Anzeigen-Suche (Meta/Google). Normalerweise
+#                identisch mit dem ISO-Code.
+#
+# WICHTIG: Der Schlüssel ist der ISO-2-Code und wird in der Datenbank
+# gespeichert (Company.country). Einen bestehenden Schlüssel umzubenennen macht
+# vorhandene Daten unauffindbar — neue Länder ergänzen, alte nicht umbenennen.
+
+markets:
+  DE:
+    aliases: [deutschland, germany, allemagne, alemania]
+    search_lang: de
+    legal_page: Impressum
+  AT:
+    aliases: [österreich, oesterreich, austria, autriche]
+    search_lang: de
+    legal_page: Impressum
+  CH:
+    aliases: [schweiz, switzerland, suisse, svizzera]
+    search_lang: de
+    legal_page: Impressum
+  ES:
+    aliases: [spanien, españa, espana, spain, espagne]
+    search_lang: es
+    legal_page: aviso legal
+  PT:
+    aliases: [portugal]
+    search_lang: pt
+    legal_page: contactos
+  FR:
+    aliases: [frankreich, france, francia]
+    search_lang: fr
+    legal_page: mentions légales
+  IT:
+    aliases: [italien, italia, italy, italie]
+    search_lang: it
+    legal_page: contatti
+  NL:
+    aliases: [niederlande, nederland, netherlands, holland, pays-bas]
+    search_lang: nl
+    legal_page: contact
+  BE:
+    aliases: [belgien, belgium, belgique, belgië, belgie]
+    search_lang: nl
+    legal_page: contact
+  LU:
+    aliases: [luxemburg, luxembourg]
+    search_lang: fr
+    legal_page: mentions légales
+  PL:
+    aliases: [polen, poland, polska]
+    search_lang: pl
+    legal_page: kontakt
+  CZ:
+    aliases: [tschechien, czechia, czech republic, česko, cesko]
+    search_lang: cs
+    legal_page: kontakt
+  DK:
+    aliases: [dänemark, daenemark, denmark, danmark]
+    search_lang: da
+    legal_page: kontakt
+  SE:
+    aliases: [schweden, sweden, sverige]
+    search_lang: sv
+    legal_page: kontakt
+  # ACHTUNG: "NO" MUSS in Anführungszeichen stehen. YAML liest ein nacktes NO
+  # als Boolean false — Norwegen verschwindet dann still aus der Liste. Gilt auch
+  # für ON, OFF, YES, TRUE, FALSE, Y, N.
+  "NO":
+    aliases: [norwegen, norway, norge]
+    search_lang: "no"
+    legal_page: kontakt
+  FI:
+    aliases: [finnland, finland, suomi]
+    search_lang: fi
+    legal_page: yhteystiedot
+  GB:
+    aliases: [großbritannien, grossbritannien, vereinigtes königreich,
+              united kingdom, england, scotland, wales, uk]
+    search_lang: en
+    legal_page: contact
+  IE:
+    aliases: [irland, ireland, éire, eire]
+    search_lang: en
+    legal_page: contact

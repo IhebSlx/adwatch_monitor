@@ -13,7 +13,7 @@ import re
 
 import requests
 
-from .. import config
+from .. import config, markets
 from .domains import (
     NON_COMPANY_DOMAINS,
     FREEMAIL_DOMAINS,
@@ -80,7 +80,7 @@ def _run_query(query: str, country: str, limit: int, seen: set[str]) -> list[dic
     r = requests.post(
         config.SERPER_SEARCH_URL,
         headers={"X-API-KEY": config.SERPER_API_KEY, "Content-Type": "application/json"},
-        json={"q": query, "gl": cc.lower(), "hl": _UI_LANG.get(cc, "de"), "num": 10},
+        json={"q": query, "gl": cc.lower(), "hl": markets.search_lang(cc), "num": 10},
         timeout=25,
     )
     if r.status_code >= 400:
@@ -126,7 +126,7 @@ def search_candidates(name: str, city: str | None = None, country: str = "DE",
     name = (name or "").strip()
     city = (city or "").strip()
     seen: set[str] = set()
-    legal_term = _LEGAL_PAGE_TERM.get((country or "DE").upper(), "contact")
+    legal_term = markets.legal_page_term(country)
 
     strict = f'"{name}"' + (f" {city}" if city else "") + f" {legal_term}"
     out = _run_query(strict, country, limit, seen)

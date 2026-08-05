@@ -962,6 +962,46 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_markets_are_data_not_code():
+    """Adding a market used to need three code edits (country aliases, legal-page
+    term, search language) in two modules. Missing one failed SILENTLY — that is
+    how 982 Spanish companies were imported as DE. Now one YAML file drives all
+    three, and a successor adds a market without Python."""
+    from adwatch import markets
+
+    markets.reload()
+    codes = markets.known_codes()
+    assert {"DE", "ES", "PT", "AT", "CH", "FR"} <= set(codes)
+
+    # the Spain bug, pinned: every spelling a source might use resolves
+    for spelling in ("Spanien", "españa", "espana", "SPAIN", "es", "ES"):
+        assert markets.code_for(spelling) == "ES", spelling
+    # umlaut and its transliteration both work
+    assert markets.code_for("österreich") == markets.code_for("Oesterreich") == "AT"
+    # NO must survive YAML's boolean coercion of a bare NO key
+    assert "NO" in codes and markets.code_for("Norwegen") == "NO"
+
+    # an unknown name returns None so the caller can KEEP the old value rather
+    # than silently defaulting to DE
+    assert markets.code_for("Slowenien") is None
+    assert markets.code_for("") is None
+    # but an unlisted 2-letter code passes through instead of being dropped
+    assert markets.code_for("si") == "SI"
+
+    # the per-market behaviour that used to be hardcoded elsewhere
+    assert markets.search_lang("ES") == "es"
+    assert markets.legal_page_term("ES") == "aviso legal"      # not "Impressum"
+    assert markets.legal_page_term("PT") == "contactos"
+    assert markets.legal_page_term("DE") == "Impressum"
+    # unknown market degrades to a usable default rather than raising
+    assert markets.search_lang("XX") and markets.legal_page_term("XX")
+
+    # every market must be complete, or a new entry could half-work
+    for code, spec in markets.all_markets().items():
+        assert len(code) == 2 and code.isalpha() and code.isupper(), code
+        assert spec["aliases"] and spec["search_lang"] and spec["legal_page"], code
+
+
 def test_flow_registry_is_configurable_and_backward_compatible(temp_db, monkeypatch):
     """Flows are addressed by ROLE, so a second integration point (the CRM query
     proxy) needs no new constant, timeout or error convention. And an install that
