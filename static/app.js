@@ -1392,22 +1392,51 @@
     return $("#icpWinnersMode").value === "filter" ? currentCustomerFilters() : {};
   }
 
+  // Below this share of buyers, a percentage is arithmetic on a handful of rows
+  // and reads far more confident than it is — say so instead of drawing a bar
+  // chart of "50% sind 20-49 Mitarbeiter" computed from 2% of the base.
+  const ICP_COVERAGE_WEAK = 0.5;
+
+  // A plain-German sentence a salesperson can act on, built only from features
+  // that are actually populated enough to mean something.
+  function icpPlainSummary(p) {
+    const solid = Object.entries(p.features)
+      .filter(([, d]) => d.coverage >= ICP_COVERAGE_WEAK && d.top.length
+                         && d.top[0][1] < 0.9);
+    if (!solid.length) return "";
+    const bits = solid.slice(0, 3).map(([, d]) => {
+      const top = d.top.slice(0, 2).map(([v, sh]) => `${esc(v)} (${Math.round(sh * 100)}%)`);
+      return `<b>${esc(d.label)}:</b> meist ${top.join(" oder ")}`;
+    });
+    const weak = Object.entries(p.features).filter(([, d]) => d.coverage < ICP_COVERAGE_WEAK);
+    return `<p class="icp-plain"><b>Kurz gesagt:</b> Wer bei uns kauft, ist typischerweise —
+      ${bits.join(" · ")}. Solche Firmen bekommen einen hohen Fit-Score.</p>`
+      + (weak.length
+        ? `<p class="hint">Für ${weak.map(([, d]) => esc(d.label)).join(", ")} liegen noch zu
+             wenige Daten vor, um daraus etwas zu schließen — die Datenanreicherung füllt das auf.</p>`
+        : "");
+  }
+
   function renderIcpFeatures(p) {
     $("#icpProfileTitle").textContent =
-      `Profil aus ${p.winners_count.toLocaleString("de-DE")} Gewinnern`;
+      `Profil aus ${p.winners_count.toLocaleString("de-DE")} kaufenden Firmen`;
+    $("#icpPlainSummary").innerHTML = icpPlainSummary(p);
     $("#icpFeatures").innerHTML = Object.entries(p.features).map(([key, d]) => {
       const maxShare = d.top.length ? d.top[0][1] : 0;
       const excluded = maxShare >= 0.9 && key !== "products";
+      const weak = d.coverage < ICP_COVERAGE_WEAK;
       const rows = d.top.slice(0, 5).map(([v, share]) => `
         <div class="fit-row">
           <span class="fit-row-label">${esc(v)}</span>
           <span class="fit-bar"><span class="fit-bar-fill" style="width:${Math.round(share * 100)}%"></span></span>
           <span class="fit-row-pct">${Math.round(share * 100)}%</span>
         </div>`).join("");
-      return `<div class="icp-feature${excluded ? " icp-feature-excluded" : ""}">
+      const cov = Math.round(d.coverage * 100);
+      return `<div class="icp-feature${excluded ? " icp-feature-excluded" : ""}${weak ? " icp-feature-weak" : ""}">
         <div class="icp-feature-head"><b>${esc(d.label)}</b>
-          <span class="muted small">bekannt bei ${Math.round(d.coverage * 100)}% der Gewinner</span>
-          ${excluded ? `<span class="tag" title="Fast alle Gewinner haben denselben Wert — trennt nicht, fließt nicht in den Score ein">nicht trennscharf</span>` : ""}
+          <span class="muted small">bei ${cov}% der Käufer bekannt</span>
+          ${weak ? `<span class="tag tag-warn" title="Die Prozente unten beruhen nur auf ${cov}% der kaufenden Firmen — als Hinweis lesen, nicht als Aussage über den Markt. Mehr Datenanreicherung behebt das.">zu wenige Daten</span>` : ""}
+          ${excluded ? `<span class="tag" title="Fast alle Käufer haben hier denselben Wert. Ein Merkmal, das alle teilen, unterscheidet niemanden — es zählt deshalb nicht in den Fit-Score.">unterscheidet nicht</span>` : ""}
         </div>
         ${rows || '<p class="hint">keine Daten — Anreicherung erhöht die Abdeckung</p>'}
       </div>`;

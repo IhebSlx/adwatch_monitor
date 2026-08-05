@@ -512,28 +512,52 @@
     <section id="tab-profil" class="tab-panel">
       <header class="page-head">
         <h1>ICP — Ideales Kundenprofil</h1>
-        <p>Wie sehen die Firmen aus, die bei uns kaufen — und welche der übrigen passen am besten dazu?</p>
+        <p>Was haben unsere Kunden gemeinsam? Und welche Firmen, die noch <b>nicht</b> bei uns
+          kaufen, sehen genauso aus?</p>
       </header>
 
       <div class="card">
-        <h2>Gewinner-Definition</h2>
-        <p class="hint">Aus welchen Firmen soll das Profil gebildet werden? Standard: alle, die
-          <b>aktuell kaufen</b> (aktiv + neu). Alternativ zählt der gerade gesetzte Companies-Filter.</p>
+        <h2>So funktioniert es — in drei Schritten</h2>
+        <ol class="icp-steps">
+          <li><b>Wir schauen auf die Firmen, die bei uns kaufen.</b> Standardmäßig alle mit Umsatz
+            im aktuellen Jahr (aktive und neue Kunden). Private Endkunden und Solarlux-Töchter
+            zählen nie mit — beide kann man nicht als Partner gewinnen.</li>
+          <li><b>Wir zählen, was diese Firmen gemeinsam haben:</b> Segment, Untersegment,
+            Vertriebsweg, Region, Produkte, Größe, Alter. Das Ergebnis siehst du unten als
+            Prozentwerte.</li>
+          <li><b>Jede andere Firma bekommt einen Fit-Score von 0–100:</b> Wie sehr sieht sie aus
+            wie unsere Kunden? 100 = passt genau ins Muster. Der Score erscheint als Spalte im
+            Companies-Tab, du kannst danach sortieren und filtern.</li>
+        </ol>
+        <p class="hint"><b>Wofür du ihn benutzt:</b> Ein hoher Fit-Score heißt „diese Firma sieht
+          aus wie unsere guten Kunden“ — ein guter Grund für einen Anruf. Er sagt <b>nicht</b>, ob
+          die Firma gerade Bedarf hat; dafür ist die Anzeigen-Aktivität da (siehe „Interessante
+          Partner“ im Dashboard). Beides zusammen = <b>passt zu uns</b> UND <b>ist gerade aktiv</b>.</p>
+      </div>
+
+      <div class="card">
+        <h2>Aus welchen Kunden soll das Profil gebildet werden?</h2>
+        <p class="hint">Standard ist richtig für den Normalfall. Die zweite Option nimmt genau die
+          Firmen, die gerade im <b>Companies-Tab</b> gefiltert sind — nützlich für ein Profil je
+          Land, Vertriebsweg oder Segment (z. B. „nur Fachhandel in Spanien“). Dafür musst du den
+          Filter vorher dort setzen.</p>
         <div class="inline-form">
           <select id="icpWinnersMode" style="flex:0 0 auto">
-            <option value="default">Aktive Käufer (aktiv + neu)</option>
-            <option value="filter">Aktueller Companies-Filter</option>
+            <option value="default">Alle aktuellen Kunden (aktiv + neu)</option>
+            <option value="filter">Die im Companies-Tab gefilterten Firmen</option>
           </select>
-          <button id="icpPreviewBtn" class="btn btn-primary" title="Berechnet das Profil UND bewertet sofort alle Firmen (Fit-Spalte im Companies-Tab) — reine lokale Berechnung, keine Kosten">Profil berechnen &amp; anwenden</button>
+          <button id="icpPreviewBtn" class="btn btn-primary" title="Berechnet das Profil UND bewertet sofort alle Firmen (Fit-Spalte im Companies-Tab) — reine lokale Berechnung, kostet nichts">Profil berechnen &amp; anwenden</button>
         </div>
         <p class="hint" id="icpWinnersHint"></p>
       </div>
 
       <div class="card hidden" id="icpProfileCard">
         <h2 id="icpProfileTitle">Profil</h2>
-        <p class="hint">Je Merkmal: wie verteilen sich die Gewinner? Der Fit-Score einer Firma misst,
-          wie typisch ihre Werte unter den Gewinnern sind — fehlende Angaben zählen nicht negativ.
-          Merkmale, bei denen fast alle Gewinner denselben Wert haben, fließen nicht in den Score ein.</p>
+        <div id="icpPlainSummary"></div>
+        <p class="hint">Jeder Block unten ist ein Merkmal. Die Prozentzahl sagt: <b>so viele unserer
+          Kunden haben diesen Wert</b>. „bei X% der Käufer bekannt“ sagt, für wie viele Kunden wir
+          diese Angabe überhaupt haben — steht dort eine kleine Zahl, ist der Block nur ein Hinweis
+          und keine belastbare Aussage. Fehlende Angaben zählen einer Firma nie negativ an.</p>
         <div id="icpFeatures"></div>
       </div>
 

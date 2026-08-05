@@ -941,3 +941,14 @@ table.col-resized td:not([colspan]) { overflow: hidden; text-overflow: ellipsis;
 .ev-failed  { background: #fdecec; color: #9d2626; }
 #reportEventsTable td { vertical-align: top; }
 #reportEventsTable td.nowrap { white-space: nowrap; }
+
+/* ICP tab: written for a salesperson, not a data analyst. The weak/warn styles
+   exist because a percentage computed from 2% of buyers looks identical to one
+   computed from 100% unless the UI says otherwise. */
+.icp-steps { margin: 6px 0 10px; padding-left: 22px; line-height: 1.55; font-size: 13.5px; }
+.icp-steps li { margin-bottom: 7px; }
+.icp-plain { background: #f2f6ff; border-left: 3px solid #4f5ce5; padding: 9px 12px;
+             border-radius: 4px; font-size: 13.5px; line-height: 1.55; margin: 4px 0 10px; }
+.tag-warn { background: #fdf0e3; color: #8a5220; }
+.icp-feature-weak .fit-bar-fill { opacity: .45; }
+.icp-feature-weak .fit-row-pct { color: #8a5220; }
