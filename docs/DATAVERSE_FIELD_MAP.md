@@ -106,31 +106,34 @@ Extraktor).
 
 ## 6. Die Abfragen, die das klären
 
-Das Inventar listet dies selbst als offene Abfrage #2. Eine Abfrage beantwortet
-fast alles:
+**WICHTIG — jede URL steht auf EINER Zeile.** Beim Kopieren einer umbrochenen URL
+gelangen Zeilenumbruch und Einrückung mit in den Pfad → **404**. Genau das ist beim
+ersten Versuch passiert. Außerdem: einfache Anführungszeichen müssen `'` sein
+(nicht typografische `’`, die Word ersetzt), und `LogicalName='account'` ist
+**case-sensitive**.
+
+**Beste erste Abfrage** — kein Metadaten-Endpunkt, sondern ein echter Datensatz
+OHNE `$select`. Dataverse liefert dann ALLE Felder; die JSON-Schlüssel *sind* die
+logischen Namen, und man sieht zusätzlich, welche Felder gefüllt sind. Beantwortet
+Abschnitt 3 und 4 in einem Zug:
 
 ```
-# Alle Account-Felder mit Typ — beantwortet Abschnitt 3 und 4 auf einmal
-/api/data/v9.2/EntityDefinitions(LogicalName='account')/Attributes
-  ?$select=LogicalName,AttributeType,IsValidForRead
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$top=1
 ```
 
-```
-# Gezielt: heißt das Umsatzfeld wie vermutet, und ist es gefüllt?
-/api/data/v9.2/accounts?$top=1&$select=accountid,name,address1_postalcode,
-  telephone1,websiteurl,modifiedon
-```
+Falls das nicht geht, die Leiter nach unten:
 
 ```
-# Liegt die SAP-Nummer auf account oder in sl_debitor?
-/api/data/v9.2/EntityDefinitions(LogicalName='sl_debitor')/Attributes
-  ?$select=LogicalName,AttributeType
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/WhoAmI
 ```
-
 ```
-# Hat account ein eigenes Vertriebsweg-Feld?
-/api/data/v9.2/EntityDefinitions(LogicalName='account')/Attributes
-  ?$filter=contains(LogicalName,'channel') or contains(LogicalName,'segment')
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$top=1&$select=name
+```
+```
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='account')/Attributes?$select=LogicalName,AttributeType
+```
+```
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='sl_debitor')/Attributes?$select=LogicalName,AttributeType
 ```
 
 ## 7. Bilanz
