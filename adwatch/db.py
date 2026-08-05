@@ -221,6 +221,8 @@ def _migrate(engine) -> None:
         if cols and "kind" not in cols:
             conn.execute(text("ALTER TABLE fetch_jobs ADD COLUMN kind VARCHAR(20) DEFAULT 'fetch'"))
             conn.execute(text("UPDATE fetch_jobs SET kind = 'fetch' WHERE kind IS NULL"))
+        # report_events is created by create_all — nothing to migrate, but an
+        # existing DB has no history, so the Logs tab starts from this release.
         # report_recipients: remembered tick state for the send boxes. Existing
         # rows default to 1 so nobody silently drops out of a send they were
         # already part of.

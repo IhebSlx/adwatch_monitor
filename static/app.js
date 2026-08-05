@@ -1567,7 +1567,53 @@
     loadLogs();
   }
 
+  // ---- Berichte & Versand: the report audit trail (ReportEvent) -------------
+  const REV_KIND = {
+    created:     { label: "erstellt",       cls: "ev-created" },
+    sent:        { label: "gesendet ✓",     cls: "ev-sent" },
+    send_failed: { label: "Versand ✗",      cls: "ev-failed" },
+  };
+  const REV_SOURCE = {
+    manual: "manuell", pipeline: "Pipeline", schedule: "Zeitplan",
+    definition: "gespeicherter Bericht",
+  };
+
+  async function loadReportEvents() {
+    let events = [];
+    try {
+      events = (await api("/api/report-events?limit=200")).events || [];
+    } catch (e) {
+      toast(`Berichts-Historie nicht ladbar: ${e.message || e}`, "error");
+      return;
+    }
+    const want = $("#revKind").value;
+    const rows = want ? events.filter(e => e.kind === want) : events;
+    const body = $("#reportEventsBody");
+    $("#reportEventsEmpty").style.display = rows.length ? "none" : "";
+    body.innerHTML = rows.map(e => {
+      const k = REV_KIND[e.kind] || { label: e.kind, cls: "" };
+      const to = (e.recipients || []).join(", ");
+      return `<tr>
+        <td class="nowrap">${esc(fmtDateTime(e.at))}</td>
+        <td><span class="ev-tag ${k.cls}">${esc(k.label)}</span></td>
+        <td>${esc(e.filename)}${e.report_type ? ` <span class="muted">(${esc(e.report_type)})</span>` : ""}</td>
+        <td class="muted small">${esc(e.scope || "—")}</td>
+        <td>${to ? esc(to) : "<span class='muted'>—</span>"}</td>
+        <td class="muted small">${esc(REV_SOURCE[e.source] || e.source || "—")}</td>
+        <td class="muted small">${esc(e.detail || "")}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function fmtDateTime(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleString("de-DE",
+      { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
   async function loadLogs() {
+    loadReportEvents();          // independent of the fetch-log query below
     const params = new URLSearchParams();
     const status = $("#logStatus").value, source = $("#logSource").value, q = $("#logSearch").value.trim();
     if (status) params.set("status", status);
@@ -1617,6 +1663,8 @@
   }
 
   function wireLogsTabControls() {
+    $("#revKind").addEventListener("change", loadReportEvents);
+    $("#revRefresh").addEventListener("click", loadReportEvents);
     $("#logSearch").addEventListener("keydown", (e) => {
       if (e.key === "Enter") { LOGS.page = 1; loadLogs(); }
     });

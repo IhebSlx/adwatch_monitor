@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import re
 from pathlib import Path
+from urllib.parse import unquote
 from xml.sax.saxutils import escape as _xml_escape
 
 from reportlab.lib import colors
@@ -200,6 +201,20 @@ def week_str_for_filename(filename: str) -> str:
 def _esc(text) -> str:
     """Escape dynamic text for reportlab's mini-XML (company names contain & etc.)."""
     return _xml_escape(str(text if text is not None else ""))
+
+
+def _page_label(name) -> str:
+    """A Facebook page slug is URL-encoded and hyphenated, so a Spanish page
+    printed as 'Dise%C3%B1a-Soluciones-En-Vidrio-175791052761874'. Decode it,
+    drop the trailing numeric id and turn hyphens back into spaces so the report
+    shows 'Diseña Soluciones En Vidrio'."""
+    label = unquote(str(name or ""))
+    if "-" in label:
+        parts = label.split("-")
+        if parts[-1].isdigit() and len(parts) > 1:
+            parts = parts[:-1]                    # the page id, not part of the name
+        label = " ".join(p for p in parts if p)
+    return label.strip() or str(name or "")
 
 
 def _link(text, url: str | None) -> str:
@@ -593,7 +608,8 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
         for d in active_rows:
             cats = d.get("ads_by_category") or {}
             method_de = _METHOD_LABEL_DE.get(d.get("spend_method"), d.get("spend_method") or "")
-            page = f' &nbsp;·&nbsp; Seite: {_esc(d["page_name"])}' if d.get("page_name") else ""
+            page = (f' &nbsp;·&nbsp; Seite: {_esc(_page_label(d["page_name"]))}'
+                    if d.get("page_name") else "")
             cat_str = " · ".join(f"{_CATEGORY_LABEL_DE.get(k, k)} {v}"
                                  for k, v in cats.items() if v) or "—"
             products = ", ".join(d.get("products") or [])
@@ -702,7 +718,8 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         products = d.get("products") or []
         score_tag = f" &nbsp;·&nbsp; Score {d['score']:.0f}/100" if d.get("score") is not None else ""
         story.append(Paragraph(f"{i}. {_esc(d['company'])}{score_tag}", rank))
-        matched = f" &nbsp;·&nbsp; Seite: {_esc(d['page_name'])}" if d.get("page_name") else ""
+        matched = (f" &nbsp;·&nbsp; Seite: {_esc(_page_label(d['page_name']))}"
+                   if d.get("page_name") else "")
         story.append(Paragraph(
             f"<b>{d['total_active_ads']} aktive Anzeigen</b>"
             + (f" &nbsp;({'+' if (d.get('delta_ads') or 0) > 0 else ''}{d['delta_ads']} ggü. Vorwoche)"
@@ -774,16 +791,27 @@ def _meta_path(pdf_path) -> Path:
 
 
 def write_report_meta(pdf_path, filters: dict | None = None,
-                      definition_name: str | None = None) -> None:
+                      definition_name: str | None = None,
+                      source: str | None = None) -> None:
     """Persist the filter scope of a just-generated report so the Reports list
     can label it (e.g. 'Gefiltert nach: …') instead of an indistinguishable
-    'Report — KW30'. Best-effort: a failure here must never break generation."""
+    'Report — KW30'. Best-effort: a failure here must never break generation.
+
+    Also records the 'created' audit event for the Logs tab — every build path
+    already calls this, which makes it the one place that cannot be forgotten."""
+    label = None
     try:
-        meta = {"filter_label": _describe_filters_de(filters),
-                "definition": definition_name}
+        label = _describe_filters_de(filters)
+        meta = {"filter_label": label, "definition": definition_name}
         _meta_path(pdf_path).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     except Exception:  # noqa: BLE001 — labelling is cosmetic, never fatal
         pass
+    from . import report_log
+    name = Path(str(pdf_path)).name
+    report_log.record("created", name, scope=label,
+                      report_type=(parse_report_filename(name) or {}).get("report_type"),
+                      source=source or ("definition" if definition_name else None),
+                      detail=(f"Definition: {definition_name}" if definition_name else None))
 
 
 def _read_report_meta(pdf_path) -> dict:

@@ -931,3 +931,13 @@ table.col-resized td:not([colspan]) { overflow: hidden; text-overflow: ellipsis;
   .charts-row { grid-template-columns: 1fr; }
   .fetch-panel { padding: 14px 16px; }
 }
+
+/* Logs tab -> "Berichte & Versand": one glanceable tag per event kind, so a
+   failed send is visually distinct from a successful one in a long list. */
+.ev-tag { display: inline-block; padding: 1px 7px; border-radius: 10px;
+          font-size: 11px; font-weight: 600; white-space: nowrap; }
+.ev-created { background: #eef2f7; color: #44536b; }
+.ev-sent    { background: #e6f5ec; color: #1d6b3d; }
+.ev-failed  { background: #fdecec; color: #9d2626; }
+#reportEventsTable td { vertical-align: top; }
+#reportEventsTable td.nowrap { white-space: nowrap; }

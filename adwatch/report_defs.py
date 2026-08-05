@@ -140,7 +140,8 @@ def run_definition(def_id: int, send: bool = True) -> dict:
         if emails:
             from .emailer import send_report_email
             subject = f"{name} — {subject_for_filename(result['filename'])}"
-            send_report_email(path, recipient=emails, subject=subject)
+            send_report_email(path, recipient=emails, subject=subject,
+                              source="definition")
             result.update(sent=True, recipients=emails, subject=subject)
         else:
             result["reason"] = "no active recipients set on this report"

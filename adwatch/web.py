@@ -472,7 +472,8 @@ def generate_report(payload: EmailReportIn = EmailReportIn()):
     from .report import build_report, build_top5_report, write_report_meta
     path = build_report(filters=payload.filters) if payload.report == "full" \
         else build_top5_report(filters=payload.filters)
-    write_report_meta(path, filters=payload.filters)   # so the Reports list can show the filter used
+    # so the Reports list can show the filter used, and the Logs tab the history
+    write_report_meta(path, filters=payload.filters, source="manual")
     return {"filename": Path(path).name}
 
 
@@ -535,6 +536,13 @@ def run_report_def(def_id: int, payload: RunReportDefIn = RunReportDefIn()):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/report-events")
+def report_events_route(limit: int = 200):
+    """Report creation + delivery history for the Logs tab."""
+    from . import report_log
+    return {"events": report_log.history(limit)}
+
+
 @app.get("/api/reports/{filename}")
 def download_report(filename: str):
     path = _safe_report_path(filename)
@@ -551,7 +559,8 @@ def send_existing_report(filename: str, payload: SendExistingIn = SendExistingIn
         raise HTTPException(400, "No recipient given and no default is configured")
     subject = payload.subject or subject_for_filename(filename)
     try:
-        send_report_email(str(path), recipient=to, subject=subject)
+        send_report_email(str(path), recipient=to, subject=subject,
+                          source="manual")
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "sent_to": to}
@@ -571,7 +580,7 @@ def send_report_email_route(payload: EmailReportIn = EmailReportIn()):
         raise HTTPException(400, "No recipient given and no default is configured")
     subject = payload.subject or subject_for_filename(os.path.basename(path))
     try:
-        send_report_email(path, recipient=to, subject=subject)
+        send_report_email(path, recipient=to, subject=subject, source="manual")
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "sent_to": to}

@@ -22,6 +22,7 @@ onto the win-back/Divergenz thesis and costs nothing extra.
 from __future__ import annotations
 
 import json
+import re
 
 from .. import config
 
@@ -46,12 +47,29 @@ _PROMPT = """Du analysierst den Website-Text eines Bauelemente-/Handwerksbetrieb
 Die Antwort hat ZWEI streng getrennte Teile: belegte FAKTEN und eine als solche
 gekennzeichnete EINSCHÄTZUNG. Vermische die beiden niemals.
 
+SPRACHE — wichtig:
+- Der Website-Text kann in JEDER Sprache sein (Deutsch, Spanisch, Portugiesisch,
+  Englisch, Französisch, Italienisch, Niederländisch). Der Bericht ist Deutsch.
+- Alle FREITEXT-Felder ("description_de", "employee_hint", "service_area",
+  "assessment_de") MÜSSEN auf Deutsch sein — auch wenn die Quelle es nicht ist.
+  Übersetze sinngemäß, lasse keine fremdsprachigen Wörter stehen.
+  Beispiele: "cerramiento de porche" -> "Terrassenverglasung";
+  "carpintería de aluminio" -> "Aluminium-Metallbau" (NICHT "Karpenterie");
+  "barandillas" -> "Geländer"; "Un gran equipo" -> "großes Team".
+- AUSNAHMEN, die NICHT übersetzt werden: Eigennamen, Marken, Orts- und
+  Regionsnamen (Mallorca, Alicante) und die Rechtsform.
+- "evidence" bleibt das WÖRTLICHE Originalzitat in der Sprache der Website.
+
 TEIL 1 — FAKTEN (Felder description_de bis competitor_brands):
-- Gib NUR zurück, was WÖRTLICH im Text steht. Nichts schätzen, nichts annehmen,
-  nichts aus Weltwissen ergänzen.
+- Gib inhaltlich NUR zurück, was im Text steht. Nichts schätzen, nichts annehmen,
+  nichts aus Weltwissen ergänzen. (Übersetzen ist erlaubt, Erfinden nicht.)
 - Fehlt eine Information: null (bzw. leere Liste). Ein leeres Feld ist besser als eine Vermutung.
 - "employee_hint" und "founded_year" nur, wenn der Text sie ausdrücklich nennt
-  ("15 Mitarbeiter", "seit 1952", "gegründet 1978").
+  ("15 Mitarbeiter", "seit 1952", "gegründet 1978"). Sinngemäß auf Deutsch.
+- "legal_form": WÖRTLICH so, wie sie im Text steht — NIE übersetzen und NIE durch
+  eine deutsche Form ersetzen. Eine spanische "S.L." bleibt "S.L.", eine
+  portugiesische "Lda." bleibt "Lda.". Steht keine Rechtsform im Text: null.
+  Eine deutsche Rechtsform (GmbH, e.K., KG …) NUR bei einer deutschen Firma.
 - "evidence": kurzes wörtliches Zitat (max. 120 Zeichen) als Belegstelle je gefülltem Faktenfeld.
 
 TEIL 2 — EINSCHÄTZUNG (Feld assessment_de), 2-3 kurze Sätze:
@@ -69,9 +87,9 @@ Antworte AUSSCHLIESSLICH mit diesem JSON (keine Erklärung, kein Markdown):
   "description_de": "<1-2 knappe Sätze: was macht die Firma? oder null>",
   "products": [<0-6 Werte aus: PRODUCT_VOCAB>],
   "founded_year": <Jahr als Zahl oder null>,
-  "employee_hint": "<wörtliche Angabe zur Betriebsgröße oder null>",
-  "legal_form": "<GmbH | GmbH & Co. KG | KG | OHG | AG | e.K. | Einzelunternehmen | GbR | null>",
-  "service_area": "<Region/Umkreis, falls genannt, sonst null>",
+  "employee_hint": "<Angabe zur Betriebsgröße auf Deutsch oder null>",
+  "legal_form": "<Rechtsform WÖRTLICH aus dem Text (GmbH, GmbH & Co. KG, KG, AG, e.K., GbR, S.L., S.L.U., S.A., Lda., Unipessoal Lda., SARL, SRL, BV, Ltd …) oder null>",
+  "service_area": "<Region/Umkreis auf Deutsch, falls genannt, sonst null>",
   "mentions_solarlux": <true|false>,
   "competitor_brands": [<genannte Marken aus: COMPETITOR_LIST>],
   "evidence": {"<feldname>": "<Zitat>", ...},
@@ -88,6 +106,28 @@ Website-Text:
 def _prompt() -> str:
     return (_PROMPT.replace("__PRODUCTS__", ", ".join(PRODUCT_VOCAB))
                    .replace("__COMPETITORS__", ", ".join(COMPETITOR_BRANDS)))
+
+
+def _legal_form_in_text(value, text: str) -> str | None:
+    """Keep the legal form only if it ACTUALLY OCCURS in the crawled text.
+
+    The old prompt offered a closed list of German legal forms, so a Spanish
+    "S.L." had no valid option and the model substituted the nearest German
+    one — ALLKONZEPT S.L. and Aluminios ALSABEN SL were both stored as "e.K.",
+    which is not a translation but a false fact about a legal entity.
+
+    The prompt now asks for it verbatim; this is the deterministic backstop, so a
+    fabricated form cannot survive even when the model ignores the instruction.
+    Punctuation and spacing are ignored ("S.L." matches "SL", "Lda." matches
+    "LDA"), because sites write them inconsistently.
+    """
+    form = (str(value or "")).strip()
+    if not form:
+        return None
+    squash = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
+    if squash(form) and squash(form) in squash(text or ""):
+        return form[:40]
+    return None
 
 
 def _coerce_year(value) -> int | None:
@@ -149,7 +189,7 @@ def extract_facts(site_text: str, model: str | None = None) -> dict:
         "products": _clean_list(data.get("products"), PRODUCT_VOCAB, 6),
         "founded_year": _coerce_year(data.get("founded_year")),
         "employee_hint": ((data.get("employee_hint") or "").strip() or None),
-        "legal_form": ((data.get("legal_form") or "").strip() or None),
+        "legal_form": _legal_form_in_text(data.get("legal_form"), text),
         "service_area": ((data.get("service_area") or "").strip() or None),
         "mentions_solarlux": bool(data.get("mentions_solarlux")),
         "competitor_brands": _clean_list(data.get("competitor_brands"), COMPETITOR_BRANDS, 12),

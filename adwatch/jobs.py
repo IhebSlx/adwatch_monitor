@@ -651,7 +651,7 @@ def _run_pipeline(job_id: int) -> None:
             filters = {"ids": cids}
             path = (build_report(filters=filters) if plan["report"] == "full"
                     else build_top5_report(filters=filters))
-            write_report_meta(path, filters=filters, definition_name=None)
+            write_report_meta(path, filters=filters, definition_name=None, source="pipeline")
             state["filename"] = os.path.basename(path)
             _pl_log(job_id, f"[report] ✓ {state['filename']}")
         except Exception as exc:  # noqa: BLE001
@@ -674,7 +674,8 @@ def _run_pipeline(job_id: int) -> None:
             else:
                 send_report_email(str(config.OUTPUT_DIR / state["filename"]),
                                   recipient=emails,
-                                  subject=subject_for_filename(state["filename"]))
+                                  subject=subject_for_filename(state["filename"]),
+                                  source="pipeline")
                 _pl_log(job_id, f"[send] ✓ an {', '.join(emails)}")
         except Exception as exc:  # noqa: BLE001
             _pl_log(job_id, f"[send] ✗ {exc}")

@@ -368,8 +368,9 @@ def test_report_def_crud_and_run(temp_db, monkeypatch):
                         lambda filters=None: "output/adwatch_report_KW30_2026.pdf")
     monkeypatch.setattr(report_mod, "write_report_meta", lambda *a, **k: None)
     monkeypatch.setattr(emailer_mod, "send_report_email",
-                        lambda path, recipient=None, subject=None: sent.update(
-                            path=path, recipient=recipient, subject=subject))
+                        lambda path, recipient=None, subject=None, **k: sent.update(
+                            path=path, recipient=recipient, subject=subject,
+                            source=k.get("source")))
     res = report_defs.run_definition(d["id"], send=True)
     assert res["sent"] is True
     assert sent["recipient"] == ["one@x.de"]                          # inactive recipient excluded
@@ -946,6 +947,63 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_legal_form_must_occur_in_the_source_text():
+    """A Spanish S.L. was stored as the GERMAN form 'e.K.' — the old prompt offered
+    a closed list of German forms, so the model substituted the nearest one. That
+    is a false fact about a legal entity, not a translation. The form now only
+    survives if it actually appears in the crawled text."""
+    from adwatch.enrich.extract import _legal_form_in_text
+
+    es = "ALLKONZEPT S.L. · Aviso legal · Calle Mayor 1, Mallorca"
+    assert _legal_form_in_text("S.L.", es) == "S.L."
+    assert _legal_form_in_text("e.K.", es) is None          # the fabrication is dropped
+    # punctuation and spacing differ between sites, so matching ignores them
+    assert _legal_form_in_text("S.L.", "Aluminios ALSABEN, SL — Las Palmas") == "S.L."
+    assert _legal_form_in_text("Lda.", "Afcamoes Solutions LDA, Porto") == "Lda."
+    # a German company keeps its German form
+    assert _legal_form_in_text("GmbH", "Muster Fenster GmbH, Osnabrück") == "GmbH"
+    assert _legal_form_in_text(None, es) is None
+    assert _legal_form_in_text("GmbH", "") is None
+
+
+def test_report_events_record_creation_and_delivery(temp_db, monkeypatch, tmp_path):
+    """Creating and sending a report must leave an audit row, so 'did the mail go
+    out?' is answerable after a crash — the question that had no answer before."""
+    from adwatch import report_log
+    from adwatch.report import write_report_meta
+
+    write_report_meta(str(tmp_path / "adwatch_top5_KW31_2026.pdf"),
+                      filters={"country": ["ES"]}, source="manual")
+    ev = report_log.history()
+    assert len(ev) == 1
+    assert ev[0]["kind"] == "created" and ev[0]["report_type"] == "top5"
+    assert ev[0]["source"] == "manual" and "ES" in (ev[0]["scope"] or "")
+
+    # a failing send is recorded too, with the real error, and still raises
+    import adwatch.emailer as emailer_mod
+    from adwatch import config
+    monkeypatch.setattr(config, "POWER_AUTOMATE_WEBHOOK_URL", "https://example.invalid/f")
+    pdf = tmp_path / "adwatch_top5_KW31_2026.pdf"
+    pdf.write_bytes(b"%PDF-1.4 x")
+
+    def _boom(*a, **k):
+        raise OSError("network is down")
+    monkeypatch.setattr(emailer_mod.requests, "post", _boom)
+    with pytest.raises(RuntimeError):
+        emailer_mod.send_report_email(str(pdf), recipient=["a@x.de", "b@x.de"],
+                                      subject="Bericht", source="pipeline")
+
+    ev = report_log.history()
+    fail = ev[0]
+    assert fail["kind"] == "send_failed"
+    assert fail["recipients"] == ["a@x.de", "b@x.de"]
+    assert fail["source"] == "pipeline" and "network is down" in fail["detail"]
+
+    # recording must never be what breaks a send: a broken audit write is swallowed
+    monkeypatch.setattr(report_log, "SessionLocal", lambda: (_ for _ in ()).throw(OSError("db gone")))
+    report_log.record("created", "x.pdf")          # must not raise
+
+
 def test_domain_prepass_is_free_and_never_writes_a_verdict(temp_db, monkeypatch):
     """The pre-pass must (a) never call the paid search, (b) write a proven domain,
     and (c) write NOTHING on a miss — 'no website found' is a verdict only the
@@ -1059,7 +1117,8 @@ def test_pipeline_runs_steps_in_the_working_order(temp_db, monkeypatch):
     monkeypatch.setattr(report_mod, "write_report_meta", lambda *a, **k: None)
     monkeypatch.setattr(report_mod, "subject_for_filename", lambda f: "Bericht")
     monkeypatch.setattr(emailer_mod, "send_report_email",
-                        lambda path, recipient=None, subject=None: calls.append(("send", tuple(recipient))))
+                        lambda path, recipient=None, subject=None, **k: calls.append(
+                            ("send", tuple(recipient))))
 
     plan = {"enrich": True, "identity": True, "ads": ["meta"], "report": "full", "send_to": [rid]}
     job = jobs.create_pipeline_job(ids, plan, label="t")

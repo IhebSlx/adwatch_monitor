@@ -627,8 +627,39 @@
     <section id="tab-logs" class="tab-panel">
       <header class="page-head">
         <h1>Logs</h1>
-        <p>Every fetch attempt, with the full error text when something fails.</p>
+        <p>Berichte &amp; Versand — und jeder Abrufversuch mit vollem Fehlertext.</p>
       </header>
+
+      <div class="card">
+        <h2>Berichte &amp; Versand</h2>
+        <p class="hint">Welcher Bericht wann erstellt und wann an wen geschickt wurde — inklusive
+          fehlgeschlagener Versuche mit dem echten Fehlertext. Damit ist nach einem Abbruch
+          nachvollziehbar, ob eine Mail rausgegangen ist, <b>bevor</b> man erneut sendet.
+          Die Historie beginnt mit diesem Release.</p>
+        <div class="filter-bar">
+          <select id="revKind">
+            <option value="">Alle Ereignisse</option>
+            <option value="created">Nur erstellt</option>
+            <option value="sent">Nur gesendet</option>
+            <option value="send_failed">Nur fehlgeschlagen</option>
+          </select>
+          <button id="revRefresh" class="btn btn-sm">Aktualisieren</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="reportEventsTable">
+            <thead>
+              <tr>
+                <th>Zeitpunkt</th><th>Ereignis</th><th>Bericht</th>
+                <th>Umfang</th><th>Empfänger</th><th>Auslöser</th><th>Detail</th>
+              </tr>
+            </thead>
+            <tbody id="reportEventsBody"></tbody>
+          </table>
+        </div>
+        <p class="hint" id="reportEventsEmpty" style="display:none">Noch keine Berichte erstellt
+          oder gesendet, seit die Historie aufgezeichnet wird.</p>
+      </div>
+
       <div class="card">
         <h2>Fetch logs</h2>
         <p class="hint">Every fetch attempt, one row per company/page — including the actual error text

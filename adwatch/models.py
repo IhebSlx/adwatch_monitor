@@ -401,3 +401,32 @@ class ReportDefinition(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
     last_run_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     last_status: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+class ReportEvent(Base):
+    """An audit trail of report creation and delivery: what was built, when, and
+    who it was mailed to.
+
+    Exists because a send used to leave no record anywhere. When a send failed
+    with the browser's bare "failed to fetch", there was no way to answer the
+    only question that mattered — did the mail go out? — which risks sending a
+    colleague the same report twice. The rotating log file records it now, but a
+    log file is not something a BD user reads, so the same facts are stored here
+    and shown in the Logs tab.
+
+    One row per event, never updated: 'created' when a PDF is written, 'sent' or
+    'send_failed' per delivery attempt. A single report therefore has one
+    'created' row and one row per attempt to mail it.
+    """
+    __tablename__ = "report_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20))            # created | sent | send_failed
+    filename: Mapped[str] = mapped_column(String(200))
+    report_type: Mapped[str | None] = mapped_column(String(10), nullable=True)   # full | top5
+    scope: Mapped[str | None] = mapped_column(String(400), nullable=True)        # the filter label
+    recipients: Mapped[list | None] = mapped_column(JSON, nullable=True)         # addresses mailed to
+    subject: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(30), nullable=True)  # manual|pipeline|schedule|definition
+    detail: Mapped[str | None] = mapped_column(String(600), nullable=True)      # error text on failure
+    at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)
