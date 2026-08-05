@@ -29,14 +29,26 @@ STATUS_LABELS = {
 PAGE_STATUS_LABELS = {"confirmed": "confirmed", "auto": "auto-linked", "manual": "manually set"}
 
 
-def list_companies(include_consumers: bool = False) -> list[dict]:
+def list_companies(include_consumers: bool = False,
+                   monitored_only: bool = True) -> list[dict]:
     """Every company in scope — consumers excluded (see adwatch/scope.py), which
     is what makes the dashboard's denominator the partner base rather than the
-    whole address book."""
+    whole address book.
+
+    `monitored_only` is on by default because this list drives the AD side of the
+    app: the identity check, the fetch queue and the ad-status columns. Since the
+    full CRM population landed (46,145 accounts, of which ~43,000 arrive with
+    monitored=False) an unfiltered list is ~10x larger, and every row in it would
+    read as "Meta page not checked yet" — an enormous backlog of work nobody
+    asked for. Analysis-side callers (ICP, RFM, Explorer) query Company directly
+    and are unaffected.
+    """
     with SessionLocal() as s:
         stmt = select(Company).order_by(Company.name)
         if not include_consumers:
             stmt = scope.apply(stmt)
+        if monitored_only:
+            stmt = stmt.where(Company.monitored.is_(True))
         rows = s.scalars(stmt).all()
         out = []
         for c in rows:

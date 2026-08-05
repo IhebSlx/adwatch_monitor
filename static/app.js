@@ -994,6 +994,7 @@
       $$(".tab").forEach(t => t.classList.toggle("active", t === btn));
       $$(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
       if (name === "customers") ensureCustomersLoaded();
+      if (name === "chancen") ensureChancenLoaded();
       if (name === "profil") loadIcpStatus();
       if (name === "reports") {
         // If a Companies filter is active, default the report to use it — so
@@ -1011,6 +1012,7 @@
     }));
     wireCustomers();
     wireCompanyTableControls();
+    wireChancen();
     wireLogsTabControls();
     $$(".settings-save-btn").forEach(b => b.addEventListener("click", saveSettings));
 
@@ -1383,6 +1385,96 @@
         await loadSavedReports();
       });
     });
+  }
+
+  // ------------------------------------------------------- Chancen tab
+  // Customers quiet against their OWN order rhythm. The health labels come
+  // straight from insights/rfm.py — kept identical so a value in the table can
+  // always be traced to the classification that produced it.
+  // Millions/thousands short form. A full "€27.567.067" overflows a KPI card and
+  // gets clipped to "€27.567.06", which reads as a completely different number.
+  const eurShort = (v) => {
+    if (v == null) return "—";
+    const n = Math.abs(v);
+    if (n >= 1e6) return "€" + (v / 1e6).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " Mio.";
+    if (n >= 1e4) return "€" + Math.round(v / 1e3).toLocaleString("de-DE") + " Tsd.";
+    return eur(v);
+  };
+  const HEALTH_LABEL = {
+    aktiv: "aktiv", beobachten: "beobachten", "gefährdet": "gefährdet",
+    verloren: "verloren", einmalig: "nur Kleinteile", nie: "nie gekauft",
+  };
+  let chancenLoaded = false;
+
+  async function loadChancen() {
+    const wrap = $("#chancenTableWrap");
+    const adsOnly = $("#chancenAdsOnly").checked;
+    const minValue = Number($("#chancenMinValue").value || 0);
+    wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
+    let data;
+    try {
+      data = await api(`/api/chancen?limit=500&min_value=${minValue}`
+        + `&advertising_only=${adsOnly ? "true" : "false"}`);
+    } catch (e) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Konnte nicht geladen werden: ${esc(e.message)}</p>`;
+      return;
+    }
+    const rows = data.rows || [];
+    const s = data.summary || {};
+    const risk = (s["gefährdet"]?.companies || 0) + (s.verloren?.companies || 0);
+    const riskEur = (s["gefährdet"]?.value || 0) + (s.verloren?.value || 0);
+    $("#chancenSummary").innerHTML = `
+      <div class="kpi"><div class="kpi-label">Überfällig / verloren</div>
+        <div class="kpi-value">${risk.toLocaleString("de-DE")}</div></div>
+      <div class="kpi"><div class="kpi-label">Umsatz historisch</div>
+        <div class="kpi-value" title="${eur(riskEur)}">${eurShort(riskEur)}</div></div>
+      <div class="kpi"><div class="kpi-label">Davon mit Werbung</div>
+        <div class="kpi-value">${(data.advertising || 0).toLocaleString("de-DE")}</div></div>
+      <div class="kpi"><div class="kpi-label">Aktive Kunden</div>
+        <div class="kpi-value">${(s.aktiv?.companies || 0).toLocaleString("de-DE")}</div></div>`;
+    if (!rows.length) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Keine Treffer für diesen Filter.</p>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr>
+          <th>Firma</th><th>Segment / Untersegment</th><th>Land</th>
+          <th class="num">Umsatz</th><th class="num">Bestellungen</th>
+          <th class="num">Rhythmus</th><th class="num">still seit</th>
+          <th class="num">überfällig</th><th>Status</th><th>Werbung</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `
+          <tr class="clickable" data-company="${r.company_id}">
+            <td>${esc(r.name)}${r.city ? `<div class="sub">${esc(r.city)}</div>` : ""}</td>
+            <td>${esc(r.segment || "—")}${r.sub_segment ? `<div class="sub">${esc(r.sub_segment)}</div>` : ""}</td>
+            <td>${esc(r.country || "—")}</td>
+            <td class="num">${eur(r.value)}</td>
+            <td class="num">${r.events}${r.material_events !== r.events
+              ? `<div class="sub">${r.material_events} materiell</div>` : ""}</td>
+            <td class="num">${r.cadence_days ? Math.round(r.cadence_days) + " T" : "—"}</td>
+            <td class="num">${r.days_since != null ? r.days_since + " T" : "—"}</td>
+            <td class="num">${r.overdue_factor ? r.overdue_factor.toFixed(1) + "×" : "—"}</td>
+            <td><span class="state-chip">${esc(HEALTH_LABEL[r.health] || r.health)}</span></td>
+            <td>${r.advertising ? "✓" : ""}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+    $$("#chancenTableWrap tr.clickable").forEach(tr =>
+      tr.addEventListener("click", () => openCompanyDrawer(Number(tr.dataset.company))));
+  }
+
+  function ensureChancenLoaded() {
+    if (chancenLoaded) return;
+    chancenLoaded = true;
+    loadChancen();
+  }
+
+  function wireChancen() {
+    const reload = $("#chancenReload");
+    if (!reload) return;
+    reload.addEventListener("click", loadChancen);
+    $("#chancenAdsOnly").addEventListener("change", loadChancen);
+    $("#chancenMinValue").addEventListener("change", loadChancen);
   }
 
   // ---------------- Profil tab (Ideal Customer Profile) ----------------

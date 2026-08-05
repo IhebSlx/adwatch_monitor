@@ -707,6 +707,54 @@ def icp_latest_route():
     return icp.latest_profile() or {"id": None}
 
 
+@app.get("/api/icp/backtest")
+def icp_backtest_route(cut: str | None = None, dealers_only: bool = False):
+    """Does the ICP actually rank? Always read the dealers-only number.
+
+    Across all segments the profile shows a spectacular lift, but that is mostly
+    "Architekten never buy, dealers do" — one categorical filter, not a ranking.
+    Restricted to Handel+Verarbeiter it currently does NOT rank, and the UI says
+    so rather than presenting a confident order that is noise.
+    """
+    import datetime as _dt
+    from .insights import icp
+    cutoff = None
+    if cut:
+        try:
+            cutoff = _dt.date.fromisoformat(cut)
+        except ValueError:
+            raise HTTPException(400, "cut muss YYYY-MM-DD sein")
+    segs = ("Handel", "Verarbeiter") if dealers_only else None
+    return icp.backtest(cutoff, segments=segs)
+
+
+@app.get("/api/chancen")
+def chancen_route(limit: int = 200, min_value: float = 0.0,
+                  advertising_only: bool = False):
+    """Customers who have gone quiet against their OWN order rhythm, worst first.
+
+    The list this app exists for: 32% of all lost opportunities are lost to
+    silence ("Kein Feedback vom Kunden" 23.5% + "Kein Interesse mehr" 8.8%)
+    against only 6.2% lost to competitors. A quiet customer that is still
+    visibly running ads is still spending money in the market — and that
+    combination is not visible anywhere else in the Solarlux stack.
+    """
+    from .insights import rfm
+    rows = rfm.overdue_customers(limit=max(1, min(limit, 1000)),
+                                 min_value=max(min_value, 0.0))
+    if advertising_only:
+        rows = [r for r in rows if r["advertising"]]
+    return {"rows": rows, "summary": rfm.summary(),
+            "advertising": sum(1 for r in rows if r["advertising"]),
+            "value_at_risk": round(sum(r["value"] for r in rows), 2)}
+
+
+@app.post("/api/chancen/recompute")
+def chancen_recompute_route():
+    from .insights import rfm
+    return rfm.recompute()
+
+
 @app.get("/api/customers")
 def list_customers_route(
     q: str | None = None,

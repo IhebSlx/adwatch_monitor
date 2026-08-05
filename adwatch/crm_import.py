@@ -48,6 +48,12 @@ SEGMENT = {
     104: "Gebäudebetreiber", 105: "Wohnungswirtschaft", 106: "Meinungsbildner",
     107: "Bauzulieferindustrie", 108: "Private Endkunden",
 }
+# All 49 codes, read from the live option set. The first version of this map had
+# only the 14 Handel/Verarbeiter codes, which silently left sub_segment NULL for
+# every architect and Baudienstleister — i.e. for more than half the population,
+# and for the single best ICP feature there is. Nothing errored; the data was just
+# quietly absent, which is why the ICP's coverage check caught it and a spot
+# check would not have.
 SUB_SEGMENT = {
     100000: "Bauelementehandel", 100001: "Holzhandel",
     100002: "Sonnenschutz-/Rolladenhandel", 100003: "Baustoffhandel",
@@ -55,7 +61,26 @@ SUB_SEGMENT = {
     101000: "Fensterbau", 101001: "Wintergartenbau",
     101002: "Tischler-Schreiner-Zimmerer", 101003: "Metallbau-Schlosser",
     101004: "Ladenbau/Objekteinrichter", 101005: "Balkonbau", 101006: "Glaser",
-    102000: "Generalplaner",
+    102000: "Generalplaner", 102001: "Architekturbüro",
+    102002: "Fachplanungsbüro", 102003: "Landschaftsplaner",
+    102004: "Innenarchitektur", 102005: "Bauakustiker",
+    103000: "Projektentwickler", 103001: "Immobilienunterneh./Investor",
+    103002: "Generalunternehmen/-übern.", 103003: "Fertighaushersteller",
+    103004: "Bauunternehmen", 103005: "Bauträger",
+    103006: "Facility Management", 103007: "Kooperationspartner",
+    104000: "Banken/Verwaltungen", 104001: "Soziale Einrichtungen",
+    104002: "Öffentl.Hand/kirchl.Trägerschaft", 104003: "Industrieunternehmen",
+    104004: "Hotel/Gastro", 104005: "Handelsunternehmen",
+    104006: "Sportstätten / Vereine",
+    105000: "Genossenschaft/Verein", 105001: "Eigentümer-Gemeinschaft",
+    105002: "Privatwirtschaftl. Unternehmen", 105003: "Kommunale Gesellschaft",
+    105004: "Haus- und Wohnungsverwalter",
+    106000: "Verbände / Innung", 106001: "Portalbetreiber (Heinze..)",
+    106002: "Presse / Print", 106003: "Bildungstätte",
+    106004: "Prüfinstitute", 106005: "Sachverständiger",
+    107000: "Marktmitspieler", 107001: "Profil-Systemgeber",
+    107002: "Sonstige Bauzulieferindustrie",
+    108000: "Student",
 }
 SALES_CHANNEL = {
     102690000: "Direktvertrieb", 102690001: "Fachhandelsvertrieb",

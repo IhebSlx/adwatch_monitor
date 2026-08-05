@@ -35,6 +35,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4v18"/><path d="M19 21V11l-7-4"/><path d="M9 9v.01M9 12v.01M9 15v.01M9 18v.01"/></svg>
         Companies
       </button>
+      <button class="tab" data-tab="chancen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"/></svg>
+        Chancen
+      </button>
       <button class="tab" data-tab="profil">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
         ICP
@@ -504,6 +508,51 @@
           saved after every step, so a job survives an app restart (it's marked "interrupted" → hit Resume)
           instead of losing everything.</p>
         <div id="jobsList"></div>
+      </div>
+    </section>
+
+    <!-- ================= TAB: Chancen (Rückgewinnung) ================= -->
+    <section id="tab-chancen" class="tab-panel">
+      <header class="page-head">
+        <h1>Chancen — stille Kunden zurückgewinnen</h1>
+        <p>Kunden, die <b>im Vergleich zu ihrem eigenen Bestellrhythmus</b> auffällig lange
+          nichts mehr bestellt haben. Wer davon <b>noch Werbung schaltet</b>, gibt weiterhin
+          Geld im Markt aus — nur nicht bei uns.</p>
+      </header>
+
+      <div class="card" style="margin-bottom:16px">
+        <p style="margin:0 0 10px;font-size:13px;line-height:1.6">
+          <b>Warum diese Liste?</b> Von allen verlorenen Verkaufschancen gehen nur
+          <b>6,2&nbsp;%</b> an den Wettbewerb. Der größte Einzelgrund ist
+          „Kein Feedback vom Kunden“ mit <b>23,5&nbsp;%</b> (170,6&nbsp;Mio.&nbsp;€),
+          zusammen mit „Kein Interesse mehr“ sind es <b>32&nbsp;%</b> — verloren an
+          <em>Stille</em>, nicht an einen Mitbewerber. Genau da setzt diese Liste an.
+        </p>
+        <p style="margin:0;font-size:12px;color:var(--muted);line-height:1.6">
+          „Überfällig“ heißt: mindestens <b>3× das eigene übliche Bestellintervall</b>
+          verstrichen und mindestens 120 Tage still. Eine starre 12-Monats-Regel
+          funktioniert hier nicht — die Rhythmen reichen von wenigen Tagen bis zu einem Jahr.
+        </p>
+      </div>
+
+      <div id="chancenSummary" class="kpi-row"></div>
+
+      <div class="card">
+        <div class="toolbar" style="margin-bottom:12px">
+          <label class="checkline" style="margin:0">
+            <input type="checkbox" id="chancenAdsOnly">
+            <span>Nur Firmen, die aktuell Werbung schalten</span>
+          </label>
+          <label style="margin:0 0 0 16px;font-size:12px;color:var(--muted)">
+            Mindest-Umsatz (historisch)
+            <input type="number" id="chancenMinValue" value="0" min="0" step="10000"
+                   style="width:110px;margin-left:6px">
+          </label>
+          <button class="btn" id="chancenReload" style="margin-left:auto">Aktualisieren</button>
+        </div>
+        <div id="chancenTableWrap" class="table-wrap">
+          <p class="muted" style="padding:12px">Wird geladen …</p>
+        </div>
       </div>
     </section>
 

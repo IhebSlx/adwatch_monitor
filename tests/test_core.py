@@ -1265,10 +1265,12 @@ def test_thinly_known_features_do_not_score(temp_db):
         "weights": {"segment": 1.0, "size_bucket": 1.0},
         "features": {
             # solidly known, and discriminating
-            "segment": {"coverage": 1.0, "shares": {"Handel": 0.7, "Verarbeiter": 0.3}},
+            "segment": {"coverage": 1.0, "shares": {"Handel": 0.7, "Verarbeiter": 0.3},
+                        "lifts": {"Handel": 1.8, "Verarbeiter": 0.6}},
             # the live case: a spread that LOOKS informative but rests on ~20 rows
             "size_bucket": {"coverage": 0.03,
-                            "shares": {"20-49": 0.5, "10-19": 0.3, "50+": 0.2}},
+                            "shares": {"20-49": 0.5, "10-19": 0.3, "50+": 0.2},
+                            "lifts": {"20-49": 2.5, "10-19": 1.1, "50+": 0.7}},
         },
     }
     # a company matching ONLY the thin feature has nothing comparable left
@@ -1923,60 +1925,112 @@ def test_icp_diagnose_guards(temp_db):
     assert any("Gemischte Grundgesamtheit" in r for r in d["reasons"])
 
 
-def test_icp_profile_and_fit(temp_db):
-    """The heart: the profile counts winner distributions; fit scores a company
-    by how typical its values are (modal winner value = 1.0); unknown values are
-    skipped with weight renormalisation; near-uniform features are excluded;
-    apply writes scores + breakdown to every company."""
+def test_icp_scores_propensity_not_popularity(temp_db):
+    """The heart, and the correction that made it work.
+
+    Scoring used to reward the winners' most COMMON value. That ranks popularity,
+    not propensity: measured live, Bauelementehandel is 36.5% of winners but
+    converts at 1.03x, while Wintergartenbau is ~1% of winners and converts at
+    1.62x — share ordered them backwards. fit_for now scores LIFT, so a value is
+    rewarded for being over-represented among winners RELATIVE to the population.
+
+    Fixture: Tischler is the common trade (60 of 90 companies) but converts
+    poorly; Metallbau is rarer but converts well. Share-based scoring would rank
+    Tischler top; lift must rank Metallbau top.
+    """
     from adwatch import customers
     from adwatch.insights import icp
     from adwatch.models import Company
     from sqlalchemy import select
 
     s = temp_db.SessionLocal()
-    # 30 winners (the guard rejects smaller sets as noise): 20× Metallbau in
-    # PLZ 4x, 10× Tischler in PLZ 8x; ALL share the same Vertriebsweg
-    # (non-discriminating -> must be excluded from scoring)
-    for i in range(20):
-        s.add(Company(name=f"W Metall {i}", country="DE", segment="Verarbeiter",
-                      sub_segment="Metallbau-Schlosser", sales_channel="Fachhandelsvertrieb",
-                      postal_code="49134", revenue_y0=50000, revenue_y1=40000))
-    for i in range(10):
-        s.add(Company(name=f"W Tisch {i}", country="DE", segment="Verarbeiter",
-                      sub_segment="Tischler", sales_channel="Fachhandelsvertrieb",
-                      postal_code="80331", revenue_y0=50000, revenue_y1=40000))
-    # candidates: a look-alike (Metallbau, PLZ 4x), a partial match, a blank
-    lookalike = Company(name="K Passt", country="DE", segment="Verarbeiter",
-                        sub_segment="Metallbau-Schlosser", sales_channel="Fachhandelsvertrieb",
-                        postal_code="49076")
-    partial = Company(name="K Halb", country="DE", segment="Verarbeiter",
-                      sub_segment="Tischler", postal_code="80000")
+    win_ids = []
+    # 20 Metallbau winners out of 30 Metallbau companies  -> strongly over-represented
+    for i in range(30):
+        c = Company(name=f"Metall {i}", country="DE", segment="Verarbeiter",
+                    sub_segment="Metallbau-Schlosser", sales_channel="Fachhandelsvertrieb",
+                    postal_code="49134")
+        s.add(c); s.flush()
+        if i < 20:
+            win_ids.append(c.id)
+    # 10 Tischler winners out of 60 Tischler companies -> the COMMON trade, but
+    # under-represented among winners
+    for i in range(60):
+        c = Company(name=f"Tisch {i}", country="DE", segment="Verarbeiter",
+                    sub_segment="Tischler", sales_channel="Fachhandelsvertrieb",
+                    postal_code="80331")
+        s.add(c); s.flush()
+        if i < 10:
+            win_ids.append(c.id)
     blank = Company(name="K Leer", country="DE")
-    s.add_all([lookalike, partial, blank]); s.commit()
-    # derive states so the default winners filter (active+new) finds the six
-    for c in s.scalars(select(Company)):
-        c.customer_state = customers.derive_customer_state(
-            c.revenue_y0, c.revenue_y1, c.revenue_y2, c.revenue_y3, c.revenue_y4)
-    s.commit()
-    la_id, pa_id, bl_id = lookalike.id, partial.id, blank.id
+    s.add(blank); s.commit()
+    bl_id = blank.id
+    # a non-winner of each trade, to compare
+    metall_id = s.scalars(select(Company).where(
+        Company.name == "Metall 29")).one().id
+    tisch_id = s.scalars(select(Company).where(
+        Company.name == "Tisch 59")).one().id
     s.close()
 
-    p = icp.build_profile(None)
+    p = icp.build_profile({"ids": win_ids})
     assert p["winners_count"] == 30
-    assert dict(p["features"]["sub_segment"]["shares"])["Metallbau-Schlosser"] == pytest.approx(20 / 30)
+    subs = p["features"]["sub_segment"]
+    # Tischler is the LARGER share of winners' trade population but Metallbau is
+    # the over-represented one — this is exactly the inversion that broke ranking
+    assert dict(subs["shares"])["Metallbau-Schlosser"] == pytest.approx(20 / 30)
+    assert subs["lifts"]["Metallbau-Schlosser"] > subs["lifts"]["Tischler"]
+    assert subs["lifts"]["Metallbau-Schlosser"] > 1.0 > subs["lifts"]["Tischler"]
 
-    res = icp.apply_profile(None, name="test")
-    assert res["companies_scored"] >= 32  # everyone with any comparable value
+    res = icp.apply_profile({"ids": win_ids}, name="test")
+    assert res["companies_scored"] >= 90
 
     s = temp_db.SessionLocal()
-    la, pa, bl = s.get(Company, la_id), s.get(Company, pa_id), s.get(Company, bl_id)
-    assert la.fit_score == 100.0                       # modal value on every scored feature
-    assert pa.fit_score is not None and pa.fit_score < la.fit_score
+    me, ti, bl = (s.get(Company, metall_id), s.get(Company, tisch_id),
+                  s.get(Company, bl_id))
+    assert me.fit_score > 50 > ti.fit_score, (me.fit_score, ti.fit_score)
     assert bl.fit_score is None and bl.target_score is None   # nothing comparable -> unrated, not 0
-    feats = {f["feature"] for f in la.fit_breakdown["features"]}
+    feats = {f["feature"] for f in me.fit_breakdown["features"]}
     assert "sales_channel" not in feats               # 100%-uniform -> excluded
     assert "sub_segment" in feats
     s.close()
+
+
+def test_availability_leakage_is_detected_and_excluded(temp_db):
+    """A feature known for winners far more often than for the population is
+    measuring 'we already engaged this account', not fit. Live cases: products
+    (13.4x), Betriebsgröße (13.7x), Firmenalter (11.9x), Anzeigen-Aktivität
+    (9.6x) — all only exist for the enriched/monitored base, which WAS the old
+    buyers-only export. Scoring on them yields a confident model that says
+    'accounts we already sell to, buy from us'."""
+    from adwatch.insights import icp
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    win_ids = []
+    for i in range(40):
+        # winners are enriched (products known)
+        c = Company(name=f"Gewinner {i}", country="DE", segment="Handel",
+                    sub_segment="Bauelementehandel", postal_code="49134",
+                    products=["Fenster"])
+        s.add(c); s.flush(); win_ids.append(c.id)
+    for i in range(160):
+        # the population is not enriched at all
+        s.add(Company(name=f"Rest {i}", country="DE", segment="Handel",
+                      sub_segment="Bauelementehandel", postal_code="49134"))
+    s.commit(); s.close()
+
+    p = icp.build_profile({"ids": win_ids})
+    prod = p["features"]["products"]
+    assert prod["coverage"] == 1.0
+    assert prod["pop_coverage"] < 0.3
+    assert prod["leaky"] is True, prod
+    assert p["features"]["sub_segment"]["leaky"] is False
+
+    # and the leaky feature must not contribute to any score
+    fit, bd = icp.fit_for({"products": ["Fenster"], "sub_segment": "Bauelementehandel",
+                           "segment": "Handel"}, p)
+    assert "products" not in {b["feature"] for b in bd}
 
 
 def test_downgrade_resets_collected_ads(temp_db):
