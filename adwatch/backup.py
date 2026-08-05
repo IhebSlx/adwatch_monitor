@@ -40,14 +40,46 @@ def backup_now(tag: str = "") -> str | None:
         stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         name = f"adwatch_{stamp}{('_' + tag) if tag else ''}.db"
         dest = config.BACKUP_DIR / name
-        with sqlite3.connect(str(src)) as s, sqlite3.connect(str(dest)) as d:
+        # NB: sqlite3's context manager commits/rolls back a TRANSACTION — it does
+        # NOT close the connection. Left to `with` alone this leaks a handle per
+        # backup on a long-running server and keeps the file locked on Windows,
+        # which is why the cleanup of stale backups failed with WinError 32.
+        s = sqlite3.connect(str(src))
+        d = sqlite3.connect(str(dest))
+        try:
             s.backup(d)             # online, consistent, no exclusive lock
+        finally:
+            d.close()
+            s.close()
+        # An EMPTY database must never consume a retention slot. Backups are
+        # rotated by count, so snapshots of a fresh/throwaway DB (test fixtures,
+        # a first run before import) would evict real ones — that is exactly how
+        # 13 of 14 retained backups became 4 KB files and the only usable copy
+        # was one rotation away from deletion.
+        if not _has_content(dest):
+            dest.unlink(missing_ok=True)
+            logger.warning("DB backup skipped: source has no companies (%s)", src)
+            return None
         _rotate()
         logger.info("DB backup written: %s", dest)
         return str(dest)
     except Exception:
         logger.exception("DB backup failed")
         return None
+
+
+def _has_content(path) -> bool:
+    """Does this snapshot actually hold company data? Cheap guard against
+    spending a retention slot on an empty database."""
+    c = None
+    try:
+        c = sqlite3.connect(str(path))
+        return bool(c.execute("SELECT COUNT(*) FROM companies").fetchone()[0])
+    except Exception:      # noqa: BLE001 — no table yet == nothing worth keeping
+        return False
+    finally:
+        if c is not None:
+            c.close()
 
 
 def _rotate() -> None:

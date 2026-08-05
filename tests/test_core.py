@@ -182,9 +182,18 @@ def test_company_score_zero_ads_is_zero():
 
 @pytest.fixture()
 def temp_db(tmp_path, monkeypatch):
-    """Point the app at a throwaway SQLite file for this test."""
+    """Point the app at a throwaway SQLite file for this test.
+
+    ADWATCH_DATA_DIR is redirected too, not just the DB URL: init_db() takes a
+    startup backup, and without this every test wrote a 4 KB snapshot of its empty
+    temp database into the REAL data/backups/ and then rotated — so running the
+    test suite silently destroyed the production backups. 13 of 14 retained
+    backups were test junk before this was fixed.
+    """
     db = tmp_path / "t.db"
     monkeypatch.setenv("ADWATCH_DB_URL", f"sqlite:///{db}")
+    monkeypatch.setenv("ADWATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ADWATCH_BACKUP_DIR", str(tmp_path / "backups"))
     # rebuild the engine bound to the temp URL
     import importlib
     from adwatch import config as cfg
