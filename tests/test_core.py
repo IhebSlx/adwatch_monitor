@@ -962,6 +962,59 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_crm_fetch_sends_select_as_a_string_and_reads_labels(temp_db, monkeypatch):
+    """Two things verified against the live flow, pinned here.
+
+    $select must be a COMMA-SEPARATED STRING — Power Automate passes it straight
+    into the Dataverse query, and a JSON array silently returns no columns.
+
+    And picklists arrive as an integer PLUS a FormattedValue label, so the app
+    needs no option-set mapping. Confirmed live: 102 / "Architekten"."""
+    from sqlalchemy import select
+    from adwatch import crm_accounts, flows
+    from adwatch.models import Company
+
+    sent = {}
+
+    def fake_post(role, payload, **kw):
+        sent["role"] = role
+        sent["payload"] = payload
+        return {"value": [{
+            "accountid": "11111111-1111-1111-1111-111111111111",
+            "name": "Interessent GmbH",
+            "modifiedon": "2026-08-05T12:00:00Z",
+            "sl_customer_segment": 102,
+            "sl_customer_segment@OData.Community.Display.V1.FormattedValue": "Architekten",
+            "sl_customer_or_prospect": 102690000,
+            "statecode": 0,
+        }]}
+    monkeypatch.setattr(flows, "post", fake_post)
+
+    rows = crm_accounts.fetch_accounts("statecode eq 0", top=3)
+    assert sent["role"] == "crm_query"
+    assert isinstance(sent["payload"]["select"], str), "$select must be a string"
+    assert "accountid" in sent["payload"]["select"].split(",")
+    assert sent["payload"]["top"] == 3
+    assert len(rows) == 1
+
+    res = crm_accounts.upsert_accounts(rows)
+    assert res["inserted"] == 1
+    with temp_db.SessionLocal() as s:
+        c = s.scalar(select(Company).where(Company.name == "Interessent GmbH"))
+        assert c.segment == "Architekten"        # the LABEL, not 102
+
+    # a scope must never run without a filter, or it would pull the whole org
+    with pytest.raises(ValueError):
+        crm_accounts.load_scope("")
+    # the prospect scope is the one the ICP needs — keep it addressable by name
+    assert "prospects" in crm_accounts.SCOPES
+    assert "102690000" in crm_accounts.SCOPES["prospects"][1]
+
+    # delta uses our newest modifiedon as the watermark
+    out = crm_accounts.sync_delta()
+    assert "modifiedon gt" in (out["filter"] or "")
+
+
 def test_crm_sync_never_overwrites_what_we_paid_for(temp_db):
     """The whole point of the ownership map. CRM owns master data; a sync must not
     touch enrichment, locked pages, scores or ad history — that is the expensive

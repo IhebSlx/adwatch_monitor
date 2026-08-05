@@ -536,6 +536,57 @@ def run_report_def(def_id: int, payload: RunReportDefIn = RunReportDefIn()):
         raise HTTPException(400, str(e))
 
 
+class CrmLoadIn(BaseModel):
+    scope: str | None = None        # a key from crm_accounts.SCOPES
+    filter: str | None = None       # or a raw OData filter
+    top: int = 5000
+
+
+@app.get("/api/crm/status")
+def crm_status_route():
+    """Is the CRM link usable, and what do we hold? Answers 'why is the sync
+    button greyed out' without the user reading a log."""
+    from . import crm_accounts, flows
+    return {
+        "configured": flows.is_configured("crm_query"),
+        "hint": None if flows.is_configured("crm_query") else flows.missing_message("crm_query"),
+        "watermark": crm_accounts.watermark(),
+        "scopes": [{"key": k, "label": lbl, "filter": f}
+                   for k, (lbl, f) in crm_accounts.SCOPES.items()],
+        "fields": crm_accounts.select_fields(),
+    }
+
+
+@app.post("/api/crm/sync")
+def crm_sync_route():
+    """Delta sync: everything changed or created in CRM since our watermark."""
+    from . import crm_accounts
+    try:
+        return crm_accounts.sync_delta()
+    except RuntimeError as e:      # flow unreachable / not configured
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/crm/load")
+def crm_load_route(payload: CrmLoadIn):
+    """Scoped load — deliberately widens the local base (a country, a person's
+    portfolio, the prospects). Kept separate from the delta sync so a nightly job
+    can never widen the database by accident."""
+    from . import crm_accounts
+    flt = payload.filter
+    if payload.scope:
+        entry = crm_accounts.SCOPES.get(payload.scope)
+        if not entry:
+            raise HTTPException(400, f"Unbekannter Scope: {payload.scope}")
+        flt = entry[1]
+    try:
+        return crm_accounts.load_scope(flt or "", payload.top)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/report-events")
 def report_events_route(limit: int = 200):
     """Report creation + delivery history for the Logs tab."""

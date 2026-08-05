@@ -232,6 +232,75 @@ def watermark() -> str | None:
     return newest.strftime("%Y-%m-%dT%H:%M:%SZ") if newest else None
 
 
+def fetch_accounts(filter_query: str = "", top: int = 5000) -> list[dict]:
+    """Pull account rows through the configured crm_query flow.
+
+    `select` is sent as a COMMA-SEPARATED STRING, not a list: the Power Automate
+    Dataverse action passes it straight into $select, which is a string. Sending a
+    JSON array silently yields no columns.
+
+    The flow returns Dataverse's rows verbatim, which means picklists arrive as an
+    integer PLUS a FormattedValue label — verified live, e.g. sl_customer_segment
+    102 alongside "Architekten". That is exactly what upsert_accounts reads, so no
+    option-set mapping is needed anywhere in the app.
+    """
+    from . import flows
+
+    payload = {"entity": "accounts", "select": ",".join(select_fields()),
+               "filter": filter_query or "", "top": int(top)}
+    body = flows.post("crm_query", payload)
+    if isinstance(body, list):
+        return body
+    rows = body.get("value") if isinstance(body, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
+def sync_delta(top: int = 5000) -> dict:
+    """Everything changed or created in CRM since the newest modifiedon we hold.
+
+    One filter catches both cases: a brand-new account has a modifiedon too. Only
+    ~12 accounts change per day in this org, so this stays a small nightly call.
+    Inserts are ALLOWED because a new CRM account is exactly what we want to learn
+    about — but see load_scope() for deliberately widening the base.
+    """
+    mark = watermark()
+    flt = f"modifiedon gt {mark}" if mark else ""
+    if flt:
+        flt += " and statecode eq 0"
+    rows = fetch_accounts(flt, top)
+    result = upsert_accounts(rows)
+    result["watermark_used"] = mark
+    result["filter"] = flt
+    return result
+
+
+def load_scope(filter_query: str, top: int = 5000) -> dict:
+    """A deliberate one-off load of a scope we don't hold yet — a country, a
+    salesperson's portfolio, or the prospects.
+
+    Separate from sync_delta because the intent differs: this WIDENS the database
+    on purpose, so it must be an explicit act with an explicit filter rather than
+    something a nightly job can do by accident.
+    """
+    if not (filter_query or "").strip():
+        raise ValueError("Ein Scope braucht einen Filter — sonst lädt er alles.")
+    rows = fetch_accounts(filter_query, top)
+    result = upsert_accounts(rows)
+    result["filter"] = filter_query
+    return result
+
+
+# Ready-made scopes. The first one matters most: it is the population the ICP has
+# never had — companies in CRM that are NOT customers. See the backtest finding
+# (dealer base rate 87%, so almost no negative examples to learn from).
+SCOPES: dict[str, tuple[str, str]] = {
+    "prospects": ("Interessenten (keine Kunden)",
+                  "statecode eq 0 and sl_customer_or_prospect eq 102690000"),
+    "customers": ("Kunden", "statecode eq 0 and sl_customer_or_prospect eq 102690001"),
+    "all_active": ("Alle aktiven Firmen", "statecode eq 0"),
+}
+
+
 def select_fields() -> list[str]:
     """The $select list for a sync — exactly the fields we map, nothing more.
     Keeps payloads small and makes it obvious what the app actually consumes."""
