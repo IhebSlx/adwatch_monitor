@@ -159,7 +159,83 @@ Gibt es Interessenten (= die fehlenden Negativbeispiele)?
 https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$top=3&$filter=sl_customer_or_prospect ne 102690001&$select=name,sl_customer_or_prospect,sl_customer_segment,slx_revenue_current_year
 ```
 
-## 10. Bilanz
+## 10. Option-Sets — durch Join auf `crm_id` decodiert, ohne Metadaten-Abfrage
+
+`sl_customer_segment` (kleine Integer, NICHT das 102690xxx-Schema):
+
+| Code | Label | Beweis |
+|---|---|---|
+| **100** | **Handel** | FenSon GmbH, Lebenstraum Terrasse — lokal beide „Handel" |
+| **101** | **Verarbeiter** | ESA Metallbau Meisterbetrieb — lokal „Verarbeiter" |
+| **102** | **Architekten** | ABA Architektur + Kommunikation, IB Segelbacher (Ingenieurbüro) |
+| 105 | ? (Wohnungswirtschaft?) | Manke Wohnen GmbH & Co. KG |
+
+`sl_customer_or_prospect`:
+
+| Code | Bedeutung | Beweis |
+|---|---|---|
+| **102690001** | **Kunde** | alle mit gefülltem `slx_revenue_current_year` |
+| **102690000** | **Interessent** | alle drei Stichproben, Umsatz durchgängig `null` |
+
+`sl_sales_channel` auf `account` = dasselbe Option-Set wie auf `opportunity`
+(102690001 Fachhandelsvertrieb, 102690003 Architektenberatung — bestätigt).
+
+**Methode:** die restlichen Labels brauchen keine Metadaten-Abfrage. Für jeden
+Account, den wir lokal haben, kennen wir das Label bereits — ein Join über
+`crm_id` decodiert das komplette Option-Set aus den eigenen Daten.
+
+## 11. ⚠ Korrektur: der „Full Load" ist NICHT erledigt
+
+Frühere Annahme in diesem Projekt: die Excel-Basis (4.609 Accounts mit GUID) sei
+ein vollständiger Erstabzug, es brauche nur noch Delta-Sync. **Das ist falsch.**
+
+Von 9 stichprobenartig aus CRM geholten Accounts sind **6 lokal nicht vorhanden** —
+darunter **alle drei Interessenten** und mehrere französische Firmen (LIGERON
+FERMETURES, ALTERNATIVE MENUISERIE SAVOIE, The Mount Studio Architects).
+
+Der Excel-Export enthielt offenbar nur **Kunden**. Die lokale Basis ist eine
+**Teilmenge** von `account`, und die fehlende Teilmenge ist ausgerechnet die
+statistisch entscheidende: Firmen **ohne** Umsatz.
+
+Das verbindet sich direkt mit dem Backtest-Ergebnis: die ICP kann nicht ranken,
+weil die Basisquote bei Händlern 87 % ist — es fehlen Negativbeispiele. Die
+Interessenten in CRM **sind** diese Negativbeispiele. Ein Full Load über
+`sl_customer_or_prospect eq 102690000` ist damit nicht nur Datenpflege, sondern
+die Voraussetzung dafür, dass die ICP überhaupt funktioniert.
+
+## 12. Umsatz und Anreicherung — Füllstände (Stichprobe)
+
+| Feld | Befund | Konsequenz |
+|---|---|---|
+| `slx_revenue_current_year` (+`_1`…`_4`) | ✅ **gefüllt** (1.200 / 22.749 / 13 €) | Synchronisierbar. Risiko endgültig ausgeräumt. |
+| `numberofemployees` | ✅ **gepflegt** (1, 12, 7, 2, 5) | **Anreicherung hier evtl. überflüssig** — Füllstand zählen! |
+| `sl_founding_date` | ⚠ teilweise (2 von 5) | Anreicherung als Lückenfüller behalten |
+| `sl_corporate_form` | ✘ **5 von 5 null** | wirkt ungenutzt → Anreicherung behalten |
+
+⚠ Die Abfrage filterte auf `numberofemployees ne null` — sie beweist Existenz,
+**nicht** den Füllstand. Zählabfrage nötig (unten).
+
+## 13. Zählabfragen — jetzt die wichtigsten
+
+Wie viele Interessenten gibt es? (= wie viele Negativbeispiele bekommt die ICP)
+```
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$count=true&$top=1&$filter=sl_customer_or_prospect eq 102690000 and statecode eq 0
+```
+
+Wie viele Accounts insgesamt? (= wie groß ist die Lücke zu unseren 4.618)
+```
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$count=true&$top=1&$filter=statecode eq 0
+```
+
+Lohnt es, `numberofemployees` NICHT mehr anzureichern?
+```
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$count=true&$top=1&$filter=statecode eq 0 and numberofemployees ne null
+```
+
+⚠ `@odata.count` cappt bei 5.000 (Falle 12 im Inventar) — ein Ergebnis von genau
+5.000 heißt „mindestens 5.000".
+
+## 14. Bilanz
 
 | | Felder |
 |---|---|
