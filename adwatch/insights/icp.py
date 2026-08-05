@@ -29,6 +29,7 @@ import re
 
 from sqlalchemy import func, select
 
+from .. import scope
 from ..db import SessionLocal
 from ..models import Company, IcpProfile, WeeklyCompanyMetric
 
@@ -171,10 +172,13 @@ def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
         # built from everyone just mirrors the population and ranks nothing.
         filters = {"customer_state": ["active", "new"],
                    "exclude_segment": list(WINNER_EXCLUDED_SEGMENTS)}
-    elif not filters.get("ids"):
-        # An explicit filter is respected, but consumers still never DEFINE the
-        # profile unless they were hand-picked by id. Any exclusion the caller
-        # set is kept and extended, not replaced.
+    elif not filters.get("include_consumers"):
+        # An explicit filter is respected, but consumers never DEFINE the profile.
+        # Keyed on include_consumers, not on whether ids were supplied: a
+        # hand-picked id list used to be treated as consent, which is exactly the
+        # kind of "explicit enough" door that kept 36% of the base leaking into
+        # counts nobody meant to include. Any exclusion the caller set is kept and
+        # extended, not replaced.
         already = list(filters.get("exclude_segment") or [])
         filters["exclude_segment"] = already + [s for s in WINNER_EXCLUDED_SEGMENTS if s not in already]
 
@@ -288,7 +292,10 @@ def apply_profile(filters: dict | None = None, name: str = "ICP") -> dict:
         profile_id = row.id
 
         ads = _ad_presence_map()
-        for c in s.scalars(select(Company)):
+        # Consumers are out of scope entirely (adwatch/scope.py) — they are not
+        # companies that can be acquired, so they get no scores at all rather
+        # than a score that would then have to be filtered out of every view.
+        for c in s.scalars(scope.apply(select(Company))):
             fit, breakdown = fit_for(company_features(c, ads), profile)
             c.fit_score = fit
             c.fit_breakdown = {"profile_id": profile_id, "features": breakdown} if breakdown else None

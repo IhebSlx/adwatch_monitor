@@ -9,7 +9,7 @@ from collections import Counter
 
 from sqlalchemy import func, select
 
-from . import config
+from . import config, scope
 from .db import SessionLocal
 from .products import canonical_products
 from .models import (
@@ -29,9 +29,15 @@ STATUS_LABELS = {
 PAGE_STATUS_LABELS = {"confirmed": "confirmed", "auto": "auto-linked", "manual": "manually set"}
 
 
-def list_companies() -> list[dict]:
+def list_companies(include_consumers: bool = False) -> list[dict]:
+    """Every company in scope — consumers excluded (see adwatch/scope.py), which
+    is what makes the dashboard's denominator the partner base rather than the
+    whole address book."""
     with SessionLocal() as s:
-        rows = s.scalars(select(Company).order_by(Company.name)).all()
+        stmt = select(Company).order_by(Company.name)
+        if not include_consumers:
+            stmt = scope.apply(stmt)
+        rows = s.scalars(stmt).all()
         out = []
         for c in rows:
             pages = s.scalars(select(CompanyPage)
@@ -190,14 +196,21 @@ def _merged_weekly_series(s, company_id: int) -> list[dict]:
     return out
 
 
-def latest_metrics(company_ids: list[int] | None = None) -> list[dict]:
+def latest_metrics(company_ids: list[int] | None = None,
+                   include_consumers: bool = False) -> list[dict]:
     """Latest weekly metric per company (merged across sources) + previous-week
     context, score, freshness. `company_ids` restricts the result to that set
-    (e.g. a Companies Explorer filter), in DB order (name) when omitted."""
+    (e.g. a Companies Explorer filter), in DB order (name) when omitted.
+
+    Consumers are excluded even when explicitly listed in `company_ids`: this
+    feeds every KPI, flag and report, so the scope rule has to hold regardless of
+    how the caller arrived at its id list."""
     with SessionLocal() as s:
         stmt = select(Company).order_by(Company.name)
         if company_ids is not None:
             stmt = stmt.where(Company.id.in_(company_ids))
+        if not include_consumers:
+            stmt = scope.apply(stmt)
         companies = s.scalars(stmt).all()
         out = []
         for c in companies:

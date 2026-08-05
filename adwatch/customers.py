@@ -22,7 +22,7 @@ import re
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from . import config
+from . import config, scope
 from .db import SessionLocal
 from .models import Company
 
@@ -369,6 +369,16 @@ def import_excel(file_bytes: bytes) -> dict:
 # ---------------------------------------------------------------------------
 
 def _apply_filters(stmt, f: dict):
+    # Consumers are out of scope for everything (see adwatch/scope.py) — applied
+    # FIRST and unconditionally, so no filter combination, hand-picked id list or
+    # forgotten frontend default can put them back into a count, export or report.
+    # `include_consumers` is the one deliberate way in and nothing sets it by
+    # default; asking for the segment by name also still works, so a consumer
+    # record can be looked up on purpose.
+    asked_for_consumers = any(
+        s in (f.get("segment") or []) for s in scope.EXCLUDED_SEGMENTS)
+    if not (f.get("include_consumers") or asked_for_consumers):
+        stmt = scope.apply(stmt)
     # Explicit selection (hand-picked company ids, e.g. "report for selected"):
     # restrict to exactly these. Kept first so it composes with any other
     # filters, though the selection flow normally passes ids alone.

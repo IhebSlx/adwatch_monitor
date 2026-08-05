@@ -897,9 +897,15 @@ def test_icp_winners_never_include_consumers(temp_db):
     assert set(p2["winners_filter"]["exclude_segment"]) == {"Handel", "Private Endkunden"}
     assert p2["winners_count"] == 0
 
-    # hand-picked ids remain an explicit override (deliberate consumer profiling)
+    # A hand-picked id list is NO LONGER an override. Consumers are out of scope
+    # globally (adwatch/scope.py) precisely because "explicit enough" doors kept
+    # letting 36% of the base back into counts nobody meant to include them in.
     p3 = icp.build_profile({"ids": consumer_ids})
-    assert p3["winners_count"] == len(consumer_ids)
+    assert p3["winners_count"] == 0
+
+    # deliberate consumer profiling now goes through the one named override
+    p4 = icp.build_profile({"ids": consumer_ids, "include_consumers": True})
+    assert p4["winners_count"] == len(consumer_ids)
 
 
 def test_intercompany_never_winner_never_target(temp_db):
@@ -945,6 +951,55 @@ def test_intercompany_never_winner_never_target(temp_db):
     assert linara.target_score is None                  # never on the call list
     assert linara.fit_score is not None                 # but still described
     s.close()
+
+
+def test_consumers_are_excluded_from_every_count(temp_db):
+    """Private Endkunden are 36% of the base and none of them will ever run an ad
+    campaign, so including them made every ratio wrong ("14 of 4618"). They stay in
+    the database but must not reach a single count, list or report — and no filter
+    combination may put them back."""
+    from sqlalchemy import select
+    from adwatch import scope, services
+    from adwatch.customers import _apply_filters
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name="Partner Handel", segment="Handel", country="DE"),
+        Company(name="Partner Verarbeiter", segment="Verarbeiter", country="DE"),
+        Company(name="Herr Müller", segment="Private Endkunden", country="DE"),
+        Company(name="Frau Schmidt", segment="Private Endkunden", country="DE"),
+        Company(name="Unklar", segment=None, country="DE"),   # unknown != consumer
+    ])
+    s.commit(); s.close()
+
+    def names(f):
+        with temp_db.SessionLocal() as s2:
+            return {c.name for c in s2.scalars(_apply_filters(select(Company), f))}
+
+    partners = {"Partner Handel", "Partner Verarbeiter", "Unklar"}
+    assert names({}) == partners                       # no filter at all
+    assert names({"country": ["DE"]}) == partners      # an unrelated filter
+    # a hand-picked id list must not smuggle them back in
+    with temp_db.SessionLocal() as s2:
+        all_ids = [c.id for c in s2.scalars(select(Company))]
+    assert names({"ids": all_ids}) == partners
+    # nor may an explicit "don't exclude anything" style filter
+    assert names({"exclude_segment": []}) == partners
+
+    # the read model the dashboard KPIs are built from
+    assert {c["name"] for c in services.list_companies()} == partners
+    assert {m["company"] for m in services.latest_metrics()} == partners
+    # even when consumer ids are passed in explicitly
+    assert {m["company"] for m in services.latest_metrics(all_ids)} == partners
+
+    # a NULL segment is kept — unknown is not the same as consumer
+    assert scope.is_in_scope(None) and scope.is_in_scope("Handel")
+    assert not scope.is_in_scope("Private Endkunden")
+
+    # the deliberate ways in still work, so the data is not unreachable
+    assert "Herr Müller" in names({"include_consumers": True})
+    assert names({"segment": ["Private Endkunden"]}) == {"Herr Müller", "Frau Schmidt"}
 
 
 def test_legal_form_must_occur_in_the_source_text():
