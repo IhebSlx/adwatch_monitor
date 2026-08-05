@@ -705,10 +705,16 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
         return path
 
     if shown < 5:
+        # German needs the singular here — "Es werden 1 Firmen gezeigt" appeared in
+        # a report that actually went out to colleagues.
+        shown_de = "wird 1 Firma" if shown == 1 else f"werden {shown} Firmen"
+        active_de = (f"nur 1 von {len(all_metrics)} Firmen im Bericht-Umfang aktive Anzeigen hatte"
+                     if n_active == 1 else
+                     f"nur {n_active} von {len(all_metrics)} Firmen im Bericht-Umfang aktive "
+                     "Anzeigen hatten")
         story.append(Paragraph(
-            f"<b>Hinweis:</b> Es werden {shown} Firmen gezeigt, weil in der letzten Erfassung "
-            f"nur {n_active} von {len(all_metrics)} Firmen im Bericht-Umfang aktive Anzeigen "
-            "hatten — die Liste ist nicht gekürzt.", note))
+            f"<b>Hinweis:</b> Es {shown_de} gezeigt, weil in der letzten Erfassung "
+            f"{active_de} — die Liste ist nicht gekürzt.", note))
         story.append(Spacer(1, 8))
 
     enr = _enrichment_map([d["company_id"] for d in top])
