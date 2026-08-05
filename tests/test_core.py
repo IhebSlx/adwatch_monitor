@@ -2043,3 +2043,123 @@ def test_unlink_resets_collected_ads(temp_db):
     c = s.get(Company, cid)
     assert c.page_id is None and c.resolution_status in ("ambiguous", "pending")
     s.close()
+
+
+# ---------------------------------------------------------------------------
+# Belege / RFM — the corrections that make churn detection meaningful
+# ---------------------------------------------------------------------------
+
+def _ev(*items):
+    """[(date, amount)] from (iso, amount) pairs."""
+    import datetime as _dt
+    return [(_dt.date.fromisoformat(d), a) for d, a in items]
+
+
+def test_cadence_is_measured_not_assumed():
+    """A dealer ordering every 14 days that has been quiet 120 days is overdue;
+    a Wohnungswirtschaft ordering yearly at 120 days is not. A fixed 12-month
+    cutoff cannot tell these apart, which is the whole point of the module."""
+    from adwatch.insights import rfm
+    import datetime as dt
+    today = dt.date(2026, 8, 5)
+
+    fortnightly = _ev(("2025-06-01", 5000), ("2025-06-15", 5000),
+                      ("2025-06-29", 5000), ("2026-04-01", 5000))
+    r = rfm.classify(fortnightly, today)
+    assert r["cadence_days"] == 14
+    assert r["health"] in ("gefährdet", "verloren")
+    assert r["overdue_factor"] > 3
+
+    yearly = _ev(("2022-01-10", 90000), ("2023-01-20", 90000),
+                 ("2024-02-01", 90000), ("2025-06-01", 90000))
+    r2 = rfm.classify(yearly, today)
+    assert r2["cadence_days"] >= 365
+    assert r2["health"] == "aktiv", r2
+
+
+def test_spare_parts_only_is_not_a_system_customer():
+    """~25% of Belege are 0 EUR and the median is EUR 194. Without a materiality
+    floor a gasket order makes a company look like a customer and poisons any ICP
+    trained on 'buyers'."""
+    from adwatch.insights import rfm
+    import datetime as dt
+    today = dt.date(2026, 8, 5)
+    trivial = _ev(("2026-01-05", 0), ("2026-02-05", 120), ("2026-03-05", 80),
+                  ("2026-04-05", 300))
+    assert rfm.classify(trivial, today)["health"] == "einmalig"
+    # the same monthly rhythm, but material and still current, is a live customer
+    real = _ev(("2026-04-05", 9000), ("2026-05-05", 9000), ("2026-06-05", 9000),
+               ("2026-07-05", 9000))
+    assert rfm.classify(real, today)["health"] == "aktiv"
+
+
+def test_no_events_is_never_not_lost():
+    from adwatch.insights import rfm
+    r = rfm.classify([])
+    assert r["health"] == "nie" and r["value"] == 0.0
+    # and it must not produce a win-back rank — there is nothing to win back
+    assert rfm.winback_score(r, 0.0) == 0.0
+
+
+def test_winback_ad_signal_is_a_multiplier_and_value_is_log_scaled():
+    """50% of revenue sits with 66 companies, so a linear value term would make
+    the list nothing but whales; and an advertising lapsed customer must outrank
+    an equally-valuable silent one."""
+    from adwatch.insights import rfm
+    import datetime as dt
+    evs = _ev(("2024-01-05", 60000), ("2024-03-05", 60000),
+              ("2024-05-05", 60000), ("2024-07-05", 60000))
+    cls = rfm.classify(evs, dt.date(2026, 8, 5))
+    quiet = rfm.winback_score(cls, cls["value"])
+    ads = rfm.winback_score(cls, cls["value"], advertising=True)
+    assert ads > quiet > 0
+    # log scaling: 100x the revenue must not give anything like 100x the score
+    big = rfm.winback_score(cls, cls["value"] * 100)
+    assert big < quiet * 2
+
+
+def test_crm_import_refuses_a_truncated_download(tmp_path):
+    """A partial download must not be mistaken for the full population — it would
+    look like thousands of accounts had vanished."""
+    import json, pytest
+    from adwatch import crm_import
+    p = tmp_path / "part.json"
+    p.write_text(json.dumps({"cols": ["crm_id", "name"], "rows": [["a", "X"]]}),
+                 encoding="utf-8")
+    with pytest.raises(ValueError, match="partial"):
+        crm_import.load_export(p)
+
+
+def test_crm_import_never_writes_local_owned_columns():
+    """Enrichment, scores and linked ad identities survive a full re-import."""
+    from adwatch.crm_accounts import LOCAL_OWNED
+    from adwatch.crm_import import WRITES
+    assert not (WRITES & LOCAL_OWNED), sorted(WRITES & LOCAL_OWNED)
+
+
+def test_bulk_imported_companies_are_not_monitored(temp_db):
+    """46,000 CRM accounts must feed the ICP without flooding the ad pipeline."""
+    import json
+    from sqlalchemy import select
+    from adwatch import crm_import
+    from adwatch.models import Company
+    rows = [[f"guid-{i}", f"Firma {i}", "", 101, 101000, 102690001, 102690000,
+             "Deutschland", "49", "Ort", "", None, "2024-01-01",
+             0, 0, "", "", 0, 0, 0, 0, None, 0, 0, 0] for i in range(600)]
+    cols = ["crm_id", "name", "accountnumber", "segment", "sub_segment",
+            "sales_channel", "kunde_interessent", "country", "postal_code",
+            "city", "website", "employees", "created_on", "beleg_count",
+            "beleg_sum", "beleg_first", "beleg_last", "rev_2023", "rev_2024",
+            "rev_2025", "rev_2026", "avg_discount", "arch_projects",
+            "arch_won", "arch_won_value"]
+    p = temp_db.config.DATA_DIR if hasattr(temp_db, "config") else None
+    import tempfile, pathlib
+    f = pathlib.Path(tempfile.mkdtemp()) / "e.json"
+    f.write_text(json.dumps({"cols": cols, "rows": rows}), encoding="utf-8")
+    stats = crm_import.import_accounts(f)
+    assert stats["inserted"] == 600
+    with temp_db.SessionLocal() as s:
+        assert s.scalars(select(Company).where(Company.monitored.is_(False))).all()
+        c = s.scalars(select(Company).where(Company.crm_id == "guid-7")).one()
+        assert c.segment == "Verarbeiter" and c.sub_segment == "Fensterbau"
+        assert c.monitored is False

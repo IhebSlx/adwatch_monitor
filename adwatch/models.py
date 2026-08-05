@@ -97,6 +97,41 @@ class Company(Base):
     fit_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True)        # per-feature 'Warum' for the drawer
     scores_updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # ---- Belege (ax_sap_order) — the AUTHORITATIVE revenue source ----
+    # Measured 2026-08: `slx_revenue_current_year` is filled on only 2.9% of CRM
+    # accounts, so the revenue_y0..y4 snapshot above is near-empty for anyone
+    # outside the original Excel export. The SAP Belege are transaction-level,
+    # 99.9% of them carry a customer link, and they go back to 2019. Everything
+    # that ranks or scores should prefer these. The snapshot columns are kept
+    # untouched rather than overwritten, so nothing that already relied on them
+    # silently changes meaning — `effective_revenue()` in insights/rfm.py picks.
+    beleg_count: Mapped[int] = mapped_column(Integer, default=0)          # Belege in the loaded window
+    beleg_sum: Mapped[float] = mapped_column(Float, default=0.0)          # EUR, same window
+    beleg_first: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    beleg_last: Mapped[dt.date | None] = mapped_column(Date, nullable=True)  # -> Recency, the churn signal
+    beleg_by_year: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # {"2023": 12345.0, ...}
+    avg_discount: Mapped[float | None] = mapped_column(Float, nullable=True)  # Ø Grundrabatt = partner tier
+    # Prescriptor influence, from opportunity.slx_executingarchitect_accountid.
+    # Only 12.7% of opportunities name an architect, so a 0 here means "not
+    # recorded" at least as often as it means "influences nothing" — never rank
+    # a company DOWN on this, only up.
+    arch_projects: Mapped[int] = mapped_column(Integer, default=0)
+    arch_won: Mapped[int] = mapped_column(Integer, default=0)
+    arch_won_value: Mapped[float] = mapped_column(Float, default=0.0)
+    # Lifecycle from Beleg recency (see insights/rfm.classify) — distinct from
+    # customer_state, which is derived from the sparse snapshot columns.
+    health: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    winback_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    crm_synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Whether the ad-tracking pipeline should consider this company. The CRM
+    # population is ~46,000 active business accounts; ad monitoring costs money
+    # per company and is only wanted on a chosen subset. Bulk CRM imports land
+    # with monitored=False so they feed the ICP and the analysis without
+    # flooding the identity check, the fetch queue or the Explorer's ad views.
+    # Every row that existed before the bulk import stays monitored=True.
+    monitored: Mapped[bool] = mapped_column(Boolean, default=True)
+
     page_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     page_name: Mapped[str | None] = mapped_column(String(300), nullable=True)   # matched Facebook page name
     page_url: Mapped[str | None] = mapped_column(String(400), nullable=True)
@@ -412,6 +447,35 @@ class CrmOpportunity(Base):
     closed_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     crm_modified_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
+class CrmOrderEvent(Base):
+    """One purchase EVENT: a company + a day, with the Belege of that day summed.
+
+    Belege are not orders. 73,112 Belege collapse to 54,534 events (1.34 per
+    event) because a multi-line order is issued as several documents. Computing
+    an order rhythm on raw Belege gives medians of 0-3 days for big dealers and
+    makes churn detection meaningless — this table exists so the cadence is
+    measured on commercial events instead.
+
+    Two more properties of the raw data that this table deliberately preserves
+    rather than hides, because both matter when interpreting a number:
+      * ~25% of Belege are 0 EUR (warranty, samples, replacements). They are
+        real contact but not revenue, so `amount` can legitimately be 0.
+      * a Beleg can be negative (Storno/Retoure) — only 4 in the window, but
+        summing without care would silently lose them.
+    """
+    __tablename__ = "crm_order_events"
+    __table_args__ = (UniqueConstraint("company_id", "order_date",
+                                       name="uq_order_event_company_day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    order_date: Mapped[dt.date] = mapped_column(Date, index=True)
+    amount: Mapped[float] = mapped_column(Float, default=0.0)   # EUR, all Belege that day
+    beleg_count: Mapped[int] = mapped_column(Integer, default=1)
+    channel: Mapped[str | None] = mapped_column(String(40), nullable=True)   # ax_sales_channel
+    discount: Mapped[float | None] = mapped_column(Float, nullable=True)     # Ø Grundrabatt that day
 
 
 class IcpProfile(Base):

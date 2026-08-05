@@ -214,6 +214,29 @@ def _migrate(engine) -> None:
                   ELSE 'never' END
                 WHERE customer_state IS NULL
             """))
+        # companies: Belege (ax_sap_order) revenue + prescriptor influence + the
+        # `monitored` gate. All additive. `monitored` defaults to 1 and is
+        # backfilled to 1 so every company that existed before the bulk CRM
+        # import keeps its ad tracking; only bulk-imported rows arrive as 0.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("beleg_count", "INTEGER DEFAULT 0"), ("beleg_sum", "FLOAT DEFAULT 0"),
+                ("beleg_first", "DATE"), ("beleg_last", "DATE"),
+                ("beleg_by_year", "JSON"), ("avg_discount", "FLOAT"),
+                ("arch_projects", "INTEGER DEFAULT 0"), ("arch_won", "INTEGER DEFAULT 0"),
+                ("arch_won_value", "FLOAT DEFAULT 0"),
+                ("health", "VARCHAR(16)"), ("winback_score", "FLOAT"),
+                ("crm_synced_at", "DATETIME"),
+                ("monitored", "BOOLEAN DEFAULT 1"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            conn.execute(text("UPDATE companies SET monitored = 1 WHERE monitored IS NULL"))
+            for c, zero in (("beleg_count", "0"), ("beleg_sum", "0"),
+                            ("arch_projects", "0"), ("arch_won", "0"),
+                            ("arch_won_value", "0")):
+                conn.execute(text(f"UPDATE companies SET {c} = {zero} WHERE {c} IS NULL"))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
         cols = _existing_columns(conn, "fetch_jobs")
         if cols and "plan" not in cols:
