@@ -946,11 +946,84 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_domain_prepass_is_free_and_never_writes_a_verdict(temp_db, monkeypatch):
+    """The pre-pass must (a) never call the paid search, (b) write a proven domain,
+    and (c) write NOTHING on a miss — 'no website found' is a verdict only the
+    full run may reach, and stamping it here would hide the company from a later
+    Serper attempt."""
+    from adwatch.enrich import service as enrich_service, website_finder
+    from adwatch.models import Company, CompanyEnrichment
+
+    def _no_search(*a, **k):
+        raise AssertionError("the free pre-pass must never call Serper")
+    monkeypatch.setattr(website_finder, "search_candidates", _no_search)
+
+    s = temp_db.SessionLocal()
+    hit = Company(name="Mit Mail GmbH", country="DE", email="info@mitmail-gmbh.de",
+                  phone="0541 123456", postal_code="49080", city="Osnabrück")
+    miss = Company(name="Nur Freemail GmbH", country="DE", email="chef@t-online.de")
+    had = Company(name="Hat Schon GmbH", country="DE", website_domain="hatschon.de")
+    s.add_all([hit, miss, had]); s.commit()
+    hid, mid, did = hit.id, miss.id, had.id
+    s.close()
+
+    # the derived domain validates via the phone number on the page
+    monkeypatch.setattr(enrich_service.fetchpage, "page_bundle",
+                        lambda d: {"text": "Impressum Musterstr. 1, 49080 Osnabrück, Tel. 0541 123456",
+                                   "pages": [d]})
+
+    assert enrich_service.derive_domain(did)["status"] == "already_had"
+    r_hit = enrich_service.derive_domain(hid)
+    r_miss = enrich_service.derive_domain(mid)
+
+    assert r_hit["status"] == "domain_found" and r_hit["website"] == "mitmail-gmbh.de"
+    assert r_miss["status"] == "no_domain_derived"
+
+    s = temp_db.SessionLocal()
+    assert s.get(Company, hid).website_domain == "mitmail-gmbh.de"
+    # the miss is untouched: no website, no status, no enrichment row
+    m = s.get(Company, mid)
+    assert not m.website_domain
+    assert m.enrichment_status in (None, "none")
+    assert s.query(CompanyEnrichment).filter_by(company_id=mid).count() == 0
+    s.close()
+
+
+def test_default_step_order_puts_the_free_domain_pass_first():
+    """The default order is load-bearing, so it gets its own test.
+
+    Identity's only free AND authoritative tier crawls Company.website_domain.
+    Full enrichment fills that column but costs money (Serper + Haiku), while
+    deriving a domain from the company's own email is free. So the default must
+    be: free domains -> identity -> paid enrichment."""
+    from adwatch.jobs import DOMAIN_PREPASS, resolve_step_order
+
+    both = {"enrich": True, "identity": True, "ads": ["meta"], "report": "full",
+            "send_to": [1]}
+    assert resolve_step_order(both) == [DOMAIN_PREPASS, "identity", "enrich",
+                                        "ads", "report", "send"]
+
+    # the pre-pass only earns its place when it can actually feed the identity
+    # check — enrichment alone already does Tier 0 internally
+    assert resolve_step_order({"enrich": True}) == ["enrich"]
+    assert resolve_step_order({"identity": True}) == ["identity"]
+
+    # an explicit order wins, and anything selected but omitted is appended
+    # rather than silently dropped
+    assert resolve_step_order({"enrich": True, "identity": True,
+                               "order": ["enrich", "identity"]}) == ["enrich", "identity"]
+    assert resolve_step_order({"enrich": True, "identity": True, "report": "full",
+                               "order": ["enrich"]}) == ["enrich", "identity", "report"]
+
+    # 'send' lives under send_to, not a boolean
+    assert resolve_step_order({"report": "full", "send_to": [1]}) == ["report", "send"]
+    assert "send" not in resolve_step_order({"report": "full"})
+
+
 def test_pipeline_runs_steps_in_the_working_order(temp_db, monkeypatch):
-    """The pipeline must execute enrich -> identity -> ads -> report -> send, skip
-    unchecked steps, and never send without a report. The order is load-bearing:
-    enrichment supplies the website that the identity check crawls and that the
-    Google lookup needs."""
+    """The pipeline must execute domains -> identity -> enrich -> ads -> report ->
+    send, skip unchecked steps, and never send without a report. Execution has to
+    follow the RESOLVED order, not the order the code happens to be written in."""
     from adwatch import jobs
     from adwatch.models import Company, FetchJob, ReportRecipient
 
@@ -968,6 +1041,10 @@ def test_pipeline_runs_steps_in_the_working_order(temp_db, monkeypatch):
     import adwatch.report as report_mod
     import adwatch.emailer as emailer_mod
 
+    monkeypatch.setattr(enrich_service, "derive_domain",
+                        lambda cid, **k: calls.append(("domains", cid)) or {"status": "domain_found",
+                                                                           "website": "x.de", "source": "email_domain",
+                                                                           "validated_by": "phone"})
     monkeypatch.setattr(enrich_service, "enrich_company",
                         lambda cid, **k: calls.append(("enrich", cid)) or {"status": "enriched", "website": "x.de",
                                                                            "website_source": "email_domain",
@@ -986,23 +1063,36 @@ def test_pipeline_runs_steps_in_the_working_order(temp_db, monkeypatch):
 
     plan = {"enrich": True, "identity": True, "ads": ["meta"], "report": "full", "send_to": [rid]}
     job = jobs.create_pipeline_job(ids, plan, label="t")
-    assert job["total"] == 2 + 2 + 2 + 1 + 1          # enrich+identity per company, ads upper bound, report, send
+    # domains + identity + enrich per company, ads upper bound, report, send
+    assert job["total"] == 2 + 2 + 2 + 2 + 1 + 1
     jobs._run_pipeline(job["id"])                     # run inline, no thread
 
     order = [c[0] for c in calls]
-    assert order.index("enrich") < order.index("identity") < order.index("meta")
-    assert order.index("meta") < order.index("report") < order.index("send")
-    assert [c for c in calls if c[0] == "enrich"] == [("enrich", ids[0]), ("enrich", ids[1])]
+    # the free pass first, then identity, and only then the paid enrichment
+    assert order.index("domains") < order.index("identity") < order.index("enrich")
+    assert order.index("enrich") < order.index("meta") < order.index("report") < order.index("send")
+    assert [c for c in calls if c[0] == "domains"] == [("domains", ids[0]), ("domains", ids[1])]
     assert ("send", ("bd@x.de",)) in calls
 
     s = temp_db.SessionLocal()
     j = s.get(FetchJob, job["id"])
     assert j.status == "done"
     txt = " ".join(e["text"] for e in (j.log or []))
-    for marker in ("Schritt 1/5", "Schritt 2/5", "Schritt 3/5", "Schritt 4/5", "Schritt 5/5",
-                   "Pipeline abgeschlossen"):
+    for marker in ("Schritt 1/6", "Schritt 2/6", "Schritt 3/6", "Schritt 4/6",
+                   "Schritt 5/6", "Schritt 6/6", "Pipeline abgeschlossen"):
         assert marker in txt, marker
+    # the log states the order it used, and that it was the default
+    assert "Standard-Reihenfolge" in txt
     s.close()
+
+    # an explicit order is obeyed instead of the default
+    calls.clear()
+    job3 = jobs.create_pipeline_job(ids, {"enrich": True, "identity": True,
+                                          "order": ["enrich", "identity"]}, label="t3")
+    jobs._run_pipeline(job3["id"])
+    o3 = [c[0] for c in calls]
+    assert "domains" not in o3
+    assert o3.index("enrich") < o3.index("identity")
 
     # a plan with only some steps skips the rest; sending without a report is refused
     calls.clear()

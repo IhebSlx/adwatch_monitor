@@ -2084,19 +2084,38 @@
     };
   }
 
+  // Mirrors jobs.resolve_step_order() — the backend stays the authority, this
+  // only shows the user which order their selection will actually run in.
+  function pipelineOrder(p) {
+    const order = [];
+    if (p.enrich && p.identity) order.push("Domains ableiten (gratis)");
+    if (p.identity) order.push("Identität");
+    if (p.enrich) order.push("Anreichern");
+    if (p.ads.length) order.push(`Anzeigen (${p.ads.join("+")})`);
+    if (p.report) order.push("Bericht");
+    if (p.send_to.length) order.push(`Senden (${p.send_to.length})`);
+    return order;
+  }
+
   function renderPipelineSummary() {
     const p = pipelinePlan();
     const n = PIPE_IDS.length;
-    // per-company cost/time, deliberately rough and labelled as an estimate
+    // per-company cost/time, deliberately rough and labelled as an estimate.
+    // The free domain pre-pass costs nothing but does fetch each candidate page
+    // to validate it, so it costs TIME — don't hide that.
     let cost = 0, secs = 0;
+    if (p.enrich && p.identity) secs += n * 4;
     if (p.enrich) { cost += n * 0.004; secs += n * 8; }
     if (p.identity) { cost += n * 0.005; secs += n * 15; }
     if (p.ads.includes("meta")) { cost += n * 0.004; secs += n * 20; }
     if (p.ads.includes("google")) { cost += n * 0.012; secs += n * 110; }
-    const steps = [p.enrich && "Anreichern", p.identity && "Identität",
-                   p.ads.length && `Anzeigen (${p.ads.join("+")})`,
-                   p.report && "Bericht", p.send_to.length && `Senden (${p.send_to.length})`]
-                  .filter(Boolean);
+    const steps = pipelineOrder(p);
+    const orderEl = $("#pipelineOrder");
+    if (orderEl) {
+      orderEl.innerHTML = steps.length
+        ? `<b>Reihenfolge:</b> ${steps.map(esc).join(" → ")}`
+        : "";
+    }
     const fmt = s => s < 90 ? `${Math.round(s)} s` : (s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
     $("#pipelineSummary").innerHTML = `
       <div><div class="stat-label">Firmen</div><div class="stat-value">${n.toLocaleString("de-DE")}</div></div>

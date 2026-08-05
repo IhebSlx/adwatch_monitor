@@ -335,7 +335,7 @@
               <button id="custReportAllBtn" class="action-menu-item" title="PDF-Bericht — der verwendete Filter steht im Berichtskopf">📄 Report erstellen</button>
               <button id="custSaveReportBtn" class="action-menu-item" title="Diesen Filter als wiederkehrenden Bericht speichern (Empfänger + Zeitplan)">💾 Als Bericht speichern</button>
               <button id="custExportAllBtn" class="action-menu-item" title="Gefilterte Firmen als Excel exportieren">⬇ Excel-Export</button>
-              <button id="custPipelineBtn" class="action-menu-item" title="Mehrere Schritte in der richtigen Reihenfolge: anreichern → Identität → Anzeigen → Bericht → senden">🚀 Komplett-Pipeline…</button>
+              <button id="custPipelineBtn" class="action-menu-item" title="Mehrere Schritte in der günstigsten Reihenfolge: Domains gratis ableiten → Identität → anreichern → Anzeigen → Bericht → senden">🚀 Komplett-Pipeline…</button>
             </div>
           </div>
         </div>
@@ -389,30 +389,34 @@
         <div id="pipelinePanel" class="fetch-plan hidden">
           <h3>🚀 Komplett-Pipeline</h3>
           <p class="hint" id="pipelineScope"></p>
-          <p class="hint">Die Reihenfolge ist fest, weil die Schritte aufeinander aufbauen:
-            die <b>Anreicherung</b> findet die Website, die <b>Identitätsprüfung</b> nutzt genau
-            diese Website um die Meta-Seite zu finden, und der <b>Ad lookup</b> braucht beides
-            (Meta-Seite bzw. Website). Nicht gewählte Schritte werden übersprungen.</p>
+          <p class="hint">Du wählst <b>was</b> passiert — die <b>Reihenfolge</b> setzt die App
+            selbst, weil sie messbar über Kosten und Trefferquote entscheidet. Wenn Anreicherung
+            und Identitätsprüfung beide laufen, wird zuerst <b>kostenlos</b> die Domain aus der
+            eigenen E-Mail abgeleitet; die Identitätsprüfung kann dann ihre <b>gratis</b> Stufe
+            nutzen (Facebook-Link im Impressum der eigenen Website) statt der bezahlten Suche.
+            Details unter <b>„How it works“ → Reihenfolge</b>. Nicht gewählte Schritte werden
+            übersprungen.</p>
+          <p class="hint" id="pipelineOrder"></p>
 
           <div class="pipe-steps">
             <label class="pipe-step"><input type="checkbox" id="pipeEnrich" checked>
-              <span><b>1 · Daten anreichern</b><br><span class="muted small">Website finden + Beschreibung, Produkte, Größe, Marken (~$0,004/Firma)</span></span></label>
+              <span><b>Daten anreichern</b><br><span class="muted small">Website finden + Beschreibung, Produkte, Größe, Marken (~$0,004/Firma)</span></span></label>
             <label class="pipe-step"><input type="checkbox" id="pipeIdentity" checked>
-              <span><b>2 · Identitätsprüfung</b><br><span class="muted small">Meta-/Facebook-Seite ermitteln (~$0,005/Firma)</span></span></label>
+              <span><b>Identitätsprüfung</b><br><span class="muted small">Meta-/Facebook-Seite ermitteln (~$0,005/Firma, gratis wenn die Website sie nennt)</span></span></label>
             <label class="pipe-step"><input type="checkbox" id="pipeAds">
-              <span><b>3 · Ad lookup</b>
+              <span><b>Ad lookup</b>
                 <label class="pipe-sub"><input type="checkbox" id="pipeAdsMeta" checked> Meta</label>
                 <label class="pipe-sub"><input type="checkbox" id="pipeAdsGoogle"> Google</label>
                 <br><span class="muted small">Google ist langsam (~110 s/Firma), Meta ~20 s</span></span></label>
             <label class="pipe-step"><input type="checkbox" id="pipeReport" checked>
-              <span><b>4 · Bericht erstellen</b>
+              <span><b>Bericht erstellen</b>
                 <select id="pipeReportType" class="pipe-inline-sel">
                   <option value="full">Vollständig</option>
                   <option value="top5">Top 5</option>
                 </select>
                 <br><span class="muted small">Deutsches PDF inkl. Firmenprofile · kostenlos</span></span></label>
             <label class="pipe-step"><input type="checkbox" id="pipeSend">
-              <span><b>5 · Bericht senden</b><br><span class="muted small">an die unten gewählten Empfänger</span></span></label>
+              <span><b>Bericht senden</b><br><span class="muted small">an die unten gewählten Empfänger</span></span></label>
           </div>
 
           <div id="pipeRecipientsWrap" class="hidden" style="margin-top:8px">
@@ -715,6 +719,66 @@
             <td>Dashboard tab · <code>adwatch/insights/</code></td>
           </tr>
         </table>
+      </div>
+
+      <div class="card" id="help-order">
+        <h2>Reihenfolge — warum die Pipeline Domains zuerst ableitet</h2>
+        <p>Du wählst, <b>welche</b> Schritte laufen. Die <b>Reihenfolge</b> bestimmt die App, weil
+          sie nicht Geschmackssache ist: sie entscheidet messbar über Kosten und Trefferquote.</p>
+
+        <p>Der Grund liegt in der <b>Identitätsprüfung</b>. Sie hat drei Stufen, aber nur
+          <b>eine ist gleichzeitig kostenlos und beweiskräftig</b>: die eigene Website der Firma
+          nach ihrem selbst verlinkten Facebook-Auftritt durchsuchen. Ein solcher Link im
+          Impressum <i>ist</i> die Firma, die ihre eigene Seite benennt — deshalb wird das Ergebnis
+          fest <b>gesperrt</b> (<code>locked</code>) und von keiner späteren automatischen Prüfung
+          mehr überschrieben.</p>
+
+        <p>Im aktuellen Datenstand kamen <b>alle 84 gesperrten Identitäten</b> aus genau dieser
+          Stufe — während <b>296</b> die bezahlte Suche brauchten. Diese Stufe liest
+          <code>Company.website_domain</code>. Und gefüllt wird diese Spalte von der
+          <b>Anreicherung</b>.</p>
+
+        <p>Die Anreicherung ist aber nur zur <b>Hälfte</b> teuer: Websuche (Serper) und ein
+          Haiku-Aufruf kosten Geld, das Ableiten der Domain aus der <b>eigenen E-Mail-Adresse</b>
+          ist <b>gratis</b>. Genau dieser gratis Teil ist das Einzige, was die Identitätsprüfung
+          von der Anreicherung braucht. Deshalb wird er vorgezogen:</p>
+
+        <table class="info-table">
+          <tr><th>Schritt</th><th>Was passiert</th><th>Kosten</th></tr>
+          <tr><td><b>0 · Domains ableiten</b></td>
+              <td>Website aus der eigenen E-Mail-Domain ableiten (Freemail wird verworfen) und nur
+                  bei bewiesener Übereinstimmung speichern. Läuft automatisch, sobald Anreicherung
+                  <b>und</b> Identitätsprüfung gewählt sind.</td>
+              <td><b>gratis</b></td></tr>
+          <tr><td><b>1 · Identitätsprüfung</b></td>
+              <td>Kann jetzt für viel mehr Firmen die gratis Stufe nutzen → mehr
+                  <code>locked</code>, weniger bezahlte Suchen.</td>
+              <td>gratis bis ~$0,005</td></tr>
+          <tr><td><b>2 · Anreicherung</b></td>
+              <td>Bezahlte Suche + Fakten (Beschreibung, Produkte, Größe, Marken) für alles, was
+                  noch keine Website hat.</td>
+              <td>~$0,004/Firma</td></tr>
+          <tr><td><b>3 · Ad lookup</b></td>
+              <td>Meta braucht eine Seiten-ID, Google eine Domain — beides liefern die Schritte davor.</td>
+              <td>Apify-Kontingent</td></tr>
+          <tr><td><b>4 · Bericht · 5 · Senden</b></td>
+              <td>PDF aus dem Ergebnis, dann Versand.</td><td>gratis</td></tr>
+        </table>
+
+        <p class="hint">Warum nicht einfach die Identitätsprüfung zuerst? Weil sie der Anreicherung
+          <b>nichts</b> zurückgibt: die Website aus einer Facebook-Seite wird derzeit nicht
+          erfasst — gemessen <b>0×</b>. Die Abhängigkeit läuft nur in eine Richtung. Und eine
+          bestätigte Facebook-Seite erhöht das Vertrauen in die Website nicht, weil die Anreicherung
+          ihre eigene deterministische Prüfung hat (Telefon → PLZ+Straße → PLZ+Name → Domain+Name).</p>
+
+        <p class="hint"><b>Sicherheit:</b> Der gratis Vorlauf schreibt eine Domain nur, wenn diese
+          Prüfung sie <b>bewiesen</b> hat — eine unbewiesene Domain wird nie gespeichert und kann
+          deshalb auch keine falsche Facebook-Seite sperren. Findet er nichts, schreibt er
+          <b>nichts</b>: „keine Website gefunden“ wäre ein Urteil, das erst der vollen Anreicherung
+          zusteht, nachdem auch die Suche gelaufen ist.</p>
+
+        <p class="hint">Wer eine andere Reihenfolge braucht, kann sie explizit vorgeben
+          (<code>plan.order</code> im API-Aufruf) — dann gilt sie unverändert.</p>
       </div>
 
       <div class="card">

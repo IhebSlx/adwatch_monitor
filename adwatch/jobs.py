@@ -397,6 +397,14 @@ _ENRICH_LOG = {
     "error": lambda r: f"✗ {r.get('error') or 'Fehler'}",
 }
 
+# The free pre-pass. 'no_domain_derived' is explicitly NOT a verdict on the
+# company — Serper hasn't run yet — so the wording must not read like one.
+_DOMAIN_LOG = {
+    "domain_found": lambda r: f"✓ {r['website']} (aus {r['source']}/{r['validated_by']})",
+    "already_had": lambda r: f"– hatte schon {r['website']}",
+    "no_domain_derived": lambda r: "– keine Domain aus eigenen Daten ableitbar (Suche folgt)",
+}
+
 
 def _run_enrich_unit(job_id: int, idx: int, cid: int, company_name: str) -> None:
     """One company's enrichment (website + facts). A single company failing must
@@ -423,17 +431,31 @@ def _run_enrich_unit(job_id: int, idx: int, cid: int, company_name: str) -> None
 
 
 # ---------------------------------------------------------------------------
-# PIPELINE — several steps for one company set, in the only order that works.
+# PIPELINE — several steps for one company set, in the order measured to work
+# best. The order is not cosmetic; it follows a one-way dependency chain.
 #
-# The order is not cosmetic. Enrichment fills website_domain; the identity
-# check's cheapest and strongest tier is crawling the company's OWN website for
-# a social link, and the Google ad lookup needs a domain at all. So:
+# The identity check has three tiers, and only ONE is free AND authoritative:
+# crawling the company's OWN website for its self-declared Facebook link. In the
+# live base every single hard-`locked` identity came from that tier, while 296
+# needed the paid Serper tier. That tier reads Company.website_domain — and
+# enrichment is what fills it.
 #
-#   1 enrich   (finds the website + facts)      -> makes 2 and 3 far more effective
-#   2 identity (finds the Meta page)            -> makes the Meta lookup possible
-#   3 ads      (Meta needs a page, Google a domain)
-#   4 report   (needs whatever 1-3 produced)
+# But full enrichment is the EXPENSIVE half (Serper search + one Haiku call),
+# while the part identity actually needs — deriving a domain from the company's
+# own email — is free. So the default order splits enrichment in two:
+#
+#   0 domains  (free: derive website from own data)  -> only when 1 AND 2 both run
+#   1 identity (free tier now possible -> hard locks, fewer paid lookups)
+#   2 enrich   (paid: search + facts, for whatever is still missing)
+#   3 ads      (Meta needs a page, Google needs a domain)
+#   4 report   (needs whatever the earlier steps produced)
 #   5 send     (needs the report)
+#
+# Measured on the live base: 3,336 companies have no website, so identity's free
+# tier is impossible for them; 1,244 of those have a non-freemail email address
+# from which step 0 can derive one at zero API cost.
+#
+# An explicit plan["order"] overrides all of this, verbatim.
 #
 # Everything runs inside ONE FetchJob (kind='pipeline'), so the existing progress
 # overlay, cancel and job history work unchanged — and the log says exactly which
@@ -442,23 +464,66 @@ def _run_enrich_unit(job_id: int, idx: int, cid: int, company_name: str) -> None
 
 PIPELINE_STEPS = ("enrich", "identity", "ads", "report", "send")
 
+# Derived, never user-selected: the free domain pre-pass. It only earns its place
+# when enrichment and the identity check BOTH run, because its whole purpose is
+# to feed the identity check something enrichment would otherwise have supplied
+# too late to be useful.
+DOMAIN_PREPASS = "domains"
+
+# The default sequence. Note identity BEFORE enrich — the free pre-pass has
+# already handed it the only thing full enrichment gave it.
+_DEFAULT_ORDER = (DOMAIN_PREPASS, "identity", "enrich", "ads", "report", "send")
+
+_STEP_LABEL_DE = {
+    DOMAIN_PREPASS: "Domains ableiten (kostenlos)",
+    "identity": "Identitätsprüfung (Meta-Seite)",
+    "enrich": "Daten anreichern",
+    "ads": "Anzeigen abrufen",
+    "report": "Bericht erstellen",
+    "send": "Bericht senden",
+}
+
+
+def _step_selected(plan: dict, step: str) -> bool:
+    """'send' is stored as the recipient list, not a boolean."""
+    if step == "send":
+        return bool(plan.get("send_to"))
+    return bool(plan.get(step))
+
+
+def resolve_step_order(plan: dict) -> list[str]:
+    """Which steps run, in which order.
+
+    `plan["order"]` is honoured verbatim when given (unknown/unselected steps
+    dropped, anything selected but omitted appended so nothing is silently lost).
+    Otherwise the default above applies — including the free domain pre-pass when
+    both enrichment and the identity check are part of the run.
+    """
+    selected = [s for s in PIPELINE_STEPS if _step_selected(plan, s)]
+    explicit = plan.get("order")
+    if explicit:
+        ordered = [s for s in explicit if s in selected or s == DOMAIN_PREPASS]
+        return ordered + [s for s in selected if s not in ordered]
+    order = [s for s in _DEFAULT_ORDER if s in selected]
+    if plan.get("enrich") and plan.get("identity"):
+        order.insert(0, DOMAIN_PREPASS)
+    return order
+
 
 def pipeline_units(company_ids: list[int], plan: dict) -> int:
     """Total work units for a plan: one per company per active company-step,
     plus one each for report/send. Recomputed for the ads step at run time,
     because enrichment/identity change how many companies are fetchable."""
     n = len(company_ids)
+    order = resolve_step_order(plan)
     total = 0
-    if plan.get("enrich"):
-        total += n
-    if plan.get("identity"):
-        total += n
-    if plan.get("ads"):
-        total += n * len(plan["ads"])      # upper bound; refined when the step starts
-    if plan.get("report"):
-        total += 1
-    if plan.get("send_to"):
-        total += 1
+    for step in order:
+        if step in (DOMAIN_PREPASS, "enrich", "identity"):
+            total += n                     # one unit per company
+        elif step == "ads":
+            total += n * len(plan["ads"])  # upper bound; refined when the step starts
+        else:                              # report / send
+            total += 1
     return max(total, 1)
 
 
@@ -512,8 +577,10 @@ def _run_pipeline(job_id: int) -> None:
         job.started_at = job.started_at or dt.datetime.utcnow()
         s.commit()
         cids, plan = list(job.company_ids or []), dict(job.plan or {})
-        _append_log(s, job, f"Pipeline gestartet — {len(cids)} Firmen, Schritte: "
-                            + ", ".join(k for k in PIPELINE_STEPS if plan.get(k)))
+        order = resolve_step_order(plan)
+        _append_log(s, job, f"Pipeline gestartet — {len(cids)} Firmen, Reihenfolge: "
+                            + " → ".join(_STEP_LABEL_DE.get(k, k) for k in order)
+                            + ("" if plan.get("order") else "  (Standard-Reihenfolge)"))
         s.commit()
 
     def _name(cid: int) -> str:
@@ -521,44 +588,52 @@ def _run_pipeline(job_id: int) -> None:
             c = s.get(Company, cid)
             return c.name if c else f"#{cid}"
 
-    # ---- 1 enrich -----------------------------------------------------------
-    if plan.get("enrich") and not _pl_cancelled(job_id):
-        _pl_log(job_id, "── Schritt 1/5: Daten anreichern", advance=False)
+    n_steps = len(order)
+    step_no = {name: i + 1 for i, name in enumerate(order)}
+
+    def _header(step: str) -> None:
+        _pl_log(job_id, f"── Schritt {step_no[step]}/{n_steps}: "
+                        f"{_STEP_LABEL_DE.get(step, step)}", advance=False)
+
+    def _per_company(step: str, tag: str, run, log_map: dict) -> None:
+        """One unit per company, never aborting the run on a single failure."""
+        _header(step)
         for cid in cids:
             if _pl_cancelled(job_id):
                 break
             try:
-                r = enrich_service.enrich_company(cid)
-                line = _ENRICH_LOG.get(r["status"], lambda x: x["status"])(r)
-                _pl_log(job_id, f"[enrich] {_name(cid)} — {line}")
+                r = run(cid)
+                line = log_map.get(r["status"], lambda x: x["status"])(r)
+                _pl_log(job_id, f"[{tag}] {_name(cid)} — {line}")
             except Exception as exc:  # noqa: BLE001
-                _pl_log(job_id, f"[enrich] ✗ {_name(cid)} — {exc}")
+                _pl_log(job_id, f"[{tag}] ✗ {_name(cid)} — {exc}")
 
-    # ---- 2 identity ---------------------------------------------------------
-    if plan.get("identity") and not _pl_cancelled(job_id):
-        _pl_log(job_id, "── Schritt 2/5: Identitätsprüfung (Meta-Seite)", advance=False)
-        for cid in cids:
-            if _pl_cancelled(job_id):
-                break
-            try:
-                r = resolver.run_identity_check(cid)
-                line = _IDENTITY_LOG.get(r["status"], lambda x: x["status"])(r)
-                _pl_log(job_id, f"[identity] {_name(cid)} — {line}")
-            except Exception as exc:  # noqa: BLE001
-                _pl_log(job_id, f"[identity] ✗ {_name(cid)} — {exc}")
+    # Each step is a closure; the loop below runs them in the RESOLVED order, so
+    # changing resolve_step_order() changes execution and not just the labels.
+    state: dict = {"filename": None}
 
-    # ---- 3 ads --------------------------------------------------------------
-    if plan.get("ads") and not _pl_cancelled(job_id):
+    def _do_domains() -> None:
+        _per_company(DOMAIN_PREPASS, "domains", enrich_service.derive_domain, _DOMAIN_LOG)
+
+    def _do_enrich() -> None:
+        _per_company("enrich", "enrich", enrich_service.enrich_company, _ENRICH_LOG)
+
+    def _do_identity() -> None:
+        _per_company("identity", "identity", resolver.run_identity_check, _IDENTITY_LOG)
+
+    def _do_ads() -> None:
         from .collect.pipeline import run_once, run_once_google
         runners = {"meta": run_once, "google": run_once_google}
         with SessionLocal() as s:
-            units = _plan_units(s, cids, list(plan["ads"]))   # now that 1+2 have run
+            # recomputed HERE, not up front: the earlier steps changed which
+            # companies are fetchable at all
+            units = _plan_units(s, cids, list(plan["ads"]))
             job = s.get(FetchJob, job_id)
             # replace the upper-bound estimate with the real routed count
             job.total = (job.total or 0) - len(cids) * len(plan["ads"]) + len(units)
-            _append_log(s, job, f"── Schritt 3/5: Anzeigen abrufen — {len(units)} von "
-                                f"{len(cids) * len(plan['ads'])} möglichen Abrufen "
-                                "(nur mit Meta-Seite bzw. Website)")
+            _append_log(s, job, f"── Schritt {step_no['ads']}/{n_steps}: Anzeigen abrufen "
+                                f"— {len(units)} von {len(cids) * len(plan['ads'])} "
+                                "möglichen Abrufen (nur mit Meta-Seite bzw. Website)")
             s.commit()
         for cid, src in units:
             if _pl_cancelled(job_id):
@@ -569,24 +644,24 @@ def _run_pipeline(job_id: int) -> None:
             except Exception as exc:  # noqa: BLE001
                 _pl_log(job_id, f"[{src}] ✗ {_name(cid)} — {str(exc)[:120]}")
 
-    # ---- 4 report -----------------------------------------------------------
-    filename = None
-    if plan.get("report") and not _pl_cancelled(job_id):
-        _pl_log(job_id, "── Schritt 4/5: Bericht erstellen", advance=False)
+    def _do_report() -> None:
+        _header("report")
         try:
             from .report import build_report, build_top5_report, write_report_meta
             filters = {"ids": cids}
             path = (build_report(filters=filters) if plan["report"] == "full"
                     else build_top5_report(filters=filters))
             write_report_meta(path, filters=filters, definition_name=None)
-            filename = os.path.basename(path)
-            _pl_log(job_id, f"[report] ✓ {filename}")
+            state["filename"] = os.path.basename(path)
+            _pl_log(job_id, f"[report] ✓ {state['filename']}")
         except Exception as exc:  # noqa: BLE001
             _pl_log(job_id, f"[report] ✗ {exc}")
 
-    # ---- 5 send -------------------------------------------------------------
-    if plan.get("send_to") and filename and not _pl_cancelled(job_id):
-        _pl_log(job_id, "── Schritt 5/5: Bericht senden", advance=False)
+    def _do_send() -> None:
+        if not state["filename"]:
+            _pl_log(job_id, "[send] ✗ übersprungen — kein Bericht vorhanden", advance=False)
+            return
+        _header("send")
         try:
             from .emailer import send_report_email
             from .report import subject_for_filename
@@ -597,13 +672,24 @@ def _run_pipeline(job_id: int) -> None:
             if not emails:
                 _pl_log(job_id, "[send] ✗ keine aktiven Empfänger ausgewählt")
             else:
-                send_report_email(str(config.OUTPUT_DIR / filename), recipient=emails,
-                                  subject=subject_for_filename(filename))
+                send_report_email(str(config.OUTPUT_DIR / state["filename"]),
+                                  recipient=emails,
+                                  subject=subject_for_filename(state["filename"]))
                 _pl_log(job_id, f"[send] ✓ an {', '.join(emails)}")
         except Exception as exc:  # noqa: BLE001
             _pl_log(job_id, f"[send] ✗ {exc}")
-    elif plan.get("send_to") and not filename:
-        _pl_log(job_id, "[send] ✗ übersprungen — kein Bericht vorhanden", advance=False)
+
+    runners = {DOMAIN_PREPASS: _do_domains, "enrich": _do_enrich,
+               "identity": _do_identity, "ads": _do_ads,
+               "report": _do_report, "send": _do_send}
+
+    for step in order:
+        if _pl_cancelled(job_id):
+            break
+        try:
+            runners[step]()
+        except Exception as exc:  # noqa: BLE001 — a broken STEP must not lose the rest
+            _pl_log(job_id, f"[{step}] ✗ Schritt abgebrochen — {exc}", advance=False)
 
     with SessionLocal() as s:
         job = s.get(FetchJob, job_id)

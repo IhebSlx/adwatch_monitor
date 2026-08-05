@@ -126,6 +126,49 @@ def _resolve_website(comp: dict, allow_search: bool) -> dict:
             "candidates": tried, "bundle": None, "status": status}
 
 
+def derive_domain(company_id: int) -> dict:
+    """FREE pre-pass: settle a website from the company's OWN data only — no web
+    search, no LLM. Writes it only when the validation gate proved it.
+
+    Why this exists as its own step: the identity check's only free and
+    authoritative tier crawls `Company.website_domain` looking for the company's
+    self-declared Facebook link (see identity.resolver.run_identity_check — every
+    one of the hard-`locked` identities came from there). Enrichment is what
+    fills that column. Populating it BEFORE the identity check therefore turns
+    paid identity resolutions into free hard-locks, and 1,244 companies in the
+    current base have no website but do have a non-freemail email address.
+
+    A miss writes NOTHING — not even a status. Serper has not been tried yet, so
+    'no website found' would be a verdict this pass has no right to reach; that
+    call belongs to the full enrichment run. On a hit, only `website_domain` is
+    written and `enrichment_status` is deliberately left alone, because no facts
+    were extracted and the company still needs the real run.
+
+    Returns {status, website?, validated_by?, source?} where status is one of
+    already_had | domain_found | no_domain_derived.
+    """
+    with SessionLocal() as s:
+        c = s.get(Company, company_id)
+        if not c:
+            raise ValueError("Company not found")
+        comp = _company_dict(c)
+    if normalize_domain(comp.get("website_domain")):
+        return {"status": "already_had", "website": normalize_domain(comp["website_domain"])}
+
+    site = _resolve_website(comp, allow_search=False)
+    if not site["domain"]:
+        return {"status": "no_domain_derived",
+                "candidates": len(site.get("candidates") or [])}
+
+    with SessionLocal() as s:
+        c = s.get(Company, company_id)
+        if c and not (c.website_domain or "").strip():
+            c.website_domain = site["domain"]
+            s.commit()
+    return {"status": "domain_found", "website": site["domain"],
+            "validated_by": site["validated_by"], "source": site["source"]}
+
+
 def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool = True) -> dict:
     """Enrich one company. Returns a small summary for the job log:
     {status, website, website_source, validated_by, fields_found, error?}."""
