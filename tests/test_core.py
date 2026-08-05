@@ -962,6 +962,88 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_crm_sync_never_overwrites_what_we_paid_for(temp_db):
+    """The whole point of the ownership map. CRM owns master data; a sync must not
+    touch enrichment, locked pages, scores or ad history — that is the expensive
+    half of the database and Dataverse has no opinion about any of it."""
+    from sqlalchemy import select
+    from adwatch import crm_accounts
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    c = Company(
+        crm_id="A7DBC4F6-A2F9-40CC-BEB9-0000E0EE6272", name="Alter Name GmbH",
+        country="DE", city="Altstadt", segment="Handel", revenue_y0=100.0,
+        # everything below is ours and must survive untouched
+        description="Von uns angereichert.", products=["Fenster"], founded_year=1999,
+        employee_hint="12 Mitarbeiter", enrichment_status="enriched",
+        page_id="123456", page_name="Alte Seite", resolution_status="locked",
+        fit_score=88.0, opportunity_score=42.0, target_score=61.0,
+        website_domain="alt.example")
+    s.add(c); s.commit()
+    cid = c.id
+    s.close()
+
+    # same account, matched on the GUID in a DIFFERENT case
+    res = crm_accounts.upsert_accounts([{
+        "accountid": "a7dbc4f6-a2f9-40cc-beb9-0000e0ee6272",
+        "modifiedon": "2026-07-27T20:37:19Z",
+        "name": "Neuer Name GmbH", "accountnumber": "0005009967",
+        "address1_line1": "Vogelherdbogen 27", "address1_postalcode": "88069",
+        "address1_city": "Tettnang", "address1_country": "Spanien",
+        "telephone1": "+4975428292", "emailaddress1": "neu@example.de",
+        "sl_customer_segment": 101,
+        "sl_customer_segment@OData.Community.Display.V1.FormattedValue": "Verarbeiter",
+        "slx_revenue_current_year": 22749.0, "slx_revenue_current_year_1": 80728.0,
+        "statecode": 0,
+    }])
+    assert res == {**res, "inserted": 0, "updated": 1, "skipped": 0}
+
+    s = temp_db.SessionLocal()
+    c = s.get(Company, cid)
+    # CRM won on master data
+    assert c.name == "Neuer Name GmbH" and c.city == "Tettnang"
+    assert c.sap_number == "0005009967" and c.postal_code == "88069"
+    assert c.country == "ES"                       # "Spanien" -> ES via markets
+    assert c.segment == "Verarbeiter"              # LABEL, never the raw 101
+    assert c.revenue_y0 == 22749.0
+    assert c.customer_state == "active"            # recomputed, not synced
+    # ...and every local field is untouched
+    assert c.description == "Von uns angereichert." and c.products == ["Fenster"]
+    assert c.employee_hint == "12 Mitarbeiter" and c.enrichment_status == "enriched"
+    assert c.page_id == "123456" and c.resolution_status == "locked"
+    assert (c.fit_score, c.opportunity_score, c.target_score) == (88.0, 42.0, 61.0)
+    assert c.website_domain == "alt.example"
+    s.close()
+
+    # a raw picklist with NO label must not write an integer into a name column
+    crm_accounts.upsert_accounts([{"accountid": "a7dbc4f6-a2f9-40cc-beb9-0000e0ee6272",
+                                   "sl_customer_segment": 999}])
+    with temp_db.SessionLocal() as s2:
+        assert s2.get(Company, cid).segment == "Verarbeiter"
+
+    # a record without accountid is skipped, not guessed at
+    assert crm_accounts.upsert_accounts([{"name": "Ohne GUID"}])["skipped"] == 1
+    # inserts can be refused, so a delta sync cannot silently widen the base
+    assert crm_accounts.upsert_accounts(
+        [{"accountid": "11111111-1111-1111-1111-111111111111", "name": "Neu"}],
+        allow_insert=False)["inserted"] == 0
+    # ...and allowed when asked for
+    assert crm_accounts.upsert_accounts(
+        [{"accountid": "11111111-1111-1111-1111-111111111111", "name": "Neu"}]
+    )["inserted"] == 1
+
+    # the ownership map and the protected set must never overlap
+    written = (set(crm_accounts.CRM_OWNED_SCALARS.values())
+               | set(crm_accounts.CRM_OWNED_PICKLISTS.values())
+               | set(crm_accounts.CRM_OWNED_REVENUE.values()))
+    assert not (written & crm_accounts.LOCAL_OWNED)
+
+    # the watermark drives the delta filter
+    assert crm_accounts.watermark().endswith("Z")
+    assert "accountid" in crm_accounts.select_fields()
+
+
 def test_markets_are_data_not_code():
     """Adding a market used to need three code edits (country aliases, legal-page
     term, search language) in two modules. Missing one failed SILENTLY — that is
