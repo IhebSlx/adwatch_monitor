@@ -71,9 +71,27 @@ SETTINGS_SPEC = [
     {"key": "ANTHROPIC_MODEL", "env": "ANTHROPIC_MODEL", "default": "claude-haiku-4-5-20251001",
      "secret": False, "test": None, "group": "AI — Claude", "label": "Claude model"},
 
+    # Power Automate flows are addressed by ROLE, not by a single hardcoded URL —
+    # see adwatch/flows.py. Adding an integration point = one FLOW_ROLES entry
+    # plus one line here, and it shows up in Settings with masking and a test
+    # button for free.
+    {"key": "FLOW_URL_REPORT_EMAIL", "env": "FLOW_URL_REPORT_EMAIL", "default": "",
+     "secret": True, "test": "flow_report_email", "group": "Power Automate flows",
+     "label": "Flow: Bericht per E-Mail senden",
+     "help": "POST {filename, content (base64 PDF), recipient, subject, week}. "
+             "Whoever has this URL can trigger the flow — treat it as a password."},
+    {"key": "FLOW_URL_CRM_QUERY", "env": "FLOW_URL_CRM_QUERY", "default": "",
+     "secret": True, "test": "flow_crm_query", "group": "Power Automate flows",
+     "label": "Flow: Dataverse abfragen",
+     "help": "POST {entity, select, filter, top} -> {value:[rows]}. Read-only. "
+             "Used for the CRM sync and scoped loads."},
+    # Legacy key: installs configured before the flow registry existed. flows.py
+    # falls back to it for the report_email role, so nothing breaks on upgrade.
     {"key": "POWER_AUTOMATE_WEBHOOK_URL", "env": "POWER_AUTOMATE_WEBHOOK_URL", "default": "",
-     "secret": True, "test": None, "group": "Email delivery", "label": "Power Automate webhook URL",
-     "help": "AdWatch POSTs the report PDF here to send it by email. Whoever has this URL can trigger the flow."},
+     "secret": True, "test": None, "group": "Power Automate flows",
+     "label": "Webhook URL (alt — bitte oben eintragen)",
+     "help": "Vorgänger von „Flow: Bericht per E-Mail senden“. Wird weiter genutzt, "
+             "wenn das neue Feld leer ist."},
     {"key": "REPORT_EMAIL_DEFAULT_RECIPIENT", "env": "REPORT_EMAIL_DEFAULT_RECIPIENT", "default": "",
      "secret": False, "test": None, "group": "Email delivery", "label": "Default recipient e-mail"},
 

@@ -83,6 +83,35 @@ def test_connection(which: str, value: str | None = None) -> dict:
     saved value. Never echoes the secret back. Returns {ok, detail}."""
     value = (value or "").strip() or None
     try:
+        # Power Automate flows: reachability only. A real POST would SEND a report
+        # or hit Dataverse, so the test does a HEAD-like probe instead of firing
+        # the flow — a "test" button must never have side effects.
+        if which and which.startswith("flow_"):
+            from . import flows
+            role = which[len("flow_"):]
+            if role not in flows.FLOW_ROLES:
+                return {"ok": False, "detail": f"Unbekannte Flow-Rolle: {role}"}
+            url = value or flows.url_for(role)
+            if not url:
+                return {"ok": False, "detail": flows.missing_message(role)}
+            if not url.lower().startswith("https://"):
+                return {"ok": False, "detail": "URL muss mit https:// beginnen."}
+            import urllib.parse as _up
+            host = _up.urlparse(url).hostname or ""
+            if "powerplatform.com" not in host and "logic.azure.com" not in host:
+                return {"ok": False, "detail": f"Unerwarteter Host „{host}“ — "
+                                               "Power-Automate-URLs enden auf "
+                                               "powerplatform.com bzw. logic.azure.com."}
+            import socket
+            try:
+                socket.create_connection((host, 443), timeout=10).close()
+            except Exception as exc:            # noqa: BLE001
+                return {"ok": False, "detail": f"Host {host} nicht erreichbar: {exc}"}
+            return {"ok": True, "detail": f"URL plausibel, {host} erreichbar. "
+                                          "Der Flow selbst wird erst beim echten "
+                                          "Aufruf getestet (ein Test würde sonst "
+                                          "wirklich senden)."}
+
         if which == "apify":
             token = value or config.APIFY_API_TOKEN
             if not token:

@@ -962,6 +962,51 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_flow_registry_is_configurable_and_backward_compatible(temp_db, monkeypatch):
+    """Flows are addressed by ROLE, so a second integration point (the CRM query
+    proxy) needs no new constant, timeout or error convention. And an install that
+    still has only the old POWER_AUTOMATE_WEBHOOK_URL must keep working."""
+    from adwatch import config, flows
+
+    # unknown role fails loudly rather than silently doing nothing
+    with pytest.raises(ValueError):
+        flows.url_for("does_not_exist")
+
+    # nothing configured -> a message that says WHERE to fix it
+    monkeypatch.setattr(config, "resolve_setting", lambda k: "")
+    assert not flows.is_configured("report_email")
+    msg = flows.missing_message("crm_query")
+    assert "FLOW_URL_CRM_QUERY" in msg and "Einstellungen" in msg
+    with pytest.raises(RuntimeError):
+        flows.post("crm_query", {})
+
+    # legacy key alone still drives the email role (upgrade path)
+    monkeypatch.setattr(config, "resolve_setting",
+                        lambda k: "https://legacy.example/flow"
+                        if k == "POWER_AUTOMATE_WEBHOOK_URL" else "")
+    assert flows.is_configured("report_email")
+    assert flows.url_for("report_email") == "https://legacy.example/flow"
+    # ...but the legacy key must NOT leak into other roles
+    assert not flows.is_configured("crm_query")
+
+    # the new key wins when both are set
+    monkeypatch.setattr(config, "resolve_setting",
+                        lambda k: {"FLOW_URL_REPORT_EMAIL": "https://new.example/f",
+                                   "POWER_AUTOMATE_WEBHOOK_URL": "https://legacy.example/f"}.get(k, ""))
+    assert flows.url_for("report_email") == "https://new.example/f"
+
+    # status() reports the integration points for Settings / diagnostics
+    st = {s["role"]: s for s in flows.status()}
+    assert st["report_email"]["configured"] is True
+    assert st["crm_query"]["configured"] is False
+    assert st["crm_query"]["key"] == "FLOW_URL_CRM_QUERY"
+
+    # every role must have a settings entry, or Settings could never configure it
+    for role, (key, _, _) in flows.FLOW_ROLES.items():
+        assert key in config._SPEC_BY_KEY, f"{role} has no SETTINGS_SPEC entry"
+        assert config._SPEC_BY_KEY[key]["secret"] is True, f"{key} must be masked"
+
+
 def test_thinly_known_features_do_not_score(temp_db):
     """diagnose() refused to trust a feature below 15% coverage, but fit_for used
     it anyway — so Betriebsgröße, known for 3% of winners (a distribution built

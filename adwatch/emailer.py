@@ -34,8 +34,10 @@ def send_report_email(pdf_path: str, recipient: str | list[str] | None = None,
     or omitted to fall back to REPORT_EMAIL_DEFAULT_RECIPIENT.
     Raises RuntimeError if the webhook isn't configured, no recipient is
     known, or the call fails."""
-    if not config.POWER_AUTOMATE_WEBHOOK_URL:
-        raise RuntimeError("POWER_AUTOMATE_WEBHOOK_URL is not set in .env")
+    from . import flows
+
+    if not flows.is_configured("report_email"):
+        raise RuntimeError(flows.missing_message("report_email"))
     if isinstance(recipient, list):
         to = "; ".join(r.strip() for r in recipient if r and r.strip())
     else:
@@ -63,25 +65,19 @@ def send_report_email(pdf_path: str, recipient: str | list[str] | None = None,
     # record — that is the case you most need to reconstruct afterwards
     log.info("send attempt: %s (%d KB b64) -> %s | subject=%r", filename, kb, to, subject)
     started = time.monotonic()
+    # Transport, retries, timeout and HTTP error shape live in flows.post — this
+    # module only owns "what an email send means" (payload + audit trail).
     try:
-        resp = requests.post(config.POWER_AUTOMATE_WEBHOOK_URL, json=payload, timeout=30)
-    except Exception as exc:
-        log.error("send FAILED (no response) after %.1fs: %s -> %s | %s: %s",
-                  time.monotonic() - started, filename, to, type(exc).__name__, exc)
+        flows.post("report_email", payload)
+    except RuntimeError as exc:
+        log.error("send FAILED after %.1fs: %s -> %s | %s",
+                  time.monotonic() - started, filename, to, exc)
         report_log.record("send_failed", filename, recipients=addresses, subject=subject,
-                          source=source, detail=f"{type(exc).__name__}: {exc}")
-        raise RuntimeError(f"Power Automate webhook unreachable: {exc}") from exc
-    if resp.status_code >= 300:
-        log.error("send FAILED (HTTP %s) after %.1fs: %s -> %s | %s",
-                  resp.status_code, time.monotonic() - started, filename, to, resp.text[:300])
-        report_log.record("send_failed", filename, recipients=addresses, subject=subject,
-                          source=source, detail=f"HTTP {resp.status_code}: {resp.text[:300]}")
-        raise RuntimeError(f"Power Automate webhook failed ({resp.status_code}): {resp.text[:300]}")
-    log.info("send OK (HTTP %s) in %.1fs: %s -> %s",
-             resp.status_code, time.monotonic() - started, filename, to)
+                          source=source, detail=str(exc)[:600])
+        raise
+    log.info("send OK in %.1fs: %s -> %s", time.monotonic() - started, filename, to)
     report_log.record("sent", filename, recipients=addresses, subject=subject,
-                      source=source, detail=f"HTTP {resp.status_code} in "
-                                            f"{time.monotonic() - started:.1f}s")
+                      source=source, detail=f"OK in {time.monotonic() - started:.1f}s")
 
 
 def send_weekly_report(full: bool = False) -> dict:
