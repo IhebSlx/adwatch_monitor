@@ -184,6 +184,7 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
     provenance: dict = {}
     error: str | None = None
     status = site["status"]
+    retractable: list[str] = []      # fact fields this run explicitly returned as null
 
     # ---- Tier 2: facts from the site's own text -------------------------------
     bundle = site.get("bundle")
@@ -206,6 +207,10 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
                     else:
                         provenance[key] = _prov("website+llm", 0.85, ev.get(key))
                 fields["_llm_model"] = model
+                # Which fact fields this run had an opinion about. Needed because
+                # the loop above skips null values, so a re-run could never RETRACT
+                # a fact — see the retraction block in the persist step.
+                retractable = [k for k in facts if k not in fields]
                 status = "enriched"
             except Exception as exc:  # noqa: BLE001 — keep the website win even if extraction fails
                 error = f"extraction failed: {exc}"[:300]
@@ -247,27 +252,39 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
                 site["source"] or "unknown", _CONFIDENCE.get(site["validated_by"] or "", 0.5),
                 note)
 
-        # Enrichment-owned columns: safe to refresh on every run.
-        if fields.get("description_de"):
-            c.description = fields["description_de"]
-        if fields.get("products"):
-            c.products = fields["products"]
-        if fields.get("founded_year"):
-            c.founded_year = fields["founded_year"]
-        if fields.get("employee_hint"):
-            c.employee_hint = fields["employee_hint"]
-        c.enrichment_status = status
-
         row = s.scalar(select(CompanyEnrichment).where(CompanyEnrichment.company_id == company_id))
         if row is None:
             row = CompanyEnrichment(company_id=company_id)
             s.add(row)
         merged = dict(row.fields or {})
         merged.update(fields)
-        row.fields = merged
         merged_prov = dict(row.provenance or {})
         merged_prov.update(provenance)
+
+        # A re-run must be able to RETRACT a fact that is no longer supported.
+        # merged.update() alone cannot: the extraction loop skips nulls, so a wrong
+        # value survives every future pass. Three Spanish S.L. companies kept a
+        # fabricated German "e.K." even after the extractor correctly began
+        # returning null for it — the fix landed but the data never moved.
+        # Only fields THIS run had an opinion about, and never a human's edit.
+        for key in retractable:
+            if (merged_prov.get(key) or {}).get("source") == "manual":
+                continue
+            merged.pop(key, None)
+            merged_prov.pop(key, None)
+
+        row.fields = merged
         row.provenance = merged_prov
+
+        # Enrichment-owned columns mirror the merged result (not just this run's
+        # additions), so a retraction clears them too instead of leaving the stale
+        # value visible in the Explorer and the report.
+        if retractable or fields:
+            c.description = merged.get("description_de") or None
+            c.products = merged.get("products") or None
+            c.founded_year = merged.get("founded_year") or None
+            c.employee_hint = merged.get("employee_hint") or None
+        c.enrichment_status = status
         # A human's decision outranks any automatic label: once a website was
         # approved in the review queue, a later automatic pass (which now simply
         # sees "website present" and would relabel it 'sap') must not overwrite

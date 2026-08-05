@@ -965,6 +965,70 @@ def test_legal_form_must_occur_in_the_source_text():
     assert _legal_form_in_text(None, es) is None
     assert _legal_form_in_text("GmbH", "") is None
 
+    # The match must be anchored on word boundaries. A first attempt at this guard
+    # compared punctuation-stripped strings, so "e.K." -> "ek" matched inside
+    # ordinary words and three Spanish S.L. companies kept their fake German form.
+    for word in ("Unsere Projekte in Mallorca", "perfekte Lösungen",
+                 "Elektrische Antriebe", "Rekord"):
+        assert _legal_form_in_text("e.K.", word) is None, word
+    assert _legal_form_in_text("AG", "Wir sind Ihr Partner am Tag und Nacht") is None
+    assert _legal_form_in_text("SL", "Alle Schlösser und Beschläge") is None
+    # but a standalone occurrence still counts, however it is punctuated
+    assert _legal_form_in_text("e.K.", "Fenster Meier e. K. — Impressum") == "e.K."
+    assert _legal_form_in_text("AG", "Glas Trösch AG, Bützberg") == "AG"
+
+
+def test_reenrichment_can_retract_a_fact_but_not_a_human_edit(temp_db, monkeypatch):
+    """A corrected extractor is useless if the wrong value cannot be removed.
+    Stored fields were only ever merged, and null results were skipped, so three
+    Spanish S.L. companies kept a fabricated German 'e.K.' long after the
+    extractor started returning null for it. A human's edit still wins."""
+    from sqlalchemy import select
+    from adwatch.enrich import extract, fetchpage, service as enrich_service
+    from adwatch.models import Company, CompanyEnrichment
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Retract SL", country="ES", website_domain="retract.es")
+    s.add(c); s.commit()
+    cid = c.id
+    s.close()
+
+    monkeypatch.setattr(fetchpage, "page_bundle",
+                        lambda d: {"text": "Retract SL, Alicante", "pages": [d]})
+
+    # run 1: the old, wrong extraction
+    monkeypatch.setattr(extract, "extract_facts", lambda t: {
+        "description_de": "Baut Fenster.", "legal_form": "e.K.",
+        "employee_hint": "Un gran equipo", "products": ["Fenster"],
+        "founded_year": None, "service_area": None, "mentions_solarlux": False,
+        "competitor_brands": [], "assessment_de": None, "evidence": {}, "llm_model": "m"})
+    enrich_service.enrich_company(cid, allow_search=False)
+
+    s = temp_db.SessionLocal()
+    e = s.scalar(select(CompanyEnrichment).where(CompanyEnrichment.company_id == cid))
+    assert e.fields["legal_form"] == "e.K."
+    assert s.get(Company, cid).employee_hint == "Un gran equipo"
+    # a human corrects the size by hand
+    e.provenance = {**(e.provenance or {}), "employee_hint": {"source": "manual"}}
+    s.commit(); s.close()
+
+    # run 2: the corrected extractor returns null for both
+    monkeypatch.setattr(extract, "extract_facts", lambda t: {
+        "description_de": "Baut Fenster und Türen.", "legal_form": None,
+        "employee_hint": None, "products": ["Fenster", "Türen"],
+        "founded_year": None, "service_area": None, "mentions_solarlux": False,
+        "competitor_brands": [], "assessment_de": None, "evidence": {}, "llm_model": "m"})
+    enrich_service.enrich_company(cid, allow_search=False)
+
+    s = temp_db.SessionLocal()
+    e = s.scalar(select(CompanyEnrichment).where(CompanyEnrichment.company_id == cid))
+    comp = s.get(Company, cid)
+    assert "legal_form" not in e.fields          # retracted
+    assert e.fields["employee_hint"] == "Un gran equipo"   # human edit survives
+    assert e.fields["description_de"] == "Baut Fenster und Türen."   # refreshed
+    assert comp.products == ["Fenster", "Türen"]
+    s.close()
+
 
 def test_report_events_record_creation_and_delivery(temp_db, monkeypatch, tmp_path):
     """Creating and sending a report must leave an audit row, so 'did the mail go

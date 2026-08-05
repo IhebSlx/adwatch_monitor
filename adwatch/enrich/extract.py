@@ -124,8 +124,18 @@ def _legal_form_in_text(value, text: str) -> str | None:
     form = (str(value or "")).strip()
     if not form:
         return None
-    squash = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
-    if squash(form) and squash(form) in squash(text or ""):
+    # Build a pattern from the form's alphanumerics that tolerates the punctuation
+    # and spacing sites vary ("S.L." / "SL" / "S. L.") but stays anchored on word
+    # boundaries. Squashing the whole TEXT instead would destroy those boundaries,
+    # and short forms would match inside ordinary words — "e.K." -> "ek" hits
+    # "Projekte" and "perfekt", which is how three Spanish S.L. companies kept a
+    # German "e.K." even after the guard was added.
+    chars = [c for c in form.lower() if c.isalnum()]
+    if not chars:
+        return None
+    body = r"[\.\s\-]*".join(re.escape(c) for c in chars)
+    pattern = rf"(?<![a-z0-9]){body}\.?(?![a-z0-9])"
+    if re.search(pattern, (text or "").lower()):
         return form[:40]
     return None
 
