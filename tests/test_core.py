@@ -962,6 +962,78 @@ def test_intercompany_never_winner_never_target(temp_db):
     s.close()
 
 
+def test_architects_are_scored_on_projects_not_revenue(temp_db):
+    """The business fact that broke the ICP: architects specify, they never buy.
+    All 808 architect accounts converted at 0%, which made the headline lift look
+    like signal when it was really 'architects aren't dealers'.
+
+    The fix is a SECOND outcome measure: an architect's value is the project volume
+    they specify, which lives on the opportunity and never on their account."""
+    from adwatch import prescriptors
+    from adwatch.models import Company, CrmOpportunity
+
+    s = temp_db.SessionLocal()
+    star = Company(name="Star Architekten", segment="Architekten", country="DE",
+                   crm_id="AAAA1111-0000-0000-0000-000000000001", revenue_y0=0)
+    quiet = Company(name="Stille Architekten", segment="Architekten", country="DE",
+                    crm_id="BBBB2222-0000-0000-0000-000000000002", revenue_y0=0)
+    dealer = Company(name="Haendler GmbH", segment="Handel", country="DE",
+                     crm_id="CCCC3333-0000-0000-0000-000000000003", revenue_y0=50000)
+    s.add_all([star, quiet, dealer]); s.commit()
+    star_id, quiet_id = star.id, quiet.id
+    s.add_all([
+        # two won projects the architect specified, ordered by the dealer
+        CrmOpportunity(crm_id="o1", state="gewonnen", order_value=120000.0,
+                       architect_crm_id="aaaa1111-0000-0000-0000-000000000001",
+                       parent_account_crm_id="cccc3333-0000-0000-0000-000000000003",
+                       building_type="Bürogebäude", created_on=dt.datetime(2025, 3, 1)),
+        CrmOpportunity(crm_id="o2", state="gewonnen", order_value=80000.0,
+                       architect_crm_id="aaaa1111-0000-0000-0000-000000000001",
+                       building_type="Villen", created_on=dt.datetime(2026, 1, 9)),
+        CrmOpportunity(crm_id="o3", state="verloren", order_value=40000.0,
+                       architect_crm_id="aaaa1111-0000-0000-0000-000000000001",
+                       created_on=dt.datetime(2025, 6, 1)),
+        # the CRM sometimes puts architect AND end customer on the same account —
+        # that must count as ONE project for them, not two
+        CrmOpportunity(crm_id="o4", state="offen", order_value=10000.0,
+                       architect_crm_id="bbbb2222-0000-0000-0000-000000000002",
+                       end_customer_crm_id="bbbb2222-0000-0000-0000-000000000002",
+                       created_on=dt.datetime(2026, 2, 2)),
+    ])
+    s.commit(); s.close()
+
+    star_inf = prescriptors.influence_for("AAAA1111-0000-0000-0000-000000000001")
+    assert star_inf["projects"] == 3 and star_inf["won"] == 2 and star_inf["lost"] == 1
+    assert star_inf["value_won"] == 200000.0
+    assert star_inf["win_rate"] == round(2 / 3, 3)
+    assert star_inf["roles"] == ["architect"]
+    assert set(star_inf["building_types"]) == {"Bürogebäude", "Villen"}
+
+    # the duplicate-role project counts once
+    quiet_inf = prescriptors.influence_for("BBBB2222-0000-0000-0000-000000000002")
+    assert quiet_inf["projects"] == 1
+    assert sorted(quiet_inf["roles"]) == ["architect", "end_customer"]
+    # nothing decided yet -> win_rate is None, NOT 0. An untested architect must
+    # not rank below a real 10% performer.
+    assert quiet_inf["win_rate"] is None
+
+    # a company with no projects gets the empty shape, never a KeyError
+    assert prescriptors.influence_for(None)["projects"] == 0
+    assert prescriptors.influence_for("does-not-exist")["projects"] == 0
+
+    # the ranking surfaces the architect with zero revenue ABOVE the paying
+    # dealer, which a revenue-only list can never do
+    ranked = prescriptors.prescriptor_targets()
+    assert ranked[0]["company_id"] == star_id
+    assert ranked[0]["revenue_y0"] in (0, 0.0, None)
+    ids = [r["company_id"] for r in ranked]
+    assert quiet_id in ids
+
+    ov = prescriptors.overview()
+    assert ov["opportunities"] == 4 and ov["usable"] is True
+    assert ov["by_segment"]["Architekten"]["with_projects"] == 2
+
+
 def test_crm_fetch_sends_select_as_a_string_and_reads_labels(temp_db, monkeypatch):
     """Two things verified against the live flow, pinned here.
 

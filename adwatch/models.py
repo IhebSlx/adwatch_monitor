@@ -363,6 +363,57 @@ class CrmShowroom(Base):
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
 
+class CrmOpportunity(Base):
+    """A Solarlux Verkaufschance (project), mirrored lean from Dataverse
+    `opportunity`.
+
+    Exists because of a business fact that broke the original ICP: **architects
+    never buy.** All 808 architect accounts converted at 0%, which made the ICP's
+    headline lift look like signal when it was really just "architects aren't
+    dealers". The fix is not to exclude them — it is to score them on the right
+    outcome. An architect's value to Solarlux is the PROJECT VOLUME THEY SPECIFY,
+    and that lives here, not on their account.
+
+    Three different companies can hang off one project, which is the whole point:
+      parent_account_crm_id  = Auftraggeber (who orders — usually a dealer)
+      architect_crm_id       = the specifying architecture practice
+      end_customer_crm_id    = Bauherr / end customer
+    Any of them can be the "company" a profile is about; the opportunity is the
+    shared fact. NB the CRM sometimes has the architect and the end customer as
+    the SAME account — do not assume they differ.
+
+    Deliberately lean: only the fields with verified fill (`ax_order_value` 1,626
+    rows, `slx_buildingtype` 4,860, architect 1,046, end customer 4,644) plus the
+    state/date columns needed for win-rate and sales-cycle length. Everything else
+    stays in CRM and is read live when a drawer needs it."""
+    __tablename__ = "crm_opportunities"
+    __table_args__ = (UniqueConstraint("crm_id", name="uq_opportunity_crm_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    crm_id: Mapped[str] = mapped_column(String(40))                    # opportunityid
+    number: Mapped[str | None] = mapped_column(String(40), nullable=True)   # ax_opportunity_number
+    name: Mapped[str | None] = mapped_column(String(400), nullable=True)
+
+    parent_account_crm_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    architect_crm_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    end_customer_crm_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+
+    sales_channel: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    building_type: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # 0 offen | 1 gewonnen | 2 verloren  (kept as the German label, like segments)
+    state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    order_value: Mapped[float | None] = mapped_column(Float, nullable=True)  # ax_order_value
+    products: Mapped[list | None] = mapped_column(JSON, nullable=True)   # slx_slproductnames, canonicalised
+    city: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+
+    created_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    closed_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    crm_modified_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
 class IcpProfile(Base):
     """A computed Ideal-Customer-Profile: WHICH companies defined it (the
     winners filter), what their feature distributions look like, and when it was
