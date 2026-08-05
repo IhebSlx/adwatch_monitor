@@ -1,152 +1,172 @@
 # AdWatch ⇄ Dataverse `account` — Feld-Mapping
 
-Stand 2026-08-05. Ziel: jede Spalte in `Company` (lokal) auf ihr Dataverse-Feld
-abbilden, damit CRM die Excel-Datei als Quelle ersetzen kann.
+Stand 2026-08-05. **Verifiziert** an einem echten Account-Datensatz
+(`accounts?$top=1`, alle Felder). Keine Vermutungen mehr in Teil 1–4.
 
-**Beweisgrade — bitte ernst nehmen:**
+Referenzdatensatz: `IB Segelbacher GmbH`, `accountid`
+`a7dbc4f6-a2f9-40cc-beb9-0000e0ee6272` — ⚠ ein **deaktivierter** Account
+(`statecode: 1`, Name beginnt mit „DEAKTIV"), deshalb sind viele Werte `null`.
+Die **Feldnamen** sind damit belegt, die **Füllstände** noch nicht.
 
-| Marke | Bedeutung |
+---
+
+## 1. Identität und Schlüssel — alle belegt
+
+| `Company` | Dataverse `account` | Beispielwert |
+|---|---|---|
+| `crm_id` | `accountid` | `a7dbc4f6-…` |
+| `crm_modified_on` | `modifiedon` | `2025-07-28T12:48:55Z` |
+| `name` | `name` | `DEAKTIV IB Segelbacher GmbH …` |
+| `sap_number` | **`accountnumber`** | `0005009967` (10-stellig, gepolstert) |
+
+**SAP-Nummer geklärt:** liegt direkt auf `account`, kein `sl_debitor`-Join nötig.
+Zwei Varianten — `accountnumber` = `0005009967` (gepolstert),
+`slx_accountnumber_short` = `5009967` (ohne Nullen). Unsere lokalen Werte sind
+gepolstert → **`accountnumber` nehmen**. (`_sl_debitorid_value` existiert
+zusätzlich als Lookup, brauchen wir nicht.)
+
+## 2. Adresse und Kontakt — alle belegt, wie vorhergesagt
+
+| `Company` | Dataverse | Beispielwert |
+|---|---|---|
+| `street` | `address1_line1` | `Vogelherdbogen 27` |
+| `postal_code` | `address1_postalcode` | `88069` |
+| `city` | `address1_city` | `Tettnang` |
+| `country` | `address1_country` | `Deutschland` |
+| `phone` | `telephone1` | `+4975428292` |
+| `email` | `emailaddress1` | `info@ib-segelbacher.de` |
+| `fax` | `fax` | `+49 7542 53294` |
+| `website_domain` | `websiteurl` | `null` |
+
+⚠ `country` ist **Freitext auf Deutsch** („Deutschland"), kein ISO-Code — der
+lokale `_country_code()`-Mapper bleibt zwingend nötig. Genau der Grund, warum 982
+spanische Firmen zuerst als DE landeten.
+
+Bonus: `address1_latitude` / `address1_longitude` sind gefüllt (47.65818 / 9.58557)
+→ **Geo-Clustering ohne Geocoding-Dienst möglich.**
+
+## 3. Klassifizierung — alle belegt
+
+| `Company` | Dataverse | Beispielwert |
+|---|---|---|
+| `segment` | **`sl_customer_segment`** | `102` |
+| `sub_segment` | **`sl_customer_sub_segment`** | `102002` |
+| `sales_channel` | **`sl_sales_channel`** | `102690003` |
+| `kv` | `_ownerid_value` (Lookup → `systemuser`) | `f3922506-…` |
+
+**Vertriebsweg-Konflikt geklärt:** `account` hat ein **eigenes**
+`sl_sales_channel`-Feld, mit demselben Option-Set wie `opportunity`
+(102690003 = Architektenberatung — passend, die Firma ist ein Ingenieurbüro).
+Es gibt also beides: Kanal je Firma **und** je Deal. Für Firmen-ICPs das
+Account-Feld, für Deal-Analysen das Opportunity-Feld.
+
+**KV:** kein `sl_kv`-Feld vorhanden. Unsere Werte („Gimenez, Juan") sind
+Personennamen → der Export hat `ownerid` aufgelöst. Über die API kommt nur die
+GUID; für den Namen braucht es `$expand=ownerid($select=fullname)` **oder** den
+PA-Konnektor, der `_ownerid_value@…FormattedValue` mitliefert.
+
+**Picklists:** kommen als Integer. Der PA-Dataverse-Konnektor liefert Labels
+automatisch als `FormattedValue` mit — mit rohem HTTP bräuchten wir ein
+Option-Set-Mapping. Praktisches Argument für den PA-Transport.
+
+## 4. Umsatz — geklärt, und das war das größte Risiko
+
+| `Company` | Dataverse |
 |---|---|
-| ✅ **belegt** | Gegen echte Daten verifiziert, funktioniert bereits |
-| 🟢 **sicher** | Standard-Dynamics-Feld; der Excel-Spaltenname IST der Anzeigename dieses Feldes |
-| 🟡 **wahrscheinlich** | Solarlux-Custom-Feld, Name aus Konvention abgeleitet — **muss abgefragt werden** |
-| 🔴 **unbekannt / Risiko** | Existiert evtl. gar nicht als Account-Feld |
+| `revenue_y0` | **`slx_revenue_current_year`** |
+| `revenue_y1` | **`slx_revenue_current_year_1`** |
+| `revenue_y2` | **`slx_revenue_current_year_2`** |
+| `revenue_y3` | **`slx_revenue_current_year_3`** |
+| `revenue_y4` | **`slx_revenue_current_year_4`** |
 
-`datenlandschaft_inventar.md` (2026-07-29) kartiert `opportunity` vollständig,
-`account` aber ausdrücklich **nicht** ("NICHT kartiert — für ICP zwingend
-nachzuholen: `account`: keine Spalte, keine Klassifizierung"). Genau diese Tabelle
-brauchen wir. Die 🟡/🔴-Zeilen unten sind deshalb offen und mit **einer** Abfrage
-zu klären (siehe unten).
+**Die Felder existieren als echte Account-Spalten.** Genau fünf, genau passend zu
+unseren fünf. Damit ist das Worst-Case-Szenario („Umsatz nur im Export berechnet,
+per API nicht verfügbar") **ausgeschlossen** — der Umsatz, also die Zielvariable
+der ICP, ist synchronisierbar.
 
----
+⚠ **Noch offen:** im Referenzdatensatz sind alle fünf `null` — plausibel, weil der
+Account deaktiviert ist und `revenue: 0.0000` hat. **Vor dem Sync an einem aktiven
+Händler mit bekanntem Umsatz gegenprüfen** (Abfrage unten). Es gibt zusätzlich die
+Standard-Dynamics-Felder `revenue` und `openrevenue` — nicht verwechseln, das sind
+andere Größen.
 
-## 1. Identität und Schlüssel
+## 5. Felder, die wir teuer anreichern — und die es in CRM schon gibt ⚠
 
-| `Company` | Dataverse `account` | Grad | Anmerkung |
-|---|---|---|---|
-| `crm_id` | `accountid` | ✅ **belegt** | Excel-Spalte „(Nicht ändern) Firma". 4.609/4.618 gematcht, 0 Duplikate. Der durable Key. |
-| `crm_modified_on` | `modifiedon` | ✅ **belegt** | Excel-Spalte „(Nicht ändern) Geändert am". Werte 2022-10-15 … 2026-07-27 = echte CRM-Zeitstempel, **nicht** Importzeit. Watermark für den Delta-Sync. |
-| `sap_number` | ❓ evtl. **nicht auf `account`** | 🔴 | Das Inventar nennt eine eigene Tabelle `sl_debitor` = „SAP-Debitor/Kundennummern". Wenn die SAP-Nummer dort liegt, ist es ein **1:n-Join**, kein Account-Feld — eine Firma kann mehrere Debitoren haben. **Vor dem Sync klären.** |
-| `name` | `name` | 🟢 sicher | Excel „Firmenname". |
+**Wirtschaftlich der wichtigste Fund.** Diese Spalten existieren auf `account`,
+und wir bezahlen Haiku dafür, sie von Websites zu extrahieren:
 
-## 2. Adresse — Standard-Dynamics, hohe Sicherheit
+| Lokal (angereichert) | Dataverse-Feld |
+|---|---|
+| `employee_hint` | `numberofemployees` |
+| `founded_year` | `sl_founding_date` |
+| `legal_form` (in `CompanyEnrichment`) | `sl_corporate_form` |
 
-Der Excel-Header **„Adresse 1: Postleitzahl"** ist der Beweis: das ist der
-deutsche Anzeigename von `address1_postalcode`. Der Export nutzt also die
-Standard-`address1_*`-Felder, nicht Custom-Felder.
+Im Referenzdatensatz alle `null` — **Füllstand also unbedingt prüfen, bevor weiter
+angereichert wird.** Sind sie gepflegt, sparen wir die Anreicherung für genau die
+Merkmale, die der ICP heute fehlen (Betriebsgröße 3 %, Firmenalter 7 % Abdeckung).
+Sind sie leer, ist die Anreicherung bestätigt richtig.
 
-| `Company` | Dataverse `account` | Grad |
+## 6. CRM-Felder, die wir noch nicht nutzen — und sollten 【ICP】
+
+| Feld | Beispielwert | Warum relevant |
 |---|---|---|
-| `street` | `address1_line1` | 🟢 sicher |
-| `postal_code` | `address1_postalcode` | 🟢 **sicher** (Header-Beweis) |
-| `city` | `address1_city` | 🟢 sicher |
-| `country` | `address1_country` | 🟢 sicher |
-| `phone` | `telephone1` | 🟢 sicher (Excel „Telefon 1") |
-| `email` | `emailaddress1` | 🟢 sicher |
-| `fax` | `fax` | 🟢 sicher |
-| `website_domain` | `websiteurl` | 🟢 sicher |
+| **`sl_customer_or_prospect`** | `102690001` | **Trennt Kunde von Interessent.** Direkt gegen unser Kernproblem: die ICP kann nicht ranken, weil die Basisquote bei Händlern 87 % ist — es fehlen Negativbeispiele. Dieses Feld liefert sie evtl. schon. |
+| `sl_target_customer` | `false` | Ein **Zielkunden-Flag im CRM** — genau das, was unser `target_score` berechnet. Vergleich = externe Validierung. |
+| `sl_active_partner` + `sl_active_partner_since` | `false` / `null` | Partnerprogramm-Status und -Dauer |
+| `sl_key_account` | `false` | Key-Account-Kennzeichnung |
+| `sl_cero_partner`, `sl_bifolding_door` | `false` | **Produkt-Partnerstatus** → Cross-Sell ohne Showroom-Join |
+| `sl_showroom`, `sl_showroom_size` | `null` | Ausstellung direkt am Account |
+| `ax_top_attributes` | `"Statikbüro, Bauphysik"` | **Freitext-Geschäftsmerkmale** — fachlich näher als unsere Website-Ableitung |
+| `slx_architectclassification` | `809202003` | Architekten-Klassifizierung |
+| `statecode` / `statuscode` | `1` / `102690000` | **Aktiv/deaktiviert** — s. Warnung unten |
 
-⚠ `country` kommt als **Freitext** („Spanien", „Deutschland"), nicht als ISO-Code.
-Der lokale `_country_code()`-Mapper bleibt deshalb nötig — genau der Grund, warum
-982 spanische Firmen zuerst als DE importiert wurden.
+## 7. Rein lokale Felder — CRM darf sie NIE überschreiben
 
-## 3. Klassifizierung — Solarlux-Custom, ALLE offen
+`description` · `products` · `enrichment_status` · `page_id` · `page_name` ·
+`page_url` · `resolution_status` · `candidates` · `fit_score` ·
+`opportunity_score` · `target_score` · `fit_breakdown` · `scores_updated_at` ·
+`is_intercompany` · `customer_state` (abgeleitet) · `imported_at`
 
-| `Company` | Vermutetes Feld | Grad | Problem |
-|---|---|---|---|
-| `segment` | `sl_customersegment`? | 🟡 | Excel „Kundensegment". Picklist. Logischer Name geraten. |
-| `sub_segment` | `sl_customersubsegment`? | 🟡 | Excel „Kundenuntersegment". Picklist. |
-| `kv` | `sl_kv`? / `ownerid`? | 🟡 | Excel „KV". Könnte ein Textfeld ODER ein `systemuser`-Lookup sein. Wenn Lookup → Join nötig. |
-| `sales_channel` | `sl_sales_channel`? | 🔴 **Konflikt** | Das Inventar belegt `sl_sales_channel` auf **`opportunity`**, nicht auf `account` — und wir wissen: *Vertriebsweg ist eine Eigenschaft des Deals*. Trotzdem steht in der Excel-Datei ein Wert **pro Firma**. Entweder gibt es ein zweites, account-seitiges Feld, oder der Export hat es abgeleitet. **Das ist die wichtigste offene Frage der Klassifizierung.** |
+`employee_hint` / `founded_year` sind **Grenzfälle** (s. Abschnitt 5): ist das
+CRM-Feld gefüllt, gewinnt CRM; ist es leer, bleibt unsere Anreicherung stehen.
 
-**Picklists:** Über die Web API kommen Picklists als **Integer** (`102690001`),
-nicht als Label. Das Inventar liefert die Lösung: *„Der Dataverse-Konnektor in
-Power Automate liefert Picklist-Labels automatisch mit als
-`<feld>@OData.Community.Display.V1.FormattedValue`."* → **Ein weiteres starkes
-Argument für den Power-Automate-Transport**: mit ihm brauchen wir kein
-Option-Set-Mapping, mit rohem HTTP schon.
+**Regel:** CRM gewinnt bei Stammdaten (1–4). AdWatch gewinnt bei 7. Dieselbe
+Disziplin, die die Anreicherung schon hat.
 
-## 4. Umsatz — das größte Risiko
+## 8. ⚠ Warnung: deaktivierte Accounts
 
-| `Company` | Vermutetes Feld | Grad |
-|---|---|---|
-| `revenue_y0` … `revenue_y4` | ❓ | 🔴 **unbekannt** |
+Der Referenzdatensatz hat `statecode: 1` (inaktiv) und „DEAKTIV" im Namen. Unsere
+lokale Basis enthält solche Datensätze also mit. Der Sync sollte `statecode`
+mitziehen und deaktivierte Firmen aus Zielisten ausschließen — sonst stehen
+deaktivierte Accounts auf der Anrufliste. **Kein Löschen**, nur kennzeichnen.
 
-Excel-Header: „Umsatz aktuelles Jahr", „… -1" bis „… -4". Fünf rollierende
-Jahresspalten auf einem Account sind **kein** Standard-Dynamics-Muster. Drei
-Möglichkeiten:
+## 9. Nächste Abfragen
 
-1. **Rollup-/Calculated-Fields** auf `account` → per API abfragbar ✅
-2. Aus `sl_annual_appraisal` aggregiert (das Inventar: „per-family revenue" +
-   `sl_turnover_sales_potential`) → **Join nötig**, nicht ein Feld
-3. Nur im Report/Export berechnet → **per API überhaupt nicht verfügbar**
+Alles auf **einer** Zeile, einfache `'`, `LogicalName` case-sensitive.
 
-Fall 3 wäre gravierend: der Umsatz ist die **Zielvariable** der ICP und die Basis
-von `customer_state` und Divergenz. Träfe er zu, bliebe der Excel-Import für
-Umsatz zwingend — der CRM-Sync könnte alles andere aktualisieren, aber nicht das
-Wichtigste. **Das ist vor jeder Implementierung zu klären.**
-
-## 5. Rein lokale Felder — CRM darf sie NIE überschreiben
-
-Diese existieren in Dataverse nicht und sind das Eigentum von AdWatch. Der
-Feld-Ownership-Map schützt sie:
-
-`description` · `products` · `founded_year` · `employee_hint` ·
-`enrichment_status` · `page_id` · `page_name` · `page_url` ·
-`resolution_status` · `candidates` · `fit_score` · `opportunity_score` ·
-`target_score` · `fit_breakdown` · `scores_updated_at` · `is_intercompany` ·
-`customer_state` (abgeleitet) · `imported_at`
-
-**Regel:** CRM gewinnt bei Stammdaten (Abschnitte 1–4). AdWatch gewinnt bei
-allem in Abschnitt 5. Genau die Disziplin, die die Anreicherung schon hat
-(SAP-/Handeingaben werden nie überschrieben, `manual`-Provenance schlägt den
-Extraktor).
-
----
-
-## 6. Die Abfragen, die das klären
-
-**WICHTIG — jede URL steht auf EINER Zeile.** Beim Kopieren einer umbrochenen URL
-gelangen Zeilenumbruch und Einrückung mit in den Pfad → **404**. Genau das ist beim
-ersten Versuch passiert. Außerdem: einfache Anführungszeichen müssen `'` sein
-(nicht typografische `’`, die Word ersetzt), und `LogicalName='account'` ist
-**case-sensitive**.
-
-**Beste erste Abfrage** — kein Metadaten-Endpunkt, sondern ein echter Datensatz
-OHNE `$select`. Dataverse liefert dann ALLE Felder; die JSON-Schlüssel *sind* die
-logischen Namen, und man sieht zusätzlich, welche Felder gefüllt sind. Beantwortet
-Abschnitt 3 und 4 in einem Zug:
-
+Umsatzfelder an einem **aktiven** Händler prüfen:
 ```
-https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$top=1
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$top=3&$filter=statecode eq 0 and slx_revenue_current_year ne null&$select=name,accountnumber,slx_revenue_current_year,slx_revenue_current_year_1,sl_customer_segment,sl_sales_channel
 ```
 
-Falls das nicht geht, die Leiter nach unten:
-
+Füllstand der Felder, die wir anreichern:
 ```
-https://slxcrowd.crm4.dynamics.com/api/data/v9.2/WhoAmI
-```
-```
-https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$top=1&$select=name
-```
-```
-https://slxcrowd.crm4.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='account')/Attributes?$select=LogicalName,AttributeType
-```
-```
-https://slxcrowd.crm4.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='sl_debitor')/Attributes?$select=LogicalName,AttributeType
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$top=5&$filter=numberofemployees ne null&$select=name,numberofemployees,sl_founding_date,sl_corporate_form
 ```
 
-## 7. Bilanz
+Gibt es Interessenten (= die fehlenden Negativbeispiele)?
+```
+https://slxcrowd.crm4.dynamics.com/api/data/v9.2/accounts?$top=3&$filter=sl_customer_or_prospect ne 102690001&$select=name,sl_customer_or_prospect,sl_customer_segment,slx_revenue_current_year
+```
+
+## 10. Bilanz
 
 | | Felder |
 |---|---|
-| ✅ belegt, funktioniert | **2** (die beiden Schlüssel — der wichtigste Teil) |
-| 🟢 sicher (Standard-Dynamics) | **9** |
-| 🟡 offen (Custom, Name geraten) | **3** |
-| 🔴 Risiko (Existenz unklar) | **7** (SAP-Nummer, Vertriebsweg, 5× Umsatz) |
-| lokal, nie aus CRM | **18** |
+| ✅ **belegt** (Name am echten Datensatz bestätigt) | **21 von 21** |
+| ⚠ Füllstand noch zu prüfen | Umsatz (5), Größe/Alter/Rechtsform (3) |
+| lokal, nie aus CRM | 16 |
 
-**11 von 21 CRM-Feldern sind belegt oder sicher — inklusive beider Schlüssel.**
-Die Adresse, die Kontaktdaten und die Identität können also sofort synchronisiert
-werden. Offen sind ausgerechnet die analytisch wertvollsten: Klassifizierung und
-Umsatz.
+**Das Mapping ist vollständig.** Alle drei roten Risiken sind aufgelöst:
+SAP-Nummer liegt auf `account`, `sl_sales_channel` existiert account-seitig,
+und die Umsatzfelder sind echte, abfragbare Spalten.
