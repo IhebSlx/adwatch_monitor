@@ -703,6 +703,19 @@ def filter_trust(filters: dict | None = None, cut: dt.date | None = None) -> dic
                        "sind Verteilungen Rauschen; Scorecard statt Statistik verwenden")
     elif n_pos < 150:
         flags.append(f"{n_pos} Gewinner — indikativ, nicht stabil (ab ~150 belastbar)")
+    else:
+        # Events-per-variable guidance (Peduzzi 1996: >=10 EPV for stable
+        # estimates; Harrell suggests 15-20). Our scoring is per-category lift
+        # with smoothing, which is more forgiving than raw logistic regression —
+        # and 'green' is ultimately decided by the OUT-OF-TIME backtest below,
+        # which van Smeden et al. argue matters more than any EPV rule. So this
+        # is a warning, never a blocker: thin-per-feature evidence with a
+        # passing backtest is usable; the warning explains the residual risk.
+        epv = n_pos / max(len(DEFAULT_WEIGHTS), 1)
+        if epv < 10:
+            flags.append(
+                f"~{epv:.0f} Gewinner je Merkmal (Richtwert >=10): einzelne "
+                "Merkmalswerte können überangepasst sein — Backtest entscheidet")
     if n_pop and base >= 0.7:
         reasons.append(f"Basisrate {base:.0%} im Filter — fast alle sind Käufer, "
                        "es gibt nichts zu diskriminieren (die 87%-Falle)")
