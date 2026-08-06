@@ -66,12 +66,38 @@ def _umlaut_ascii(s: str) -> str:
 
 
 # trade words that don't identify a company — never useful as a brand-core query
+# Trade words that describe WHAT a company does, in every market language the app
+# operates in — never WHO it is. German-only until the Spain rollout surfaced the
+# live failure this list exists to prevent: "Estudio de Arquitectura AURIA" kept
+# 'estudio' and 'arquitectura' as distinctive, so a DIFFERENT architecture studio
+# in the same town (same postcode, the words "estudio de arquitectura" on its
+# homepage) passed the plz_name identity gate and was written as AURIA's website.
 _GENERIC_TOKENS = {
+    # DE
     "fenster", "fensterbau", "türen", "tueren", "tore", "bau", "bauelemente",
     "glas", "glaserei", "glasbau", "holz", "holzbau", "metall", "metallbau",
     "tischlerei", "schreinerei", "zimmerei", "wintergarten", "wintergärten",
     "wintergaerten", "rolladen", "rollladen", "rollläden", "sonnenschutz",
     "montage", "technik", "team", "haus", "service", "systeme", "elemente",
+    # ES
+    "ventanas", "ventana", "puertas", "puerta", "aluminio", "aluminios",
+    "cristal", "cristales", "cristaleria", "cristalería", "vidrio", "vidrios",
+    "carpinteria", "carpintería", "metalica", "metálica", "metalicas",
+    "metálicas", "cerramientos", "cerramiento", "toldos", "persianas",
+    "estudio", "arquitectura", "arquitecto", "arquitectos", "sistemas",
+    "construccion", "construcción", "construcciones", "reformas", "fachadas",
+    "pergolas", "pérgolas", "mamparas", "exteriores", "interiores", "talleres",
+    # PT
+    "janelas", "portas", "caixilharia", "vidros", "vidraria", "serralharia",
+    "construções", "construcoes",
+    # FR
+    "fenetres", "fenêtres", "menuiserie", "verre", "stores", "vitrages",
+    "fermetures", "verandas", "vérandas",
+    # IT
+    "finestre", "serramenti", "infissi", "vetro", "alluminio", "vetreria",
+    # EN
+    "windows", "doors", "glazing", "aluminium", "joinery", "shading",
+    "architecture", "architects", "studio",
 }
 
 

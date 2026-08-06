@@ -2436,3 +2436,27 @@ def test_searched_companies_are_not_paid_for_twice(temp_db, monkeypatch):
     s.commit(); s.close()
     pend = fw.pending_ids("t")
     assert len(pend) == 1, "only the never-searched company may be queued"
+
+
+def test_spanish_trade_words_are_not_identifying():
+    """The AURIA incident: the generic-word list was German-only, so 'estudio' and
+    'arquitectura' counted as identifying. A DIFFERENT architecture studio in the
+    same town (same postcode, 'estudio de arquitectura' on its homepage) then
+    passed the plz_name gate and was stored as AURIA's website — the exact
+    wrong-website failure the identity gate exists to prevent."""
+    from adwatch.enrich.validate import distinctive_tokens, validate_site
+
+    assert distinctive_tokens("Estudio de Arquitectura AURIA") == {"auria"}
+    assert distinctive_tokens("Protec Ventanas") == {"protec"}
+    assert distinctive_tokens("Aluminios Baraza") == {"baraza"}
+    assert distinctive_tokens("Carpinteria Metalica FEVEGAR") == {"fevegar"}
+
+    # the live failure, replayed: another studio's page in the same town
+    company = {"name": "Estudio de Arquitectura AURIA", "phone": None,
+               "postal_code": "06220", "street": "Calle Cisneros 12"}
+    other_studio = "Estudio de arquitectura en Villafranca de los Barros, 06220"
+    res = validate_site(company, "thau.es", other_studio)
+    assert res["ok"] is False, "generic trade words must not prove identity"
+    # ...while the real match (name token present) still works
+    own = "AURIA estudio, Calle Cisneros 12, 06220 Villafranca"
+    assert validate_site(company, "auria.es", own)["ok"] is True

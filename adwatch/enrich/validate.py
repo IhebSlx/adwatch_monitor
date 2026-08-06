@@ -30,12 +30,29 @@ try:
 except Exception:  # noqa: BLE001 — keep enrichment working if that module moves
     _id_distinctive_tokens = None
 
+# Fallback only — the primary vocabulary lives in identity/serper_source.py
+# (_GENERIC_TOKENS, multilingual since the AURIA incident). This set is used when
+# that import is unavailable, so it carries the same Spanish/PT/FR/IT/EN trade
+# words: a fallback that silently accepts 'arquitectura' as identifying would
+# reintroduce the exact wrong-website bug the primary list fixed.
 _GENERIC_FALLBACK = {
     "gmbh", "kg", "ag", "co", "ohg", "ek", "mbh", "und", "der", "die", "das", "inh",
     "fenster", "tueren", "turen", "tore", "glas", "glaserei", "metallbau", "holzbau",
     "tischlerei", "schreinerei", "bauelemente", "bau", "sonnenschutz", "wintergarten",
     "fassade", "fassaden", "rollladen", "markisen", "terrassendach", "elemente",
     "technik", "service", "handel", "montage", "zentrum", "profi", "meister",
+    # ES/PT/FR/IT/EN — ascii-folded, since callers fold before comparing
+    "ventanas", "ventana", "puertas", "puerta", "aluminio", "aluminios",
+    "cristal", "cristales", "cristaleria", "vidrio", "vidrios", "carpinteria",
+    "metalica", "metalicas", "cerramientos", "cerramiento", "toldos",
+    "persianas", "estudio", "arquitectura", "arquitecto", "arquitectos",
+    "sistemas", "construccion", "construcciones", "reformas", "fachadas",
+    "pergolas", "mamparas", "exteriores", "interiores", "talleres",
+    "janelas", "portas", "caixilharia", "vidros", "serralharia",
+    "fenetres", "menuiserie", "verre", "stores", "vitrages", "verandas",
+    "finestre", "serramenti", "infissi", "vetro", "alluminio", "vetreria",
+    "windows", "doors", "glazing", "aluminium", "joinery", "architecture",
+    "architects", "studio",
 }
 
 
