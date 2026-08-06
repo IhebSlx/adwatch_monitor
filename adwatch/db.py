@@ -7,6 +7,7 @@ single page_id column) so upgrading never requires wiping collected history.
 from __future__ import annotations
 
 import logging
+import threading
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -367,10 +368,26 @@ def _migrate(engine) -> None:
                 ), {"name": None, "email": config.REPORT_EMAIL_DEFAULT_RECIPIENT})
 
 
+# init_db() is called defensively from several entry points (web startup, CLI,
+# both fetch pipelines). Once per PROCESS is enough — and more than enough is
+# harmful: with 6 parallel ad workers each entering a fetch pipeline, every
+# worker re-ran the whole migration block, the UPDATEs fought over SQLite's
+# write lock, and real ad fetches failed with 'database is locked' (job 47).
+_init_done = False
+_init_lock = threading.Lock()
+
+
 def init_db() -> None:
-    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    integrity_ok()                     # loud warning if the DB file is corrupt
-    from .backup import backup_now
-    backup_now(tag="startup")          # snapshot before any migration runs
-    Base.metadata.create_all(_engine)
-    _migrate(_engine)
+    global _init_done
+    if _init_done:
+        return
+    with _init_lock:
+        if _init_done:
+            return
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        integrity_ok()                 # loud warning if the DB file is corrupt
+        from .backup import backup_now
+        backup_now(tag="startup")      # snapshot before any migration runs
+        Base.metadata.create_all(_engine)
+        _migrate(_engine)
+        _init_done = True

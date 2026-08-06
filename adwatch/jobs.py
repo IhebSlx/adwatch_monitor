@@ -583,7 +583,7 @@ def _pl_log(job_id: int, text: str, advance: bool = True) -> None:
             return
         except Exception:  # noqa: BLE001 — typically sqlite 'database is locked'
             if attempt == 4:
-                log.warning("job %s: progress line dropped after lock retries", job_id)
+                logger.warning("job %s: progress line dropped after lock retries", job_id)
                 return
             time.sleep(0.5 * (attempt + 1))
 
