@@ -563,15 +563,29 @@ _pl_log_lock = threading.Lock()
 
 
 def _pl_log(job_id: int, text: str, advance: bool = True) -> None:
-    with _pl_log_lock:
-        with SessionLocal() as s:
-            job = s.get(FetchJob, job_id)
-            if not job:
+    # Retries through 'database is locked': with 6 ad workers writing collection
+    # runs concurrently, the progress UPDATE can lose the race for the write
+    # lock. Job 46 proved the cost of not retrying — the FIRST log write of the
+    # ads step raised, the step-level catch killed all 214 remaining units, and
+    # the job reported 'done' with the ads silently missing. A progress line is
+    # never worth a step: after 5 failed attempts the entry is dropped instead.
+    for attempt in range(5):
+        try:
+            with _pl_log_lock:
+                with SessionLocal() as s:
+                    job = s.get(FetchJob, job_id)
+                    if not job:
+                        return
+                    if advance:
+                        job.completed = (job.completed or 0) + 1
+                    _append_log(s, job, text)
+                    s.commit()
+            return
+        except Exception:  # noqa: BLE001 — typically sqlite 'database is locked'
+            if attempt == 4:
+                log.warning("job %s: progress line dropped after lock retries", job_id)
                 return
-            if advance:
-                job.completed = (job.completed or 0) + 1
-            _append_log(s, job, text)
-            s.commit()
+            time.sleep(0.5 * (attempt + 1))
 
 
 def _pl_cancelled(job_id: int) -> bool:
