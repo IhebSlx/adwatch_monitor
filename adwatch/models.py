@@ -127,6 +127,19 @@ class Company(Base):
     # facebook_url is the strongest Meta identity anchor available: a page linked
     # FROM the verified website provably belongs to this company, unlike a name
     # search. Feeds identity resolution rather than replacing it.
+    # ---- Architekten-spezifisch (enrich profile 'architekt') ----
+    # An architect's value is not "do they buy" but "do they specify projects
+    # where Solarlux fits, and do they decide". A prestigious office doing
+    # interiors or infrastructure is irrelevant however large it is.
+    #   solarlux_relevance  hoch|mittel|gering — does the portfolio involve large
+    #                       glazing, façades, folding/sliding systems at all
+    #   decision_role       'vergibt Aufträge' vs 'empfiehlt' — the Spain/Germany
+    #                       asymmetry made concrete per office
+    solarlux_relevance: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    office_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    decision_role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reference_scale: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    enrich_profile: Mapped[str | None] = mapped_column(String(16), nullable=True)
     facebook_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
     instagram_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(300), nullable=True)

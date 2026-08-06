@@ -108,9 +108,123 @@ Website-Text:
 """
 
 
-def _prompt() -> str:
-    return (_PROMPT.replace("__PRODUCTS__", ", ".join(PRODUCT_VOCAB))
-                   .replace("__COMPETITORS__", ", ".join(COMPETITOR_BRANDS)))
+# ---------------------------------------------------------------------------
+# Architekten brauchen einen eigenen Prompt
+# ---------------------------------------------------------------------------
+# The dealer prompt opens with "Website-Text eines Bauelemente-/Handwerksbetriebs"
+# and asks for `products` (from a SELLER's vocabulary), `own_fabrication` and
+# `has_showroom`. For an Architekturbüro every one of those is wrong: an architect
+# SPECIFIES systems, never sells or fabricates them, so those fields come back
+# empty at best and falsely claim a trade business at worst.
+#
+# What actually decides an architect's value to Solarlux is different in kind:
+#   * WHICH systems they specify  -> the conquest signal (stored in
+#     competitor_brands, same column, same meaning: whose profiles they use today)
+#   * WHETHER their projects even involve large glazing -> solarlux_relevance;
+#     an office doing interiors or roads is irrelevant no matter how prestigious
+#   * WHAT they build             -> project_focus (Wohnbau/Objektbau/Hotel …),
+#     which matters MORE here than for dealers because it is the whole thesis
+#   * Generalplaner vs specialist, references, awards/memberships
+#
+# Market note (Iheb): in SPAIN architects hold real decision power and can
+# effectively award the Auftrag, so they are treated as targets; in GERMANY they
+# consult. The prompt therefore asks about decision role explicitly.
+_PROMPT_ARCHITEKT = """Du analysierst den Website-Text eines ARCHITEKTUR- oder PLANUNGSBÜROS.
+Die Antwort hat ZWEI streng getrennte Teile: belegte FAKTEN und eine als solche
+gekennzeichnete EINSCHÄTZUNG. Vermische die beiden niemals.
+
+WICHTIG — ein Architekturbüro VERKAUFT keine Bauelemente, es PLANT und
+SCHREIBT AUS. Behaupte niemals, das Büro verkaufe oder fertige Produkte.
+
+SPRACHE:
+- Der Text kann in JEDER Sprache sein. Alle FREITEXT-Felder ("description_de",
+  "employee_hint", "service_area", "assessment_de") MÜSSEN Deutsch sein —
+  sinngemäß übersetzen, keine fremdsprachigen Wörter stehen lassen.
+  Beispiele: "estudio de arquitectura" -> "Architekturbüro";
+  "obra nueva" -> "Neubau"; "reforma integral" -> "Komplettsanierung".
+- NICHT übersetzt werden: Eigennamen, Marken, Orts-/Regionsnamen, Rechtsform.
+- "evidence" bleibt WÖRTLICHES Originalzitat in der Sprache der Website.
+
+TEIL 1 — FAKTEN:
+- Nur was im Text steht. Nichts schätzen, nichts aus Weltwissen ergänzen.
+- Fehlt eine Information: null bzw. leere Liste.
+- "specified_systems": Hersteller/Systemmarken, die als eingesetzt oder geplant
+  GENANNT werden (aus: __COMPETITORS__). Nur wenn wirklich genannt.
+- "elements": welche Bauelement-Typen in den Projekten vorkommen
+  (aus: __PRODUCTS__) — also was GEPLANT wird, nicht was verkauft wird.
+- "solarlux_relevance": "hoch" wenn die Projekte erkennbar große Verglasungen,
+  Fassaden, Schiebe-/Faltanlagen, Wintergärten, Terrassenüberdachungen oder
+  Glasdächer beinhalten; "mittel" bei allgemeinem Hochbau ohne klaren
+  Glas-Schwerpunkt; "gering" bei Innenarchitektur, Infrastruktur, Stadtplanung
+  oder reiner Bauleitung ohne Gebäudehülle; null wenn nicht erkennbar.
+- "office_type": "Generalplaner" | "Architekturbüro" | "Fachplaner" |
+  "Innenarchitektur" | "Landschaftsplanung" | null — wörtlich am Text belegt.
+- "decision_role": "vergibt Aufträge" wenn der Text zeigt, dass das Büro
+  Bauleitung/Ausschreibung/Vergabe übernimmt; "empfiehlt" wenn es nur plant;
+  null wenn unklar.
+- "reference_scale": kurzer deutscher Hinweis auf Umfang/Größe der Referenzen,
+  falls genannt ("über 200 Projekte", "Hotels ab 100 Zimmern") — sonst null.
+- "memberships": Kammern, Auszeichnungen, Verbände, Publikationen (max 6).
+- "employee_hint": Bürogröße NUR wenn ausdrücklich genannt ("12 Architekten").
+- "legal_form": WÖRTLICH wie im Text (S.L.P., S.L., GmbH, Partnerschaft …), sonst null.
+- "evidence": kurzes wörtliches Zitat je gefülltem Faktenfeld (max. 120 Zeichen).
+
+TEIL 2 — EINSCHÄTZUNG (assessment_de), 2-3 Sätze: Bürogröße, Projekttypen,
+Anspruch/Preisklasse der Projekte, regionale Reichweite und — am wichtigsten —
+wie relevant das Portfolio für Solarlux-Systeme ist und ob das Büro Einfluss auf
+die Produktwahl hat. Keine erfundenen Zahlen.
+
+Antworte AUSSCHLIESSLICH mit diesem JSON (keine Erklärung, kein Markdown):
+{
+  "description_de": "<1-2 Sätze: was plant das Büro? oder null>",
+  "elements": [<0-6 Werte aus: __PRODUCTS__>],
+  "specified_systems": [<genannte Marken aus: __COMPETITORS__>],
+  "solarlux_relevance": "<hoch | mittel | gering | null>",
+  "office_type": "<siehe oben oder null>",
+  "decision_role": "<vergibt Aufträge | empfiehlt | null>",
+  "project_focus": [<0-4 aus: "Wohnbau", "Objektbau", "Hotel/Gastro", "Sanierung", "Gewerbe", "Öffentlich">],
+  "reference_scale": "<kurzer Hinweis auf Deutsch oder null>",
+  "memberships": [<Kammern/Auszeichnungen/Verbände, max 6>],
+  "founded_year": <Jahr als Zahl oder null>,
+  "employee_hint": "<Bürogröße auf Deutsch oder null>",
+  "legal_form": "<Rechtsform WÖRTLICH oder null>",
+  "service_area": "<Region auf Deutsch oder null>",
+  "mentions_solarlux": <true|false>,
+  "evidence": {"<feldname>": "<Zitat>", ...},
+  "assessment_de": "<2-3 Sätze Einschätzung wie oben, oder null>"
+}
+
+PRODUCT_VOCAB: __PRODUCTS__
+COMPETITOR_LIST: __COMPETITORS__
+"""
+
+OFFICE_TYPES = ("Generalplaner", "Architekturbüro", "Fachplaner",
+                "Innenarchitektur", "Landschaftsplanung")
+DECISION_ROLES = ("vergibt Aufträge", "empfiehlt")
+RELEVANCE = ("hoch", "mittel", "gering")
+
+# Which prompt profile a company gets. Driven by CRM segment, so it needs no
+# extra data and cannot drift from the account's classification.
+PROFILE_BETRIEB, PROFILE_ARCHITEKT = "betrieb", "architekt"
+_ARCHITEKT_SEGMENTS = ("Architekten",)
+
+
+def profile_for(segment: str | None, sub_segment: str | None = None) -> str:
+    """The extraction profile for a company, from its CRM segment."""
+    if (segment or "") in _ARCHITEKT_SEGMENTS:
+        return PROFILE_ARCHITEKT
+    # planners that sit under other segments but behave like architects
+    if (sub_segment or "") in ("Generalplaner", "Architekturbüro",
+                              "Fachplanungsbüro", "Innenarchitektur",
+                              "Landschaftsplaner"):
+        return PROFILE_ARCHITEKT
+    return PROFILE_BETRIEB
+
+
+def _prompt(profile: str = PROFILE_BETRIEB) -> str:
+    base = _PROMPT_ARCHITEKT if profile == PROFILE_ARCHITEKT else _PROMPT
+    return (base.replace("__PRODUCTS__", ", ".join(PRODUCT_VOCAB))
+                .replace("__COMPETITORS__", ", ".join(COMPETITOR_BRANDS)))
 
 
 PROJECT_FOCUS = ("Wohnbau", "Objektbau", "Hotel/Gastro", "Sanierung",
@@ -193,9 +307,17 @@ def _clean_list(value, vocab: tuple[str, ...], limit: int) -> list[str]:
     return out
 
 
-def extract_facts(site_text: str, model: str | None = None) -> dict:
+def extract_facts(site_text: str, model: str | None = None,
+                  profile: str = PROFILE_BETRIEB) -> dict:
     """One LLM call -> validated fact dict. Raises on a missing key/bad response
-    so the caller can record an error rather than store junk."""
+    so the caller can record an error rather than store junk.
+
+    `profile` selects the prompt: PROFILE_BETRIEB for dealers/fabricators,
+    PROFILE_ARCHITEKT for planning offices (see profile_for()). The architect
+    profile returns the same STORAGE keys wherever the meaning carries over —
+    competitor_brands = which systems they specify, products = which elements
+    they plan with — so downstream filters and the dossier need no special case.
+    """
     if not config.ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is not set — needed to extract company facts")
     text = (site_text or "").strip()
@@ -209,7 +331,7 @@ def extract_facts(site_text: str, model: str | None = None) -> dict:
     msg = client.messages.create(
         model=use_model,
         max_tokens=900,   # +200 for the Einschätzung on top of the fact fields
-        messages=[{"role": "user", "content": _prompt() + text[:9000]}],
+        messages=[{"role": "user", "content": _prompt(profile) + text[:9000]}],
     )
     raw = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
@@ -221,6 +343,43 @@ def extract_facts(site_text: str, model: str | None = None) -> dict:
     # own provenance + lower confidence — the report labels it as an estimate.
     assess = (data.get("assessment_de") or "").strip() or None
     evidence = data.get("evidence") if isinstance(data.get("evidence"), dict) else {}
+
+    if profile == PROFILE_ARCHITEKT:
+        # Map the architect answer onto the SAME storage keys where the meaning
+        # carries over, so every existing filter, export and the dossier keep
+        # working without a per-segment branch:
+        #   elements          -> products           (plans with, not sells)
+        #   specified_systems -> competitor_brands  (whose systems they specify)
+        #   memberships       -> certifications     (Kammern/Auszeichnungen)
+        # own_fabrication / has_showroom are left NULL on purpose: for a planning
+        # office they are not "no", they are not applicable, and null is how this
+        # app says "not stated".
+        one = lambda v, allowed: (str(v).strip() if str(v or "").strip() in allowed else None)  # noqa: E731
+        return {
+            "description_de": desc[:600] if desc else None,
+            "assessment_de": assess[:700] if assess else None,
+            "products": _clean_list(data.get("elements"), PRODUCT_VOCAB, 6),
+            "competitor_brands": _clean_list(data.get("specified_systems"),
+                                             COMPETITOR_BRANDS, 12),
+            "certifications": [str(c).strip()[:40] for c in
+                               (data.get("memberships") or []) if str(c).strip()][:6],
+            "project_focus": _clean_list(data.get("project_focus"), PROJECT_FOCUS, 4),
+            "founded_year": _coerce_year(data.get("founded_year")),
+            "employee_hint": ((data.get("employee_hint") or "").strip() or None),
+            "legal_form": _legal_form_in_text(data.get("legal_form"), text),
+            "service_area": ((data.get("service_area") or "").strip() or None),
+            "mentions_solarlux": bool(data.get("mentions_solarlux")),
+            "own_fabrication": None, "has_showroom": None, "positioning": None,
+            # architect-only facts
+            "solarlux_relevance": one(data.get("solarlux_relevance"), RELEVANCE),
+            "office_type": one(data.get("office_type"), OFFICE_TYPES),
+            "decision_role": one(data.get("decision_role"), DECISION_ROLES),
+            "reference_scale": ((data.get("reference_scale") or "").strip() or None),
+            "profile": PROFILE_ARCHITEKT,
+            "evidence": {str(k)[:40]: str(v)[:200] for k, v in list(evidence.items())[:12]},
+            "llm_model": use_model,
+        }
+
     return {
         "description_de": desc[:600] if desc else None,
         "assessment_de": assess[:700] if assess else None,

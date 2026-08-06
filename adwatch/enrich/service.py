@@ -35,7 +35,10 @@ _CONFIDENCE = {"sap": 1.0, "phone": 0.97, "plz_street": 0.95, "plz_name": 0.9,
                "domain_plus_name": 0.8, "manual": 1.0}
 
 _COMPANY_KEYS = ("id", "name", "phone", "postal_code", "street", "city", "country",
-                 "email", "website_domain")
+                 "email", "website_domain",
+                 # segment/sub_segment select the extraction PROFILE (a planning
+                 # office needs different questions than a fabricator)
+                 "segment", "sub_segment")
 
 
 def _company_dict(c: Company) -> dict:
@@ -199,7 +202,12 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
                 "JSON-LD / tel: / mailto: / meta — kein LLM")
         if allow_llm:
             try:
-                facts = extract.extract_facts(bundle["text"])
+                # Architekturbüros get their own prompt: they SPECIFY systems,
+                # they never sell or fabricate them, so the dealer prompt asks
+                # the wrong questions and yields empty or misleading fields.
+                prof = extract.profile_for(comp.get("segment"),
+                                           comp.get("sub_segment"))
+                facts = extract.extract_facts(bundle["text"], profile=prof)
                 ev = facts.pop("evidence", {}) or {}
                 model = facts.pop("llm_model", None)
                 for key, value in facts.items():
@@ -305,6 +313,13 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             c.has_showroom = merged.get("has_showroom")
             c.project_focus = merged.get("project_focus") or None
             c.positioning = merged.get("positioning") or None
+            # architect profile only — null for dealers, which is correct:
+            # 'not applicable' and 'not stated' are both null in this app
+            c.solarlux_relevance = merged.get("solarlux_relevance") or None
+            c.office_type = merged.get("office_type") or None
+            c.decision_role = merged.get("decision_role") or None
+            c.reference_scale = merged.get("reference_scale") or None
+            c.enrich_profile = merged.get("profile") or c.enrich_profile
             # Machine-readable self-declared facts (site_facts). These only ever
             # FILL a gap: a phone or address from CRM is authoritative master
             # data and must not be replaced by a website's version.

@@ -484,7 +484,7 @@ def test_enrich_never_overwrites_sap_website(temp_db, monkeypatch):
                         lambda domain, total_chars=9000: {
                             "domain": domain, "home_url": f"https://{domain}",
                             "text": "Wir bauen Fenster. Tel. 05405 1234-0", "pages": [], "chars": 36})
-    monkeypatch.setattr(extract_mod, "extract_facts", lambda text, model=None: {
+    monkeypatch.setattr(extract_mod, "extract_facts", lambda text, model=None, **kw: {
         "description_de": "Baut Fenster.", "products": ["Fenster"], "founded_year": 1952,
         "employee_hint": None, "legal_form": "GmbH", "service_area": None,
         "mentions_solarlux": True, "competitor_brands": [],
@@ -1388,7 +1388,7 @@ def test_reenrichment_can_retract_a_fact_but_not_a_human_edit(temp_db, monkeypat
                         lambda d: {"text": "Retract SL, Alicante", "pages": [d]})
 
     # run 1: the old, wrong extraction
-    monkeypatch.setattr(extract, "extract_facts", lambda t: {
+    monkeypatch.setattr(extract, "extract_facts", lambda t, **kw: {
         "description_de": "Baut Fenster.", "legal_form": "e.K.",
         "employee_hint": "Un gran equipo", "products": ["Fenster"],
         "founded_year": None, "service_area": None, "mentions_solarlux": False,
@@ -1404,7 +1404,7 @@ def test_reenrichment_can_retract_a_fact_but_not_a_human_edit(temp_db, monkeypat
     s.commit(); s.close()
 
     # run 2: the corrected extractor returns null for both
-    monkeypatch.setattr(extract, "extract_facts", lambda t: {
+    monkeypatch.setattr(extract, "extract_facts", lambda t, **kw: {
         "description_de": "Baut Fenster und Türen.", "legal_form": None,
         "employee_hint": None, "products": ["Fenster", "Türen"],
         "founded_year": None, "service_area": None, "mentions_solarlux": False,
@@ -2840,3 +2840,108 @@ def test_dossier_project_outcome_uses_the_one_win_rule(temp_db):
     prj = next(p for p in d["projekte"] if p["project_id"] == "prj")
     assert prj["status"] == "gewonnen", "one win makes the project won"
     assert prj["members"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Architekten need their own extraction profile
+# ---------------------------------------------------------------------------
+
+def test_architect_profile_is_selected_from_segment():
+    from adwatch.enrich.extract import (profile_for, PROFILE_ARCHITEKT,
+                                        PROFILE_BETRIEB)
+    assert profile_for("Architekten") == PROFILE_ARCHITEKT
+    # planners filed under another segment still behave like architects
+    assert profile_for("Baudienstleister", "Generalplaner") == PROFILE_ARCHITEKT
+    assert profile_for("Handel", "Bauelementehandel") == PROFILE_BETRIEB
+    assert profile_for(None) == PROFILE_BETRIEB
+
+
+def test_architect_prompt_never_asks_a_planner_to_sell():
+    """The dealer prompt opens with 'Bauelemente-/Handwerksbetrieb' and asks for
+    own_fabrication and has_showroom — wrong in kind for a planning office, which
+    SPECIFIES systems. The architect prompt must ask the architect questions."""
+    from adwatch.enrich.extract import _prompt, PROFILE_ARCHITEKT, PROFILE_BETRIEB
+    arch = _prompt(PROFILE_ARCHITEKT)
+    deal = _prompt(PROFILE_BETRIEB)
+    assert "ARCHITEKTUR" in arch and "VERKAUFT keine Bauelemente" in arch
+    assert "own_fabrication" not in arch and "has_showroom" not in arch
+    assert "solarlux_relevance" in arch and "decision_role" in arch
+    # and the dealer prompt is untouched
+    assert "own_fabrication" in deal and "Bauelemente-/Handwerksbetrieb" in deal
+
+
+def test_architect_answer_maps_onto_shared_storage_keys(monkeypatch):
+    """Same columns wherever the meaning carries over, so no downstream filter
+    needs a per-segment branch: elements->products, specified_systems->
+    competitor_brands, memberships->certifications. own_fabrication/has_showroom
+    stay NULL — for a planner they are not 'no', they are not applicable."""
+    import json as _json
+    from adwatch.enrich import extract
+
+    class _Blk:
+        type = "text"
+        text = _json.dumps({
+            "description_de": "Architekturbüro für Wohn- und Hotelbauten.",
+            "elements": ["Schiebetüren", "Fassade"],
+            "specified_systems": ["Schüco", "Sky-Frame"],
+            "solarlux_relevance": "hoch",
+            "office_type": "Architekturbüro",
+            "decision_role": "vergibt Aufträge",
+            "project_focus": ["Wohnbau", "Hotel/Gastro"],
+            "reference_scale": "über 200 Projekte",
+            "memberships": ["COAM"],
+            "founded_year": 1998, "employee_hint": "12 Architekten",
+            "legal_form": "S.L.P.", "service_area": "Madrid",
+            "mentions_solarlux": False, "evidence": {}, "assessment_de": "Gross.",
+        })
+
+    class _Msg:
+        content = [_Blk()]
+
+    class _Client:
+        def __init__(self, **kw): self.messages = self
+        def create(self, **kw):
+            assert "ARCHITEKTUR" in kw["messages"][0]["content"]
+            return _Msg()
+
+    monkeypatch.setattr(extract.config, "ANTHROPIC_API_KEY", "test", raising=False)
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+
+    # the form must be IN the text — _legal_form_in_text rejects one that is not
+    f = extract.extract_facts("Estudio S.L.P. " + "x" * 200,
+                              profile=extract.PROFILE_ARCHITEKT)
+    assert f["products"] == ["Schiebetüren", "Fassade"]      # plans with
+    assert set(f["competitor_brands"]) == {"Schüco", "Sky-Frame"}  # specifies
+    assert f["certifications"] == ["COAM"]
+    assert f["solarlux_relevance"] == "hoch"
+    assert f["decision_role"] == "vergibt Aufträge"
+    assert f["own_fabrication"] is None and f["has_showroom"] is None
+    assert f["legal_form"] == "S.L.P."
+    assert f["profile"] == extract.PROFILE_ARCHITEKT
+
+
+def test_architect_relevance_rejects_invented_values(monkeypatch):
+    """A free-text answer outside the allowed set must become null, not be stored."""
+    import json as _json
+    from adwatch.enrich import extract
+
+    class _Blk:
+        type = "text"
+        text = _json.dumps({"description_de": "x", "solarlux_relevance": "sehr hoch",
+                            "office_type": "Weltmeister", "decision_role": "vielleicht",
+                            "evidence": {}})
+
+    class _Msg:
+        content = [_Blk()]
+
+    class _Client:
+        def __init__(self, **kw): self.messages = self
+        def create(self, **kw): return _Msg()
+
+    monkeypatch.setattr(extract.config, "ANTHROPIC_API_KEY", "test", raising=False)
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+    f = extract.extract_facts("y" * 200, profile=extract.PROFILE_ARCHITEKT)
+    assert f["solarlux_relevance"] is None
+    assert f["office_type"] is None and f["decision_role"] is None

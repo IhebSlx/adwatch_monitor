@@ -520,6 +520,10 @@ def _to_dict(c: Company) -> dict:
         "assessment": c.assessment, "certifications": c.certifications,
         "own_fabrication": c.own_fabrication, "has_showroom": c.has_showroom,
         "project_focus": c.project_focus, "positioning": c.positioning,
+        # Architekten-Profil (enrich profile 'architekt')
+        "solarlux_relevance": c.solarlux_relevance, "office_type": c.office_type,
+        "decision_role": c.decision_role, "reference_scale": c.reference_scale,
+        "enrich_profile": c.enrich_profile,
         "facebook_url": c.facebook_url, "instagram_url": c.instagram_url,
         "linkedin_url": c.linkedin_url, "site_language": c.site_language,
     }
