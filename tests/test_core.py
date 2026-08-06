@@ -2769,3 +2769,74 @@ def test_triage_downgrades_unconfident_guesses(temp_db, monkeypatch):
     assert r["too_thin"] == 1 and r["likely_right"] == 0
     with temp_db.SessionLocal() as s:
         assert s.get(Company, cid).identity_status == "conflict"
+
+
+def test_dossier_separates_roles_and_synthesises_profile(temp_db):
+    """The FBI file: every VC in every ROLE the company plays, never mixed —
+    an architect's 'lost' VC is not a lost sale — plus a Kurzprofil whose every
+    clause traces to a column (deterministic, no LLM per view)."""
+    import datetime as _dt
+    from adwatch import dossier
+    from adwatch.models import Company, CrmOpportunity, CrmOrderEvent
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Muster Bau GmbH", country="DE", city="Osnabrück",
+                crm_id="GUID-1", segment="Handel", sub_segment="Bauelementehandel",
+                positioning="premium", own_fabrication=True,
+                quote_sum=100000, conversion_rate=0.25)
+    s.add(c); s.flush()
+    s.add(CrmOrderEvent(company_id=c.id, order_date=_dt.date(2024, 3, 1),
+                        amount=50000, beleg_count=2))
+    # as buyer: one won VC with invoiced value and SAP trace
+    s.add(CrmOpportunity(crm_id="1", number="1", parent_account_crm_id="guid-1",
+                         state="gewonnen", order_value=40000, invoiced_value=38000,
+                         sap_order_numbers=["4711"], type_of_use="Wohnen",
+                         origin="vom Händler", project_id="p1",
+                         opportunity_guid="v1",
+                         created_on=_dt.datetime(2024, 1, 1)))
+    # as architect: a lost VC — must land in the ARCHITECT block, not the buyer's
+    s.add(CrmOpportunity(crm_id="2", number="2", architect_crm_id="guid-1",
+                         state="verloren", lost_reason="Zu teuer",
+                         project_id="p2", opportunity_guid="v2",
+                         created_on=_dt.datetime(2024, 2, 1)))
+    s.commit(); cid = c.id; s.close()
+
+    d = dossier.build(cid)
+    assert d["rollen"]["kaeufer"]["won"] == 1
+    assert d["rollen"]["kaeufer"]["invoiced_value"] == 38000
+    assert d["rollen"]["kaeufer"]["recent"][0]["sap_orders"] == ["4711"]
+    assert d["rollen"]["architekt"]["lost"] == 1
+    assert "kaeufer" in d["rollen"] and d["rollen"]["architekt"]["vcs"] == 1
+    assert len(d["projekte"]) == 2
+    kp = d["kurzprofil"]
+    assert "Bauelementehandel" in kp and "Osnabrück" in kp
+    assert "eigene Fertigung" in kp and "Konversion 25%" in kp
+
+
+def test_dossier_project_outcome_uses_the_one_win_rule(temp_db):
+    """A project with one win and one sibling loss is a WON project in the
+    dossier's Objekte list, per the Objektvertrieb rule."""
+    import datetime as _dt
+    from adwatch import dossier
+    from adwatch.models import Company, CrmOpportunity
+
+    s = temp_db.SessionLocal()
+    c = Company(name="GU Beispiel", country="DE", crm_id="GUID-9",
+                segment="Baudienstleister")
+    s.add(c); s.flush()
+    s.add(CrmOpportunity(crm_id="10", number="10", parent_account_crm_id="guid-9",
+                         state="verloren", lost_reason="Zugehörige VC gewonnen",
+                         project_id="prj", opportunity_guid="prj",
+                         project_name="Objekt Musterstraße",
+                         created_on=_dt.datetime(2024, 5, 1)))
+    s.add(CrmOpportunity(crm_id="11", number="11",
+                         parent_account_crm_id="someone-else",
+                         state="gewonnen", order_value=90000,
+                         project_id="prj", opportunity_guid="v11",
+                         created_on=_dt.datetime(2024, 5, 2)))
+    s.commit(); cid = c.id; s.close()
+
+    d = dossier.build(cid)
+    prj = next(p for p in d["projekte"] if p["project_id"] == "prj")
+    assert prj["status"] == "gewonnen", "one win makes the project won"
+    assert prj["members"] == 2

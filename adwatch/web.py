@@ -363,11 +363,15 @@ def company_detail(cid: int):
     m = next((x for x in metrics if x["company_id"] == cid), None)
     if m is None:
         raise HTTPException(404, "Company not found")
+    from . import dossier
     return {
         "company": customers.get_company(cid),   # full master data — drawer works from any tab
         "metric": m,
         "history": services.company_history(cid),
         "week": services.latest_week_detail(cid),
+        # the FBI file: Belege timeline, every VC in every ROLE, the Objekte
+        # they group into, and the deterministic Kurzprofil
+        "dossier": dossier.build(cid),
     }
 
 

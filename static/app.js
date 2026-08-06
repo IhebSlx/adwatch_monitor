@@ -1481,6 +1481,42 @@
     $("#chancenMinValue").addEventListener("change", loadChancen);
   }
 
+  // Das Dossier — Kurzprofil, Belege-Historie, jede VC in jeder ROLLE, Objekte.
+  const ROLE_LABEL = { kaeufer: "Als Käufer", architekt: "Als Architekt", endkunde: "Als Endkunde" };
+
+  function dossierSection(d) {
+    if (!d) return "";
+    const kv = (o) => Object.entries(o || {}).map(([k, v]) => `${esc(k)} (${v})`).join(" · ");
+    let html = `<div class="drawer-section"><h3>Dossier</h3>`;
+    if (d.kurzprofil) html += `<p style="font-size:13px;line-height:1.55">${esc(d.kurzprofil)}</p>`;
+    const b = d.belege || {};
+    if (b.events) {
+      const years = Object.entries(b.by_year || {})
+        .map(([y, v]) => `${y}: ${eurShort(v)}`).join(" · ");
+      html += `<div style="font-size:12.5px;margin-top:6px">
+        <b>Belege:</b> ${b.events} Bestellungen · ${eurShort(b.total)} · ${esc(b.first)} → ${esc(b.last)}
+        <div class="sub">${esc(years)}</div></div>`;
+    }
+    for (const [role, blk] of Object.entries(d.rollen || {})) {
+      html += `<div style="margin-top:10px;font-size:12.5px">
+        <b>${ROLE_LABEL[role] || role}:</b> ${blk.vcs} Verkaufschancen —
+        ${blk.won} gewonnen${blk.win_rate != null ? ` (${Math.round(blk.win_rate * 100)} %)` : ""},
+        ${blk.open} offen${blk.invoiced_value ? ` · fakturiert ${eurShort(blk.invoiced_value)}` : ""}${blk.quoted_value ? ` · angeboten ${eurShort(blk.quoted_value)}` : ""}
+        ${Object.keys(blk.building_types || {}).length ? `<div class="sub">Gebäude: ${kv(blk.building_types)}</div>` : ""}
+        ${Object.keys(blk.origins || {}).length ? `<div class="sub">Herkunft: ${kv(blk.origins)}</div>` : ""}
+        ${Object.keys(blk.lost_reasons || {}).length ? `<div class="sub">Verluste: ${kv(blk.lost_reasons)}</div>` : ""}
+      </div>`;
+    }
+    const pj = d.projekte || [];
+    if (pj.length) {
+      html += `<div style="margin-top:10px;font-size:12.5px"><b>Objekte (${pj.length}):</b>
+        ${pj.slice(0, 6).map(p => `<div class="sub">• ${esc((p.name || "").slice(0, 60))} —
+          ${esc(p.status)}, ${p.members} VC${p.members > 1 ? "s" : ""}${p.type_of_use ? `, ${esc(p.type_of_use)}` : ""}${p.value ? `, ${eurShort(p.value)}` : ""}</div>`).join("")}
+      </div>`;
+    }
+    return html + `</div>`;
+  }
+
   // CRM / Belege / Anreicherung im Drawer — every column the DB holds, visible.
   // Nulls are shown as '—' rather than hidden: "nicht angegeben" is information.
   function crmSection(c) {
@@ -2790,6 +2826,7 @@
           <p class="hint">Locking freezes this page as verified — automatic identity checks will never overwrite it.</p>
         </div>
         ${candHtml}
+        ${dossierSection(detail?.dossier)}
         ${crmSection(detail?.company || row)}
         <div class="drawer-section">
           <h3>Ad activity</h3>
