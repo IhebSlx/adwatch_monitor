@@ -320,7 +320,16 @@ def _migrate(engine) -> None:
                               ("end_customer_budget", "FLOAT"),
                               ("project_id", "VARCHAR(40)"),
                               ("opportunity_guid", "VARCHAR(40)"),
-                              ("project_name", "VARCHAR(200)")]:
+                              ("project_name", "VARCHAR(200)"),
+                              ("type_of_use", "VARCHAR(60)"), ("vc_type", "VARCHAR(30)"),
+                              ("dealer_status", "VARCHAR(40)"), ("origin", "VARCHAR(60)"),
+                              ("rating", "VARCHAR(30)"), ("priority", "VARCHAR(30)"),
+                              ("sales_stage", "VARCHAR(40)"), ("vr_presented", "BOOLEAN"),
+                              ("business_unit", "VARCHAR(40)"), ("total_amount", "FLOAT"),
+                              ("estimated_close", "DATE"),
+                              ("invoiced_value", "FLOAT"), ("invoiced_count", "INTEGER DEFAULT 0"),
+                              ("quoted_value", "FLOAT"), ("quoted_count", "INTEGER DEFAULT 0"),
+                              ("sap_order_numbers", "JSON")]:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE crm_opportunities ADD COLUMN {name} {ddl}"))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)

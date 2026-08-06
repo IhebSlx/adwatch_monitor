@@ -558,6 +558,44 @@ class CrmOpportunity(Base):
     project_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     opportunity_guid: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     project_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # ---- Felder, die im ersten Zug fehlten ("alles was nützlich sein könnte") ----
+    # Each is a decoded LABEL, never the raw option-set integer.
+    #
+    # type_of_use   Gebäudenutzung: Wohnen 19.868 · Hotel/Gastgewerbe 1.115 ·
+    #               Verwaltung/Büro 541 · Kultur/Sport 407 · Einzelhandel 373 ·
+    #               Bildung 317 · Gesundheit/Pflege · Ausstellung. 99% filled —
+    #               the project-type dimension the IPP will need, and already
+    #               useful for "which firm wins which kind of building".
+    # vc_type       Vertriebs-VC 38.767 vs Architekten-VC 2.796 — the CRM states
+    #               the motion outright; we had been inferring it from roles.
+    # dealer_status the DEALER's own pipeline state (Neu · Erstkontakt · Termin
+    #               vereinbart · Angebot erstellen · Auftrag erhalten · Rückgabe ·
+    #               Verloren). Engagement BEHAVIOUR, the strongest non-leaky
+    #               partner-quality signal available for existing dealers.
+    # origin        wer die Chance gebracht hat: vom Händler · vom Architekten ·
+    #               von Solarlux · aus Online Konfigurator · vom Objektkunden ·
+    #               von Linara <Standort>. Distinguishes self-generating partners
+    #               from those who only convert leads we hand them.
+    type_of_use: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    vc_type: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    dealer_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    origin: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    rating: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    priority: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    sales_stage: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    vr_presented: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    business_unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    total_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    estimated_close: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    # Was tatsächlich fakturiert wurde — über ax_sap_order.ax_opportunityid.
+    # 23.955 Belege tragen diesen Link, 35.856 Angebote ebenfalls. Das schließt
+    # die Kette Angebot → Auftrag → Beleg auf PROJEKT-Ebene; vorher war Umsatz
+    # nur firmenweit bekannt und die Konversionsquote entsprechend grob.
+    invoiced_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    invoiced_count: Mapped[int] = mapped_column(Integer, default=0)
+    quoted_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quoted_count: Mapped[int] = mapped_column(Integer, default=0)
+    sap_order_numbers: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class CrmOrderEvent(Base):

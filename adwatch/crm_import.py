@@ -258,6 +258,33 @@ ADDRESSABLE_LOSSES = frozenset({
 
 STATE = {0: "offen", 1: "gewonnen", 2: "verloren"}
 
+# Option sets read from the live metadata — stored as LABELS so every filter,
+# export and report reads German words instead of integers.
+TYPE_OF_USE = {
+    100: "Ausstellung", 200: "Bildung",
+    300: "Einzelhandel/Dienstleistung/Ladenketten", 400: "Gesundheit und Pflege",
+    500: "Hotel- und Gastgewerbe", 600: "Kultur und Sport",
+    700: "Sonstige/nicht bekannt", 800: "Verwaltungs- und Bürogebäude",
+    900: "Wohnen",
+}
+VC_TYPE = {300523001: "Vertriebs-VC", 300523002: "Architekten-VC"}
+DEALER_STATUS = {
+    102690000: "Neu", 102690001: "Angenommen", 102690002: "Erstkontakt erfolgt",
+    102690006: "Termin vereinbart", 102690008: "Angebot erstellen",
+    102690009: "Auftrag erhalten", 102690005: "Rückgabe", 425390000: "Verloren",
+}
+ORIGIN = {
+    425390000: "von Solarlux", 425390008: "vom Architekten",
+    425390001: "vom Händler", 425390002: "aus Online Konfigurator",
+    425390009: "vom Objektkunden",
+    425390003: "von Linara Ahaus", 425390004: "von Linara Augsburg",
+    425390005: "von Linara Kaufbeuren", 425390006: "von Linara Vechta",
+    425390007: "von Linara OWL", 425390010: "von Linara Berlin-Brandenburg",
+    425390012: "von Linara Münsterland",
+}
+RATING = {1: "Sehr aussichtsreich", 2: "Aussichtsreich", 3: "Wenig aussichtsreich"}
+PRIORITY = {0: "Hoch", 1: "Normal", 2: "Niedrig"}
+
 
 def import_order_events(path: str | Path, *, replace_window: bool = False) -> dict:
     """Belege -> CrmOrderEvent, collapsing each company+day into one purchase event.
@@ -360,7 +387,6 @@ def import_opportunities(path: str | Path) -> dict:
                 number=g(r, "number") or None,
                 opportunity_guid=own_guid,
                 project_id=primary or own_guid,
-                project_name=(g(r, "name") or "").strip()[:200] or None,
                 parent_account_crm_id=(g(r, "account") or "").strip().lower() or None,
                 architect_crm_id=(g(r, "architect") or "").strip().lower() or None,
                 end_customer_crm_id=(g(r, "endcustomer") or "").strip().lower() or None,
@@ -370,12 +396,91 @@ def import_opportunities(path: str | Path) -> dict:
                 estimated_value=float(g(r, "est_value") or 0) or None,
                 end_customer_budget=float(g(r, "endcust_budget") or 0) or None,
                 created_on=_ts(g(r, "created")), closed_on=_ts(g(r, "closed")),
+                # decoded labels; absent in older export files -> None
+                type_of_use=TYPE_OF_USE.get(g(r, "type_of_use")),
+                vc_type=VC_TYPE.get(g(r, "vc_type")),
+                dealer_status=DEALER_STATUS.get(g(r, "dealer_status")),
+                origin=ORIGIN.get(g(r, "origin")),
+                rating=RATING.get(g(r, "rating")),
+                priority=PRIORITY.get(g(r, "priority")),
+                sales_stage=(str(g(r, "sales_stage")) if g(r, "sales_stage") is not None else None),
+                vr_presented=(bool(g(r, "vr_presented"))
+                              if g(r, "vr_presented") is not None else None),
+                business_unit=(g(r, "business_unit") or "").strip() or None,
+                total_amount=float(g(r, "total_amount") or 0) or None,
+                estimated_close=_date(g(r, "est_close")),
+                project_name=(g(r, "project_name") or g(r, "name") or "").strip()[:200] or None,
                 synced_at=now))
         for i in range(0, len(pending), 5000):
             s.bulk_insert_mappings(CrmOpportunity, pending[i:i + 5000])
         stats["inserted"] = len(pending)
         s.commit()
     log.info("crm_import.import_opportunities: %s", stats)
+    return stats
+
+
+def import_opportunity_links(path: str | Path) -> dict:
+    """Belege and Angebote that name their Verkaufschance -> per-opportunity totals.
+
+    This is the join that was missing. `ax_sap_order.ax_opportunityid` is set on
+    23,955 Belege and `ax_sap_quote.ax_opportunityid` on 35,856 quotes, so the
+    chain Angebot → Auftrag → **fakturierter Beleg** finally closes at PROJECT
+    level. Before this, revenue was only known per company, which made the
+    conversion rate a blunt company-wide ratio; now a project's quoted value can
+    be compared with what was actually invoiced against it.
+
+    Stored as aggregates on CrmOpportunity (plus the SAP document numbers, so a
+    figure can always be traced back to its Belege in SAP).
+    """
+    from .models import CrmOpportunity
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    bi = {c: i for i, c in enumerate(data["belege_cols"])}
+    qi = {c: i for i, c in enumerate(data["quote_cols"])}
+
+    inv: dict[str, list] = {}
+    for r in data["belege"]:
+        opp = (r[bi["opp"]] or "").strip().lower()
+        if not opp:
+            continue
+        a = inv.setdefault(opp, [0.0, 0, []])
+        a[0] += float(r[bi["amount"]] or 0)
+        a[1] += 1
+        nr = (r[bi["sap_nr"]] or "").strip()
+        if nr and len(a[2]) < 20:
+            a[2].append(nr)
+    quo: dict[str, list] = {}
+    for r in data["quotes"]:
+        opp = (r[qi["opp"]] or "").strip().lower()
+        if not opp:
+            continue
+        a = quo.setdefault(opp, [0.0, 0])
+        a[0] += float(r[qi["amount"]] or 0)
+        a[1] += 1
+
+    stats = {"belege": len(data["belege"]), "quotes": len(data["quotes"]),
+             "opps_invoiced": 0, "opps_quoted": 0, "unmatched_opps": 0}
+    with SessionLocal() as s:
+        by_guid = {o.opportunity_guid: o for o in
+                   s.scalars(select(CrmOpportunity)
+                             .where(CrmOpportunity.opportunity_guid.is_not(None)))}
+        for opp, (val, n, nrs) in inv.items():
+            o = by_guid.get(opp)
+            if o is None:
+                stats["unmatched_opps"] += 1
+                continue
+            o.invoiced_value = round(val, 2)
+            o.invoiced_count = n
+            o.sap_order_numbers = nrs or None
+            stats["opps_invoiced"] += 1
+        for opp, (val, n) in quo.items():
+            o = by_guid.get(opp)
+            if o is None:
+                continue
+            o.quoted_value = round(val, 2)
+            o.quoted_count = n
+            stats["opps_quoted"] += 1
+        s.commit()
+    log.info("crm_import.import_opportunity_links: %s", stats)
     return stats
 
 
