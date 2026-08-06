@@ -2678,3 +2678,25 @@ def test_triage_routes_but_never_writes_verified(temp_db, monkeypatch):
         assert th.identity_status == "conflict"
         for c in (w, ri, th):
             assert c.identity_status != "verified"
+
+
+def test_backup_verify_catches_the_snapshots_that_bit_us(temp_db, tmp_path, monkeypatch):
+    """13 of 14 retained snapshots were once 4 KB empty files written by the test
+    suite, with the only good copy one rotation from deletion. verify_latest()
+    exists so a useless snapshot is FOUND rather than trusted."""
+    import sqlite3
+    from adwatch import backup, config as cfg
+
+    bdir = tmp_path / "b"; bdir.mkdir()
+    monkeypatch.setattr(cfg, "BACKUP_DIR", bdir, raising=False)
+    monkeypatch.setattr(backup.config, "BACKUP_DIR", bdir, raising=False)
+
+    # no backup at all
+    assert backup.verify_latest()["ok"] is False
+
+    # a tiny/empty snapshot must be rejected, not reported as fine
+    tiny = bdir / "adwatch_20260101_000000_x.db"
+    con = sqlite3.connect(tiny); con.execute("CREATE TABLE companies (id INTEGER)")
+    con.commit(); con.close()
+    r = backup.verify_latest()
+    assert r["ok"] is False and "small" in (r.get("error") or "")

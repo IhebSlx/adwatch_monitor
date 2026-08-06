@@ -640,7 +640,7 @@ def _run_pipeline(job_id: int) -> None:
 
     # Each step is a closure; the loop below runs them in the RESOLVED order, so
     # changing resolve_step_order() changes execution and not just the labels.
-    state: dict = {"filename": None}
+    state: dict = {"filename": None, "step_failures": []}
 
     def _do_domains() -> None:
         _per_company(DOMAIN_PREPASS, "domains", enrich_service.derive_domain, _DOMAIN_LOG)
@@ -739,15 +739,37 @@ def _run_pipeline(job_id: int) -> None:
         try:
             runners[step]()
         except Exception as exc:  # noqa: BLE001 — a broken STEP must not lose the rest
+            state["step_failures"].append(step)
             _pl_log(job_id, f"[{step}] ✗ Schritt abgebrochen — {exc}", advance=False)
 
     with SessionLocal() as s:
         job = s.get(FetchJob, job_id)
         cancelled = _pl_cancelled(job_id)
-        job.status = "cancelled" if cancelled else "done"
+        # 'done' must MEAN done. Job 47 finished 26 of 382 units, reported
+        # done/0 errors, and the missing ads were only noticed by reading the
+        # log by hand. Now: a job that lost a step or left units unprocessed
+        # says so in its status and error count, loudly.
+        incomplete = (not cancelled and (
+            state["step_failures"] or (job.total or 0) > (job.completed or 0)))
+        if cancelled:
+            job.status = "cancelled"
+        elif incomplete:
+            job.status = "incomplete"
+            job.errors = (job.errors or 0) + max(
+                (job.total or 0) - (job.completed or 0), len(state["step_failures"]))
+        else:
+            job.status = "done"
         job.finished_at = dt.datetime.utcnow()
         job.completed = max(job.completed or 0, 0)
-        _append_log(s, job, "Pipeline abgebrochen." if cancelled else "Pipeline abgeschlossen.")
+        if cancelled:
+            _append_log(s, job, "Pipeline abgebrochen.")
+        elif incomplete:
+            _append_log(s, job, f"Pipeline UNVOLLSTÄNDIG — {job.completed}/{job.total} "
+                                f"Einheiten, fehlgeschlagene Schritte: "
+                                f"{', '.join(state['step_failures']) or 'keine'}. "
+                                "Erneut starten holt nur das Fehlende nach.")
+        else:
+            _append_log(s, job, "Pipeline abgeschlossen.")
         s.commit()
     _cancel_flags.pop(job_id, None)
 
