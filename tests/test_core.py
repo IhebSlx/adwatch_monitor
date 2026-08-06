@@ -2460,3 +2460,25 @@ def test_spanish_trade_words_are_not_identifying():
     # ...while the real match (name token present) still works
     own = "AURIA estudio, Calle Cisneros 12, 06220 Villafranca"
     assert validate_site(company, "auria.es", own)["ok"] is True
+
+
+def test_conflict_domains_are_never_google_fetched(temp_db):
+    """A domain that FAILED identity verification must not be used to attribute a
+    Google ad history — 188 of the 430 Spanish market-list sites came back
+    'conflict', and fetching through them files someone else's ads under the
+    company. Unverified (never checked) stays fetchable; disproven does not."""
+    from adwatch.jobs import _google_fetchable_ids
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    ok = Company(name="Ok Co", country="ES", website_domain="ok.es",
+                 identity_status="verified")
+    unknown = Company(name="Unknown Co", country="ES", website_domain="unknown.es")
+    bad = Company(name="Bad Co", country="ES", website_domain="portal.es",
+                  identity_status="conflict")
+    s.add_all([ok, unknown, bad]); s.commit()
+    ids = [ok.id, unknown.id, bad.id]
+    fetchable = _google_fetchable_ids(s, ids)
+    assert ok.id in fetchable and unknown.id in fetchable
+    assert bad.id not in fetchable
+    s.close()

@@ -109,10 +109,18 @@ def _google_fetchable_ids(s, company_ids: list[int]) -> set[int]:
     """Which of these companies the Google ad lookup will actually fetch: any
     with a website domain set. Google resolves the advertiser straight from the
     domain (no name search), so a website is both necessary and sufficient to
-    try; a company without one is skipped by the pipeline (status='no_domain')."""
+    try; a company without one is skipped by the pipeline (status='no_domain').
+
+    Except a domain that FAILED identity verification: 'conflict' means the site
+    was read and provably does not carry this company's own address or name —
+    a portal, a parent brand, a namesake. Attributing an ad history through it
+    would file the wrong company's ads under this row with nothing downstream
+    able to tell. 'unverified' (never checked) stays fetchable, matching the
+    behaviour before identity_status existed — unknown is not disproven."""
     return set(s.scalars(select(Company.id).where(
         Company.id.in_(company_ids),
-        Company.website_domain.is_not(None), Company.website_domain != "")))
+        Company.website_domain.is_not(None), Company.website_domain != "",
+        (Company.identity_status.is_(None)) | (Company.identity_status != "conflict"))))
 
 
 def _plan_units(s, company_ids: list[int], sources: list[str]) -> list[tuple[int, str]]:
