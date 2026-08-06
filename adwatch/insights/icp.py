@@ -645,8 +645,118 @@ def diagnose(filters: dict | None = None) -> dict:
             "winners_filter": win_filter}
 
 
+def filter_trust(filters: dict | None = None, cut: dt.date | None = None) -> dict:
+    """Can an ICP built from THIS filter be trusted? The on-demand guardrail.
+
+    "Enough positives" is necessary but not sufficient — this project hit every
+    other failure mode an on-demand filter can produce, so each is checked:
+
+      * positives         < 30 unusable, < 150 indicative only (noise floors we
+                          measured; below them distributions are decoration)
+      * base rate         near 100% inside the filter = the 87% trap: everyone a
+                          buyer, nothing to discriminate (the original Excel base)
+      * near 0% = nothing to learn FROM either
+      * outcome leakage   a filter that selects on the outcome ("has ads" ->
+                          profile 'predicts' ads) can't be caught mechanically in
+                          general, but ad/enrichment-derived filters are flagged
+      * feature collapse  filtering ON the best feature makes it uniform inside
+                          the filter (Wintergartenbau-only -> sub_segment says
+                          nothing anymore); reported so the drop in power is
+                          expected rather than mysterious
+      * backtest          the final word: does it actually RANK within the
+                          filter, on a time split (lift@decile + monotonicity)
+
+    Verdict: 'green' (rank and use), 'yellow' (directional — use as a scorecard,
+    not an ordering), 'red' (do not rank; use plain filters). Written for the
+    Profil tab so a colleague sees the verdict BEFORE trusting a score.
+    """
+    from ..customers import _apply_filters
+    from ..models import CrmOrderEvent
+    from .rfm import MATERIAL_EUR
+
+    filters = dict(filters or {})
+    reasons: list[str] = []
+    flags: list[str] = []
+
+    # filters derived from ad or enrichment activity select on engagement — the
+    # profile then "discovers" the funnel that produced the filter
+    for k in filters:
+        if k in ("resolution_status", "enrichment_status", "has_ads", "advertising"):
+            flags.append(f"Filter '{k}' basiert auf unserer eigenen Aktivität — "
+                         "das Profil würde den eigenen Funnel 'entdecken'")
+
+    with SessionLocal() as s:
+        pop = list(s.scalars(_apply_filters(scope.apply(select(Company)), filters)
+                             .where(Company.is_intercompany.is_(False))))
+        events: dict[int, float] = {}
+        for cid, amt in s.execute(select(CrmOrderEvent.company_id,
+                                         func.max(CrmOrderEvent.amount))
+                                  .group_by(CrmOrderEvent.company_id)):
+            events[cid] = float(amt or 0)
+
+    positives = [c for c in pop if events.get(c.id, 0.0) >= MATERIAL_EUR]
+    n_pop, n_pos = len(pop), len(positives)
+    base = (n_pos / n_pop) if n_pop else 0.0
+
+    if n_pos < MIN_WINNERS_USABLE:
+        reasons.append(f"nur {n_pos} Gewinner im Filter — unter {MIN_WINNERS_USABLE} "
+                       "sind Verteilungen Rauschen; Scorecard statt Statistik verwenden")
+    elif n_pos < 150:
+        flags.append(f"{n_pos} Gewinner — indikativ, nicht stabil (ab ~150 belastbar)")
+    if n_pop and base >= 0.7:
+        reasons.append(f"Basisrate {base:.0%} im Filter — fast alle sind Käufer, "
+                       "es gibt nichts zu diskriminieren (die 87%-Falle)")
+    if n_pop and n_pos and base <= 0.005:
+        flags.append(f"Basisrate {base:.2%} — extrem selten; Ranking möglich, aber "
+                     "Treffer bleiben absolut selten")
+
+    # feature collapse: which scoring features become near-uniform INSIDE the filter
+    collapsed: list[str] = []
+    if n_pop >= 30:
+        ads = _ad_presence_map([c.id for c in pop])
+        for feat in DEFAULT_WEIGHTS:
+            vals = {}
+            known = 0
+            for c in pop:
+                v = company_features(c, ads)[feat]
+                if feat == "products":
+                    continue
+                if v:
+                    known += 1
+                    vals[v] = vals.get(v, 0) + 1
+            if known >= n_pop * 0.5 and vals and max(vals.values()) / known >= 0.95:
+                collapsed.append(feat)
+        if collapsed:
+            flags.append("im Filter (nahezu) konstant und damit wirkungslos: "
+                         + ", ".join(collapsed))
+
+    result = {"filters": filters, "population": n_pop, "positives": n_pos,
+              "base_rate": round(base, 4), "blockers": reasons, "warnings": flags,
+              "collapsed_features": collapsed}
+
+    if reasons:
+        result["verdict"] = "red"
+        return result
+
+    # the final word: does it rank, on a time split, WITHIN the filter?
+    ids = [c.id for c in pop]
+    bt = backtest(cut, ids=ids)
+    result["backtest"] = {k: bt.get(k) for k in
+                          ("train", "test", "positives", "base_rate",
+                           "top_decile_lift", "monotone_steps", "of_steps", "ranks")}
+    if bt.get("ranks"):
+        result["verdict"] = "yellow" if flags else "green"
+    else:
+        result["verdict"] = "yellow" if n_pos >= 150 else "red"
+        result["warnings"].append(
+            "Backtest: kein Ranking innerhalb des Filters (Lift "
+            f"{bt.get('top_decile_lift')}) — Ergebnis als Scorecard/Filter nutzen, "
+            "nicht als Reihenfolge")
+    return result
+
+
 def backtest(cut: dt.date | None = None, segments: tuple[str, ...] | None = None,
-             deciles: int = 10) -> dict:
+             deciles: int = 10, ids: list[int] | None = None) -> dict:
     """Does the profile actually RANK? Train before `cut`, test after it.
 
     This exists because the app twice reported a spectacular top-vs-bottom lift
@@ -671,7 +781,8 @@ def backtest(cut: dt.date | None = None, segments: tuple[str, ...] | None = None
             events.setdefault(cid, []).append((d, float(amt or 0)))
         pop = [c for c in s.scalars(scope.apply(select(Company)))
                if not c.is_intercompany
-               and (segments is None or c.segment in segments)]
+               and (segments is None or c.segment in segments)
+               and (ids is None or c.id in set(ids))]
 
     train, later, test_ids = [], set(), []
     for c in pop:

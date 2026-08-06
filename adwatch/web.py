@@ -707,6 +707,18 @@ def icp_latest_route():
     return icp.latest_profile() or {"id": None}
 
 
+@app.post("/api/icp/trust")
+def icp_trust_route(payload: SelectTopIn):
+    """Ampel für ein On-Demand-ICP: darf man einem Profil aus DIESEM Filter
+    trauen? Prüft Positives, Basisrate (die 87%-Falle), Feature-Kollaps im
+    Filter und den Zeitsplit-Backtest — BEVOR jemand die Scores glaubt."""
+    from .insights import icp
+    try:
+        return icp.filter_trust(payload.filters or {})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/icp/backtest")
 def icp_backtest_route(cut: str | None = None, dealers_only: bool = False):
     """Does the ICP actually rank? Always read the dealers-only number.
