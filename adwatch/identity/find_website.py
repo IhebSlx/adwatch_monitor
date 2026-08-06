@@ -81,7 +81,9 @@ MAX_CANDIDATES = 4
 
 def _company_info(c: Company) -> dict:
     return {"name": c.name, "phone": c.phone, "postal_code": c.postal_code,
-            "street": c.street, "city": c.city}
+            "street": c.street, "city": c.city,
+            # country drives the postcode format in validate.plz_matches
+            "country": c.country}
 
 
 def find_for(company_id: int, *, max_candidates: int = MAX_CANDIDATES) -> dict:

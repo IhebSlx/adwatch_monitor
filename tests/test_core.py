@@ -2700,3 +2700,33 @@ def test_backup_verify_catches_the_snapshots_that_bit_us(temp_db, tmp_path, monk
     con.commit(); con.close()
     r = backup.verify_latest()
     assert r["ok"] is False and "small" in (r.get("error") or "")
+
+
+def test_postcode_check_is_country_aware():
+    """Requiring exactly 5 digits was German thinking. It silently never matched
+    for ~8,200 companies: AT/DK/NO/BE (4 digits), NL/GB (alphanumeric) — so one
+    of only three hard identity proofs was dead in six countries, with no error
+    anywhere."""
+    from adwatch.enrich.validate import plz_matches
+
+    # DE: unchanged 5-digit behaviour
+    assert plz_matches("49134", "Wallenhorst, 49134 Deutschland", country="DE")
+    assert not plz_matches("49134", "nothing here", country="DE")
+
+    # AT 4-digit: needs the town too, so a year cannot pass as a postcode
+    at_page = "Musterweg 3, 4020 Linz, Österreich"
+    assert plz_matches("4020", at_page, country="AT", city="Linz")
+    assert not plz_matches("4020", "gegründet 4020 Stück verkauft", country="AT",
+                           city="Linz"), "bare 4-digit match must not count"
+    assert not plz_matches("1998", "Firma seit 1998", country="AT", city="Linz")
+
+    # NL alphanumeric, spacing-insensitive
+    assert plz_matches("1234 AB", "Straat 5, 1234AB Amsterdam", country="NL")
+    assert plz_matches("1234AB", "Straat 5, 1234 AB Amsterdam", country="NL")
+
+    # GB outcode+incode
+    assert plz_matches("SW1A 1AA", "London SW1A 1AA", country="GB")
+
+    # unknown country falls back to the safe 5-digit rule
+    assert plz_matches("28001", "Madrid 28001") is True
+    assert plz_matches("4020", "Linz 4020") is False

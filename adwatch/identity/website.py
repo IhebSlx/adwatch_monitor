@@ -51,7 +51,9 @@ STALE_AFTER_DAYS = 365
 
 def _company_dict(c: Company) -> dict:
     return {"name": c.name, "phone": c.phone, "postal_code": c.postal_code,
-            "street": c.street, "city": c.city}
+            "street": c.street, "city": c.city,
+            # country drives the postcode format in validate.plz_matches
+            "country": c.country}
 
 
 def verify_one(company_id: int) -> dict:
