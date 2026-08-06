@@ -41,7 +41,72 @@ from .website_source import _page_text
 log = logging.getLogger("adwatch.identity.triage")
 
 BATCH = 8
-VERDICTS = ("wrong_site", "likely_right", "too_thin")
+VERDICTS = ("wrong_site", "likely_right", "stammdaten_falsch", "too_thin")
+
+# Below this self-reported confidence a "likely_right" is downgraded to too_thin.
+# An LLM asked to choose between four labels will always pick one; the confidence
+# is what separates "I can quote the town name" from "it looks vaguely plausible",
+# and only the former is worth a human's attention in the review queue.
+MIN_CONFIDENCE = 0.6
+
+# Brands worth cross-checking between the colleague's notes and the site text.
+# This is DETERMINISTIC corroboration: if the researcher wrote "Schüco + Drutex"
+# and the site says Schüco, that is real evidence independent of the LLM's
+# opinion — and it is free. Kept in sync with market reality, not exhaustive.
+# canonical name -> spellings seen in the wild. Variants are essential, not
+# cosmetic: the researcher typed "Schueco" while the Spanish site writes "Schüco",
+# and a naive substring match found no overlap at all — silently discarding the
+# strongest free evidence the triage has.
+_BRAND_VARIANTS: dict[str, tuple[str, ...]] = {
+    "Schüco": ("schuco", "schueco",),
+    "Cortizo": ("cortizo",),
+    "Technal": ("technal",),
+    "Reynaers": ("reynaers",),
+    "Sunflex": ("sunflex",),
+    "Vitrocsa": ("vitrocsa",),
+    "Renson": ("renson",),
+    "Finstral": ("finstral",),
+    "Sky-Frame": ("skyframe", "sky frame"),
+    "Kömmerling": ("kommerling", "koemmerling"),
+    "Veka": ("veka",),
+    "Rehau": ("rehau",),
+    "Velux": ("velux",),
+    "Drutex": ("drutex",),
+    "Strugal": ("strugal",),
+    "Aluprof": ("aluprof",),
+    "Wicona": ("wicona",),
+    "Hueck": ("hueck",),
+    "Solarlux": ("solarlux",),
+    "Brustor": ("brustor",),
+    "Weinor": ("weinor",),
+    "Markilux": ("markilux",),
+}
+
+
+def _fold(text: str | None) -> str:
+    """Lowercase, umlauts collapsed both ways, hyphens dropped — so 'Schüco',
+    'Schueco' and 'Schuco' all become the same needle."""
+    low = (text or "").lower()
+    for a, b in (("ü", "u"), ("ue", "u"), ("ö", "o"), ("oe", "o"),
+                 ("ä", "a"), ("ae", "a"), ("ß", "ss")):
+        low = low.replace(a, b)
+    return low.replace("-", "").replace("_", "")
+
+
+def _brands_in(text: str | None) -> set[str]:
+    hay = _fold(text)
+    return {canon for canon, variants in _BRAND_VARIANTS.items()
+            if any(_fold(v) in hay for v in variants)}
+
+
+def _brand_overlap(notes: str | None, page_text: str | None) -> list[str]:
+    """Brands named in BOTH the colleague's research and the site itself.
+
+    Strong, LLM-independent corroboration that a site belongs to the researched
+    firm: a random namesake in another province does not happen to carry the same
+    profile systems the researcher wrote down.
+    """
+    return sorted(_brands_in(notes) & _brands_in(page_text))
 
 _PROMPT = """Du prüfst, ob Websites wirklich zu den genannten spanischen Firmen gehören.
 Für jede Firma bekommst du: unsere Stammdaten (Name, Ort, ggf. PLZ), Recherche-Notizen
@@ -55,9 +120,17 @@ Entscheide je Firma GENAU EINES:
   was die Seite tatsächlich ist.
 - "likely_right": Inhalt passt klar zur Firma (gleicher Ort, gleiche Marken wie in den
   Notizen, passendes Gewerk). Zitiere in "clue" den entscheidenden Hinweis WÖRTLICH.
+- "stammdaten_falsch": Die Seite gehört sehr wahrscheinlich der Firma, aber UNSERE
+  Stammdaten passen nicht (anderer Ort/PLZ als auf der Seite — Umzug, Filiale, Tippfehler).
+  Nenne in "what" die Adresse, die auf der Seite steht.
 - "too_thin": Der Auszug ist zu leer/nichtssagend für ein Urteil (z. B. nur Cookie-Text).
 
-Antworte NUR mit JSON: {"results": [{"id": <id>, "verdict": "...", "what": "...", "clue": "..."}]}
+Sei streng: "likely_right" nur, wenn du einen konkreten, zitierbaren Beleg hast
+(Ortsname, Marke aus den Notizen, Gewerk). Bei Zweifel "too_thin".
+Gib "confidence" von 0.0 bis 1.0 an, wie sicher du bist.
+
+Antworte NUR mit JSON:
+{"results": [{"id": <id>, "verdict": "...", "confidence": 0.0, "what": "...", "clue": "..."}]}
 Firmen:
 """
 
@@ -74,10 +147,14 @@ def _evidence_for(c: Company) -> dict:
         facts = site_facts.extract(html, base_url=got[1])
     except Exception:  # noqa: BLE001
         pass
+    excerpt = _page_text(html, limit=900)
     return {"reachable": True,
             "legal_name": facts.get("legal_name"),
             "meta": (facts.get("meta_description") or "")[:200],
-            "excerpt": _page_text(html, limit=600)}
+            "phone_on_site": facts.get("phone"),
+            "excerpt": excerpt,
+            # deterministic, LLM-independent corroboration
+            "brand_overlap": _brand_overlap(c.notes, f"{excerpt} {facts.get('meta_description') or ''}")}
 
 
 def _company_block(c: Company, ev: dict) -> str:
@@ -88,7 +165,10 @@ def _company_block(c: Company, ev: dict) -> str:
     parts.append(f"Domain: {c.website_domain}")
     parts.append(f"Seite sagt: legal_name={ev.get('legal_name')!r} "
                  f"meta={ev.get('meta')!r}")
-    parts.append(f"Auszug: {(ev.get('excerpt') or '')[:420]}")
+    if ev.get("brand_overlap"):
+        parts.append("Marken in Notizen UND auf der Seite: "
+                     + ", ".join(ev["brand_overlap"]))
+    parts.append(f"Auszug: {(ev.get('excerpt') or '')[:700]}")
     return "\n".join(parts)
 
 
@@ -109,9 +189,15 @@ def _judge_batch(blocks: list[str]) -> dict[int, dict]:
         except (TypeError, ValueError):
             continue
         v = str(r.get("verdict") or "").strip()
-        if v in VERDICTS:
-            out[cid] = {"verdict": v, "what": str(r.get("what") or "")[:200],
-                        "clue": str(r.get("clue") or "")[:200]}
+        if v not in VERDICTS:
+            continue
+        try:
+            conf = float(r.get("confidence"))
+        except (TypeError, ValueError):
+            conf = 0.5
+        out[cid] = {"verdict": v, "confidence": round(max(0.0, min(conf, 1.0)), 2),
+                    "what": str(r.get("what") or "")[:200],
+                    "clue": str(r.get("clue") or "")[:200]}
     return out
 
 
@@ -138,9 +224,15 @@ def run(lead_source: str | None = None, limit: int = 250) -> dict:
     counts.update({"unreachable": 0, "unjudged": 0})
     now = dt.datetime.utcnow()
 
+    from concurrent.futures import ThreadPoolExecutor
+
     for i in range(0, len(rows), BATCH):
         chunk = rows[i:i + BATCH]
-        evs = {c.id: _evidence_for(c) for c in chunk}
+        # Fetch the batch's evidence in parallel — 8 sequential HTTP round-trips
+        # per batch dominated the runtime and none of them depend on each other.
+        with ThreadPoolExecutor(max_workers=BATCH) as pool:
+            evs = dict(zip([c.id for c in chunk],
+                           pool.map(_evidence_for, chunk)))
         judgeable = [c for c in chunk if evs[c.id].get("reachable")]
         for c in chunk:
             if not evs[c.id].get("reachable"):
@@ -151,6 +243,13 @@ def run(lead_source: str | None = None, limit: int = 250) -> dict:
                 verdicts = _judge_batch([_company_block(c, evs[c.id]) for c in judgeable])
             except Exception:  # noqa: BLE001 — one bad batch must not kill the run
                 log.exception("triage batch failed (companies %s..)", judgeable[0].id)
+                # Retry each company alone: a single unparseable response
+                # otherwise costs all 8 their verdict.
+                for c in judgeable:
+                    try:
+                        verdicts.update(_judge_batch([_company_block(c, evs[c.id])]))
+                    except Exception:  # noqa: BLE001
+                        log.warning("triage: company %s unjudged", c.id)
 
         with SessionLocal() as s:
             for c in judgeable:
@@ -159,10 +258,23 @@ def run(lead_source: str | None = None, limit: int = 250) -> dict:
                 if not j:
                     counts["unjudged"] += 1
                     continue
+                overlap = evs[c.id].get("brand_overlap") or []
+                # A confident-sounding label with nothing quotable behind it is
+                # not worth a human's time. A brand named in BOTH the research
+                # notes and the site is hard evidence, so it substitutes for
+                # confidence; otherwise the model must be sure of itself.
+                # .get: a verdict stored before confidence existed must not crash
+                # the routing; an unstated confidence is treated as middling.
+                conf = j.get("confidence", 0.5)
+                if (j["verdict"] == "likely_right"
+                        and conf < MIN_CONFIDENCE and not overlap):
+                    j = {**j, "verdict": "too_thin",
+                         "what": f"zu unsicher ({conf}) ohne Markenbeleg"}
                 counts[j["verdict"]] += 1
                 ev = dict(row.identity_evidence or {})
                 ev["triage"] = {**j, "at": now.isoformat(), "model": config.ANTHROPIC_MODEL,
-                                "domain_at_triage": row.website_domain}
+                                "domain_at_triage": row.website_domain,
+                                "brand_overlap": overlap}
                 if j["verdict"] == "wrong_site":
                     # provably-wrong (gate) + diagnosed (triage): the domain is
                     # removed so the strict finder can look for the real one.
@@ -170,7 +282,11 @@ def run(lead_source: str | None = None, limit: int = 250) -> dict:
                     row.website_domain = None
                     row.website_source = None
                     row.identity_status = None      # finder's pending_ids picks it up
-                elif j["verdict"] == "likely_right":
+                elif j["verdict"] in ("likely_right", "stammdaten_falsch"):
+                    # Both mean "probably theirs, not provable by our data" —
+                    # exactly what the review queue is for. stammdaten_falsch
+                    # additionally tells the human WHY the gate could not pass:
+                    # the address on the site differs from ours.
                     row.identity_status = "needs_review"
                     ev["review_candidate"] = row.website_domain
                 # too_thin: stays 'conflict'; ev['triage'] marks it for a JS retry

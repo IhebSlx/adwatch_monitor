@@ -2662,8 +2662,10 @@ def test_triage_routes_but_never_writes_verified(temp_db, monkeypatch):
 
     monkeypatch.setattr(triage, "_evidence_for",
                         lambda c: {"reachable": True, "excerpt": "x" * 100})
+    # confident on purpose: this test covers ROUTING, not the confidence gate
     monkeypatch.setattr(triage, "_judge_batch", lambda blocks: {
-        cid: {"verdict": v, "what": "w", "clue": "c"} for cid, v in ids.items()})
+        cid: {"verdict": v, "confidence": 0.9, "what": "w", "clue": "c"}
+        for cid, v in ids.items()})
     monkeypatch.setattr(triage.config, "ANTHROPIC_API_KEY", "test", raising=False)
 
     r = triage.run(lead_source="t")
@@ -2730,3 +2732,40 @@ def test_postcode_check_is_country_aware():
     # unknown country falls back to the safe 5-digit rule
     assert plz_matches("28001", "Madrid 28001") is True
     assert plz_matches("4020", "Linz 4020") is False
+
+
+def test_triage_brand_overlap_is_deterministic_evidence():
+    """If the researcher wrote 'Schüco + Drutex' and the site says Schüco, that is
+    hard evidence independent of the LLM — a namesake in another province does not
+    happen to carry the same profile systems."""
+    from adwatch.identity.triage import _brand_overlap
+    notes = "Schueco + Drutex, eigener Ausstellungsraum"
+    # the researcher wrote 'Schueco', the Spanish site writes 'Schüco' — a naive
+    # substring match found NO overlap and silently threw the evidence away
+    assert _brand_overlap(notes, "Somos distribuidor Schüco oficial") == ["Schüco"]
+    assert _brand_overlap(notes, "Schuco y Drutex") == ["Drutex", "Schüco"]
+    assert _brand_overlap(notes, "ventanas de PVC baratas") == []
+    assert _brand_overlap(None, "Schüco") == []
+
+
+def test_triage_downgrades_unconfident_guesses(temp_db, monkeypatch):
+    """A four-way label choice always returns something. Without a quotable clue
+    or a brand match, low confidence must not reach the human queue."""
+    from adwatch.identity import triage
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Vago SL", country="ES", website_domain="vago.es",
+                identity_status="conflict", lead_source="t", segment="Handel")
+    s.add(c); s.commit(); cid = c.id; s.close()
+
+    monkeypatch.setattr(triage.config, "ANTHROPIC_API_KEY", "test", raising=False)
+    monkeypatch.setattr(triage, "_evidence_for",
+                        lambda x: {"reachable": True, "excerpt": "y" * 80,
+                                   "brand_overlap": []})
+    monkeypatch.setattr(triage, "_judge_batch", lambda blocks: {
+        cid: {"verdict": "likely_right", "confidence": 0.3, "what": "", "clue": ""}})
+    r = triage.run(lead_source="t")
+    assert r["too_thin"] == 1 and r["likely_right"] == 0
+    with temp_db.SessionLocal() as s:
+        assert s.get(Company, cid).identity_status == "conflict"
