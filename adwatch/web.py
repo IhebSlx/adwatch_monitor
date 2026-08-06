@@ -934,6 +934,20 @@ def reject_website_route(company_id: int):
     return {"ok": True}
 
 
+@app.get("/api/projekte")
+def projekte_route(status: str | None = None, min_members: int = 1,
+                   limit: int = 200):
+    """Objekte statt einzelner Verkaufschancen. Besonderheit Objektvertrieb:
+    mehrere VCs teilen sich ein Projekt (sl_primary_opportunityid); EIN Gewinn
+    macht das Projekt gewonnen — Geschwister-VCs mit 'Zugehörige VC gewonnen'
+    sind keine Verluste."""
+    from .insights import projekte
+    return {"overview": projekte.overview(),
+            "rows": projekte.list_projects(status=status,
+                                           min_members=max(1, min_members),
+                                           limit=max(1, min(limit, 1000)))}
+
+
 @app.get("/api/identity/review")
 def identity_review_queue_route(lead_source: str | None = None, limit: int = 200):
     """Everything waiting for a human yes/no on a website identity, with the

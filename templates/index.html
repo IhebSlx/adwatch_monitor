@@ -39,6 +39,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"/></svg>
         Chancen
       </button>
+      <button class="tab" data-tab="objekte">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M6 21V8l6-5 6 5v13"/><path d="M10 21v-6h4v6"/></svg>
+        Objekte
+      </button>
       <button class="tab" data-tab="pruefen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         Prüfen
@@ -555,6 +559,37 @@
           <button class="btn" id="chancenReload" style="margin-left:auto">Aktualisieren</button>
         </div>
         <div id="chancenTableWrap" class="table-wrap">
+          <p class="muted" style="padding:12px">Wird geladen …</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= TAB: Objekte (Projekte statt VCs) ================= -->
+    <section id="tab-objekte" class="tab-panel">
+      <header class="page-head">
+        <h1>Objekte — Projekte statt einzelner Verkaufschancen</h1>
+        <p>Mehrere Verkaufschancen gehören oft zu <b>einem</b> Objekt. <b>Ein Gewinn macht das
+          Projekt gewonnen</b> — Geschwister-VCs, die als „Zugehörige VC gewonnen“ geschlossen
+          wurden, sind keine Verluste.</p>
+      </header>
+      <div id="objekteKpis" class="kpi-row"></div>
+      <div class="card">
+        <div class="toolbar" style="margin-bottom:12px">
+          <label style="margin:0;font-size:12px;color:var(--muted)">Status
+            <select id="objekteStatus" style="margin-left:6px">
+              <option value="">alle</option>
+              <option value="gewonnen">gewonnen</option>
+              <option value="offen">offen</option>
+              <option value="verloren">verloren</option>
+            </select>
+          </label>
+          <label class="checkline" style="margin:0 0 0 16px">
+            <input type="checkbox" id="objekteMulti">
+            <span>Nur Projekte mit mehreren Verkaufschancen</span>
+          </label>
+          <button class="btn" id="objekteReload" style="margin-left:auto">Aktualisieren</button>
+        </div>
+        <div id="objekteWrap" class="table-wrap">
           <p class="muted" style="padding:12px">Wird geladen …</p>
         </div>
       </div>

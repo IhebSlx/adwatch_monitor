@@ -312,12 +312,15 @@ def _migrate(engine) -> None:
                     conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
             for c in ("quote_count", "quote_sum"):
                 conn.execute(text(f"UPDATE companies SET {c} = 0 WHERE {c} IS NULL"))
-        # crm_opportunities: loss reason + values
+        # crm_opportunities: loss reason + values + project linkage
         cols = _existing_columns(conn, "crm_opportunities")
         if cols:
             for name, ddl in [("lost_reason", "VARCHAR(80)"),
                               ("estimated_value", "FLOAT"),
-                              ("end_customer_budget", "FLOAT")]:
+                              ("end_customer_budget", "FLOAT"),
+                              ("project_id", "VARCHAR(40)"),
+                              ("opportunity_guid", "VARCHAR(40)"),
+                              ("project_name", "VARCHAR(200)")]:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE crm_opportunities ADD COLUMN {name} {ddl}"))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)

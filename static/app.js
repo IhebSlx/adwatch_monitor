@@ -996,6 +996,7 @@
       if (name === "customers") ensureCustomersLoaded();
       if (name === "chancen") ensureChancenLoaded();
       if (name === "pruefen") ensurePruefenLoaded();
+      if (name === "objekte") ensureObjekteLoaded();
       if (name === "profil") loadIcpStatus();
       if (name === "reports") {
         // If a Companies filter is active, default the report to use it — so
@@ -1015,6 +1016,7 @@
     wireCompanyTableControls();
     wireChancen();
     wirePruefen();
+    wireObjekte();
     wireLogsTabControls();
     $$(".settings-save-btn").forEach(b => b.addEventListener("click", saveSettings));
 
@@ -1477,6 +1479,110 @@
     reload.addEventListener("click", loadChancen);
     $("#chancenAdsOnly").addEventListener("change", loadChancen);
     $("#chancenMinValue").addEventListener("change", loadChancen);
+  }
+
+  // CRM / Belege / Anreicherung im Drawer — every column the DB holds, visible.
+  // Nulls are shown as '—' rather than hidden: "nicht angegeben" is information.
+  function crmSection(c) {
+    if (!c) return "";
+    const j = (v) => Array.isArray(v) ? v.join(", ") : (v ?? null);
+    const yn = (v) => v === true || v === 1 ? "ja" : v === false || v === 0 ? "nein" : null;
+    const dt2 = (v) => v ? String(v).slice(0, 10) : null;
+    const money = (v) => v != null ? eur(v) : null;
+    const rows = [
+      ["CRM-ID", c.crm_id], ["SAP-Nr.", c.sap_number], ["Quelle", c.lead_source || (c.crm_id ? "CRM" : "manuell")],
+      ["Import-Typ", c.import_type], ["Kundenstatus", c.customer_state], ["Gesundheit", c.health],
+      ["Belege (Anzahl)", c.beleg_count], ["Belege (Umsatz)", money(c.beleg_sum)],
+      ["Erster / letzter Beleg", [dt2(c.beleg_first), dt2(c.beleg_last)].filter(Boolean).join(" → ") || null],
+      ["Ø Grundrabatt", c.avg_discount != null ? c.avg_discount + " %" : null],
+      ["Angebote (Anzahl)", c.quote_count], ["Angebote (Summe)", money(c.quote_sum)],
+      ["Angebots-Konversion", c.conversion_rate != null ? Math.round(c.conversion_rate * 100) + " %" : null],
+      ["Rückgewinnungs-Score", c.winback_score],
+      ["Architekt: Projekte / gewonnen", c.arch_projects ? `${c.arch_projects} / ${c.arch_won} (${money(c.arch_won_value) || "€0"})` : null],
+      ["Website geprüft", c.identity_status ? `${c.identity_status}${c.identity_matched_by ? " (" + c.identity_matched_by + ")" : ""}` : null],
+      ["Rechtsform", c.legal_form], ["Positionierung", c.positioning],
+      ["Eigene Fertigung", yn(c.own_fabrication)], ["Showroom", yn(c.has_showroom)],
+      ["Projektfokus", j(c.project_focus)], ["Zertifikate", j(c.certifications)],
+      ["Fremdmarken", j(c.competitor_brands)], ["Erwähnt Solarlux", yn(c.mentions_solarlux)],
+      ["Einsatzgebiet", c.service_area], ["Seitensprache", c.site_language],
+      ["Facebook", c.facebook_url ? `<a class="link" target="_blank" href="${esc(c.facebook_url)}">Profil ↗</a>` : null],
+      ["Instagram", c.instagram_url ? `<a class="link" target="_blank" href="${esc(c.instagram_url)}">Profil ↗</a>` : null],
+      ["LinkedIn", c.linkedin_url ? `<a class="link" target="_blank" href="${esc(c.linkedin_url)}">Profil ↗</a>` : null],
+    ];
+    const cells = rows.map(([k, v]) => `
+      <div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)">
+        <span class="muted" style="flex:0 0 46%">${k}</span>
+        <span style="flex:1">${v === null || v === undefined || v === "" ? "—" : (String(v).startsWith("<a") ? v : esc(String(v)))}</span>
+      </div>`).join("");
+    const assess = c.assessment ? `<p class="hint" style="margin-top:8px">${esc(c.assessment)}</p>` : "";
+    return `
+      <div class="drawer-section">
+        <h3>CRM &amp; Anreicherung — alle Felder</h3>
+        <div style="font-size:12.5px">${cells}</div>
+        ${assess}
+      </div>`;
+  }
+
+  // ------------------------------------------------------- Objekte tab
+  // Projects instead of loose Verkaufschancen — one win makes a project won.
+  let objekteLoaded = false;
+
+  async function loadObjekte() {
+    const wrap = $("#objekteWrap");
+    const st = $("#objekteStatus").value;
+    const mm = $("#objekteMulti").checked ? 2 : 1;
+    wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
+    let data;
+    try {
+      data = await api(`/api/projekte?limit=300&min_members=${mm}${st ? `&status=${st}` : ""}`);
+    } catch (e) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Fehler: ${esc(e.message)}</p>`;
+      return;
+    }
+    const o = data.overview || {};
+    $("#objekteKpis").innerHTML = `
+      <div class="kpi"><div class="kpi-label">Projekte</div>
+        <div class="kpi-value">${(o.projects || 0).toLocaleString("de-DE")}</div></div>
+      <div class="kpi"><div class="kpi-label">Gewonnen</div>
+        <div class="kpi-value">${(o.gewonnen || 0).toLocaleString("de-DE")}</div></div>
+      <div class="kpi"><div class="kpi-label">Projekt-Gewinnrate</div>
+        <div class="kpi-value">${o.project_win_rate != null ? (o.project_win_rate * 100).toFixed(1) + " %" : "—"}</div></div>
+      <div class="kpi"><div class="kpi-label">Gewonnener Wert</div>
+        <div class="kpi-value" title="${eur(o.won_value)}">${eurShort(o.won_value)}</div></div>`;
+    const rows = data.rows || [];
+    if (!rows.length) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Keine Projekte für diesen Filter.</p>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Objekt</th><th>Status</th><th class="num">VCs</th>
+          <th class="num">Wert</th><th>Firmen</th><th>Architekten</th><th>Verlustgründe</th></tr></thead>
+        <tbody>${rows.map(p => `
+          <tr>
+            <td style="max-width:280px">${esc(p.name)}${p.created ? `<div class="sub">${esc(p.created)}</div>` : ""}</td>
+            <td><span class="state-chip">${esc(p.status)}</span></td>
+            <td class="num">${p.members}${p.won_members ? ` <span class="sub">(${p.won_members} gew.)</span>` : ""}</td>
+            <td class="num">${eur(p.order_value ?? p.estimated_value)}</td>
+            <td style="max-width:220px">${esc((p.firms || []).join(", "))}</td>
+            <td style="max-width:180px">${esc((p.architects || []).join(", "))}</td>
+            <td style="max-width:200px" class="sub">${esc((p.lost_reasons || []).join(", "))}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+  }
+
+  function ensureObjekteLoaded() {
+    if (objekteLoaded) return;
+    objekteLoaded = true;
+    loadObjekte();
+  }
+
+  function wireObjekte() {
+    const btn = $("#objekteReload");
+    if (!btn) return;
+    btn.addEventListener("click", loadObjekte);
+    $("#objekteStatus").addEventListener("change", loadObjekte);
+    $("#objekteMulti").addEventListener("change", loadObjekte);
   }
 
   // ------------------------------------------------------- Prüfen tab
@@ -2684,6 +2790,7 @@
           <p class="hint">Locking freezes this page as verified — automatic identity checks will never overwrite it.</p>
         </div>
         ${candHtml}
+        ${crmSection(detail?.company || row)}
         <div class="drawer-section">
           <h3>Ad activity</h3>
           ${adBlock}

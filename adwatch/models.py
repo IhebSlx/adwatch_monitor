@@ -547,6 +547,17 @@ class CrmOpportunity(Base):
     lost_reason: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     estimated_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     end_customer_budget: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # ---- Projekt-Verknüpfung (Besonderheit Objektvertrieb) ----
+    # `sl_primary_opportunityid` groups several Verkaufschancen into ONE Objekt:
+    # the primary VC *is* the project (its name is the building address), the
+    # members are the per-firm attempts to win it. Business rule from Iheb: a
+    # project counts as WON when ANY member wins — one win plus four "losses"
+    # is a won project, and the CRM even closes those members as "Zugehörige VC
+    # gewonnen". Counting them as losses (as the first loss analysis did)
+    # overstates failure; the 1,355 such closures are wins at project level.
+    project_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    opportunity_guid: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    project_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 class CrmOrderEvent(Base):

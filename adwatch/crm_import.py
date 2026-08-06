@@ -350,9 +350,17 @@ def import_opportunities(path: str | Path) -> dict:
                 stats["lost"] += 1
                 if lost in ADDRESSABLE_LOSSES:
                     stats["addressable"] += 1
+            # Projekt-Verknüpfung: the primary VC is the Objekt itself. A VC
+            # without a primary is its own project (anchor = its own GUID), so
+            # grouping by project_id always yields complete projects.
+            own_guid = (g(r, "opp_id") or "").strip().lower() or None
+            primary = (g(r, "primary_id") or "").strip().lower() or None
             pending.append(dict(
                 crm_id=(g(r, "number") or "") or f"row-{len(pending)}",
                 number=g(r, "number") or None,
+                opportunity_guid=own_guid,
+                project_id=primary or own_guid,
+                project_name=(g(r, "name") or "").strip()[:200] or None,
                 parent_account_crm_id=(g(r, "account") or "").strip().lower() or None,
                 architect_crm_id=(g(r, "architect") or "").strip().lower() or None,
                 end_customer_crm_id=(g(r, "endcustomer") or "").strip().lower() or None,
