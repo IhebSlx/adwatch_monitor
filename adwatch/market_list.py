@@ -99,6 +99,24 @@ def _customer_number(notes: str | None) -> str | None:
     return m.group(1) if m else None
 
 
+def _street_line(address: str | None) -> str | None:
+    """Just the street, for validate.street_matches.
+
+    That matcher drops everything from the first digit onward, so handing it the
+    whole address ('Donostia Ibilbidea 80, 20115 Astigarraga, Guipuzcoa, Spanien')
+    happens to work — but only by accident, and it breaks whenever the town comes
+    before any house number. The first comma-separated part is the street; the
+    complete address is preserved in `notes` either way.
+    """
+    a = (address or "").strip()
+    if not a:
+        return None
+    first = a.split(",")[0].strip()
+    # A bare town ('Valdemoro') is not a street; require a house number to treat
+    # the part as one, otherwise a generic locality would match half of Spain.
+    return first if re.search(r"\d", first) else None
+
+
 def _postal_and_city(address: str | None) -> tuple[str | None, str | None]:
     """Pull a Spanish 5-digit postcode and the town out of a free-text address.
 
@@ -312,7 +330,7 @@ def import_list(path: str | Path, *, lead_source: str, country: str = "ES",
                 monitored=False,
                 resolution_status="pending",
                 postal_code=rec["postal_code"], city=rec["city"],
-                street=rec["address"],
+                street=_street_line(rec["address"]),
                 website_domain=rec["website_domain"],
                 website_source="marktanalyse" if rec["website_domain"] else None,
                 identity_status="unverified" if rec["website_domain"] else None,

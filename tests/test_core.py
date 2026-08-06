@@ -2342,3 +2342,97 @@ def test_market_list_rows_are_distinguishable_and_not_monitored(temp_db, tmp_pat
             Company.lead_source == "test_es")).all()
         assert "Schueco Showroom Madrid" not in {c.name for c in in_scope}
         assert "Premial" in {c.name for c in in_scope}
+
+
+# ---------------------------------------------------------------------------
+# Website discovery — "do not add it unless you are very sure"
+# ---------------------------------------------------------------------------
+
+def test_domain_in_name_is_extracted_but_socials_are_not():
+    """'CBF (calviabalear.com)' states its own domain — that is the researcher
+    telling us, not a guess. A LinkedIn URL in the notes is NOT a company site."""
+    from adwatch.identity.find_website import domain_from_name
+    assert domain_from_name("CBF (calviabalear.com)") == "calviabalear.com"
+    assert domain_from_name("Aluminios Lago, S.L.") is None
+    assert domain_from_name("Óscar RV Arquitecto linkedin.com/in/oscar") is None
+    assert domain_from_name("Studio facebook.com/studio") is None
+
+
+def test_only_locality_backed_matches_are_auto_accepted():
+    """The gate here is deliberately STRICTER than enrichment's. domain_plus_name
+    proves a name coincidence, not that this is the right company — 'Premial' or
+    'Al-Andalus' would match a namesake in another province, and a wrong website
+    silently produces a description and an ad history for the wrong firm."""
+    from adwatch.identity.find_website import PROVEN
+    assert "domain_plus_name" not in PROVEN
+    for strong in ("phone", "plz_street", "plz_name", "domain_in_name"):
+        assert strong in PROVEN
+
+
+def test_unproven_candidate_is_queued_not_written(temp_db, monkeypatch):
+    """A plausible-but-unproven candidate must leave website_domain EMPTY."""
+    from sqlalchemy import select
+    from adwatch.identity import find_website as fw
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Aluminios Ejemplo", country="ES", city="Valencia",
+                postal_code="46020", street="Av. Catalunya 13",
+                lead_source="t", segment="Verarbeiter")
+    s.add(c); s.commit(); cid = c.id; s.close()
+
+    monkeypatch.setattr(fw, "search_candidates",
+                        lambda *a, **k: [{"domain": "aluminios-ejemplo.com",
+                                          "title": "Aluminios Ejemplo"}])
+    # a page that confirms the NAME but carries neither the postcode nor the street
+    monkeypatch.setattr(fw, "page_bundle",
+                        lambda d, **k: {"text": "Aluminios Ejemplo — ventanas",
+                                        "pages": [f"https://{d}"]})
+    r = fw.find_for(cid)
+    assert r["status"] == fw.NEEDS_REVIEW
+    with temp_db.SessionLocal() as s:
+        got = s.get(Company, cid)
+        assert got.website_domain is None, "an unproven domain must not be stored"
+        assert got.identity_status == fw.NEEDS_REVIEW
+        assert got.identity_evidence["review_candidate"] == "aluminios-ejemplo.com"
+    # ...and it is surfaced for a human instead of being dropped
+    assert any(q["company_id"] == cid for q in fw.review_queue(lead_source="t"))
+
+
+def test_postcode_backed_match_is_accepted(temp_db, monkeypatch):
+    from adwatch.identity import find_website as fw
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Aluminios Ejemplo", country="ES", city="Valencia",
+                postal_code="46020", street="Av. Catalunya 13",
+                lead_source="t", segment="Verarbeiter")
+    s.add(c); s.commit(); cid = c.id; s.close()
+
+    monkeypatch.setattr(fw, "search_candidates",
+                        lambda *a, **k: [{"domain": "aluminios-ejemplo.com"}])
+    monkeypatch.setattr(fw, "page_bundle", lambda d, **k: {
+        "text": "Aluminios Ejemplo, Av. Catalunya 13, 46020 Valencia",
+        "pages": [f"https://{d}"]})
+    r = fw.find_for(cid)
+    assert r["status"] == fw.VERIFIED
+    assert r["matched_by"] in ("plz_street", "plz_name")
+    with temp_db.SessionLocal() as s:
+        got = s.get(Company, cid)
+        assert got.website_domain == "aluminios-ejemplo.com"
+        assert got.website_source == "serper"
+
+
+def test_searched_companies_are_not_paid_for_twice(temp_db, monkeypatch):
+    """not_found and needs_review both count as done, or a re-run bills Serper
+    again for the same company."""
+    from adwatch.identity import find_website as fw
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    for i, st in enumerate([fw.NOT_FOUND, fw.NEEDS_REVIEW, None]):
+        s.add(Company(name=f"Firma {i}", country="ES", lead_source="t",
+                      segment="Verarbeiter", identity_status=st))
+    s.commit(); s.close()
+    pend = fw.pending_ids("t")
+    assert len(pend) == 1, "only the never-searched company may be queued"
