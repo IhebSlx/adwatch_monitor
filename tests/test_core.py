@@ -2635,3 +2635,46 @@ def test_tri_state_booleans_keep_not_stated_distinct_from_no():
     assert _tri_state(None) is None
     assert _tri_state("ja") is True
     assert _tri_state("unklar") is None
+
+
+# ---------------------------------------------------------------------------
+# Haiku conflict triage — diagnoses, never verifies
+# ---------------------------------------------------------------------------
+
+def test_triage_routes_but_never_writes_verified(temp_db, monkeypatch):
+    """The design rule from the migration incident: only the deterministic gate
+    may write 'verified'. Triage clears a diagnosed wrong_site domain (kept in
+    evidence), queues likely_right for review with the clue, leaves too_thin as
+    conflict — and no path produces 'verified'."""
+    from adwatch.identity import triage
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    wrong = Company(name="Dealer A", country="ES", website_domain="technal.com",
+                    identity_status="conflict", lead_source="t", segment="Handel")
+    right = Company(name="Dealer B", country="ES", website_domain="dealerb.es",
+                    identity_status="conflict", lead_source="t", segment="Handel")
+    thin = Company(name="Dealer C", country="ES", website_domain="thin.es",
+                   identity_status="conflict", lead_source="t", segment="Handel")
+    s.add_all([wrong, right, thin]); s.commit()
+    ids = {wrong.id: "wrong_site", right.id: "likely_right", thin.id: "too_thin"}
+    s.close()
+
+    monkeypatch.setattr(triage, "_evidence_for",
+                        lambda c: {"reachable": True, "excerpt": "x" * 100})
+    monkeypatch.setattr(triage, "_judge_batch", lambda blocks: {
+        cid: {"verdict": v, "what": "w", "clue": "c"} for cid, v in ids.items()})
+    monkeypatch.setattr(triage.config, "ANTHROPIC_API_KEY", "test", raising=False)
+
+    r = triage.run(lead_source="t")
+    assert r["wrong_site"] == 1 and r["likely_right"] == 1 and r["too_thin"] == 1
+
+    with temp_db.SessionLocal() as s:
+        w, ri, th = (s.get(Company, cid) for cid in ids)
+        assert w.website_domain is None                    # cleared for the finder
+        assert w.identity_evidence["triage"]["domain_at_triage"] == "technal.com"
+        assert ri.identity_status == "needs_review"
+        assert ri.website_domain == "dealerb.es"           # kept, human decides
+        assert th.identity_status == "conflict"
+        for c in (w, ri, th):
+            assert c.identity_status != "verified"
