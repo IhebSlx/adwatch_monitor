@@ -101,6 +101,36 @@ class Company(Base):
     products: Mapped[list | None] = mapped_column(JSON, nullable=True)            # ['Fenster','Wintergarten',...]
     founded_year: Mapped[int | None] = mapped_column(Integer, nullable=True)      # only when literally stated ('seit 1952')
     employee_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)  # verbatim ('15 Mitarbeiter'), never an LLM estimate
+    # ---- Enrichment, part 2: fields the extractor already produced but nobody
+    # could see. `CompanyEnrichment.fields` held legal_form, service_area,
+    # competitor_brands, mentions_solarlux and the assessment as JSON, so no
+    # filter, export, report or ICP feature could reach them — we were paying to
+    # extract data and then hiding it. Mirrored here like description/products.
+    legal_form: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    service_area: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Rival systems this firm installs (Schüco, Cortizo, Technal …). The conquest
+    # signal: a fabricator already building premium façades with a competitor's
+    # profiles is a proven capable buyer, and this names which brand to displace.
+    competitor_brands: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    mentions_solarlux: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    assessment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ---- Qualification attributes, all nullable because "not stated" must stay
+    # distinguishable from "no". Chosen to match the columns the Spain market
+    # research already used by hand (Eigene Fertigung, Zertifizierungen,
+    # Projektfokus), so machine and human research are directly comparable.
+    certifications: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    own_fabrication: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_showroom: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    project_focus: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    positioning: Mapped[str | None] = mapped_column(String(20), nullable=True)  # premium|mittel|budget
+    # ---- Self-declared machine-readable facts (enrich/site_facts.py) — no LLM.
+    # facebook_url is the strongest Meta identity anchor available: a page linked
+    # FROM the verified website provably belongs to this company, unlike a name
+    # search. Feeds identity resolution rather than replacing it.
+    facebook_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    instagram_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    linkedin_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    site_language: Mapped[str | None] = mapped_column(String(8), nullable=True)
     enrichment_status: Mapped[str] = mapped_column(String(20), default="none")
     # none = never enriched | enriched = data found & accepted | needs_review = a
     # candidate website failed deterministic validation (a human decides)

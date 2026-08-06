@@ -30,6 +30,7 @@ import urllib.robotparser
 import requests
 
 from ..identity import website_source as ws
+from . import site_facts
 from .domains import normalize_domain
 
 # Per-page and total text budgets. The TOTAL is what sets the extraction bill, so
@@ -145,6 +146,11 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
     chunks = [ws._page_text(html, limit=_HOME_CHARS)]
     pages = [home_url]
     categories = {home_url: "home"}
+    # Machine-readable facts, harvested from the SAME html we already hold — no
+    # extra request, no LLM. The homepage is parsed first so its values win, but
+    # the legal/contact page is where a phone and postal address usually live, so
+    # later pages fill whatever is still missing.
+    facts = site_facts.extract(html, base_url=home_url)
     try:
         for sub_url in ws._subpage_urls(home_url, html, max_pages=_MAX_SUBPAGES):
             time.sleep(_PAGE_PAUSE)
@@ -153,9 +159,25 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
                 chunks.append(ws._page_text(sub[0], limit=_PER_PAGE_CHARS))
                 pages.append(sub_url)
                 categories[sub_url] = ws._classify_link(sub_url) or "other"
+                try:
+                    more = site_facts.extract(sub[0], base_url=sub_url)
+                except Exception:  # noqa: BLE001
+                    more = {}
+                for k, v in more.items():
+                    if k == "social":
+                        merged_social = dict(facts.get("social") or {})
+                        for net, url in (v or {}).items():
+                            merged_social.setdefault(net, url)
+                        facts["social"] = merged_social
+                    elif k == "sources":
+                        facts.setdefault("sources", {}).update(
+                            {sk: sv for sk, sv in v.items() if sk not in facts})
+                    elif k not in facts:
+                        facts[k] = v
     except Exception:  # noqa: BLE001 — a subpage is a bonus, not a requirement
         pass
 
     text = " | ".join(c for c in chunks if c)[:total_chars]
     return {"domain": dom, "home_url": home_url, "text": text,
-            "pages": pages, "chars": len(text), "categories": categories}
+            "pages": pages, "chars": len(text), "categories": categories,
+            "facts": facts}

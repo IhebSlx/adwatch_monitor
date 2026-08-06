@@ -2554,3 +2554,84 @@ def test_link_categories_cover_the_app_markets():
     assert _classify_link("https://x.es/quienes-somos") == "about"
     assert _classify_link("https://x.de/referenzen") == "references"
     assert _classify_link("https://x.es/") is None
+
+
+# ---------------------------------------------------------------------------
+# site_facts — machine-readable facts, no LLM
+# ---------------------------------------------------------------------------
+
+_FACTS_HTML = """
+<html lang="es-ES"><head>
+  <meta property="og:description" content="Carpintería de aluminio en Málaga">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"LocalBusiness","name":"Protec Ventanas",
+   "telephone":"+34 952 58 75 73","email":"info@protec.es",
+   "foundingDate":"1998-04-01",
+   "address":{"@type":"PostalAddress","streetAddress":"Calle Sol 4",
+              "postalCode":"29620","addressLocality":"Torremolinos"},
+   "sameAs":["https://www.facebook.com/protecventanas",
+             "https://www.instagram.com/protec_ventanas"]}
+  </script>
+</head><body>
+  <a href="tel:+34952587573">Llamar</a>
+  <a href="mailto:info@protec.es">Escribir</a>
+  <a href="https://www.facebook.com/sharer/sharer.php?u=x">Compartir</a>
+  <a href="https://www.linkedin.com/company/protec-ventanas">LinkedIn</a>
+</body></html>
+"""
+
+
+def test_site_facts_reads_jsonld_contact_and_socials():
+    """Free, deterministic, and it unlocks the two strongest identity signals:
+    phone (ranked first by validate_site) and the company's OWN Facebook page.
+    Not one of the 39 Spain rows without a website had a phone number."""
+    from adwatch.enrich import site_facts
+    f = site_facts.extract(_FACTS_HTML, base_url="https://protec.es/")
+    assert f["phone"] == "+34 952 58 75 73"
+    assert f["email"] == "info@protec.es"
+    assert f["postal_code"] == "29620" and f["city"] == "Torremolinos"
+    assert f["street"] == "Calle Sol 4"
+    assert f["founded_year"] == 1998
+    assert f["language"] == "es-es"
+    assert f["social"]["facebook"] == "https://www.facebook.com/protecventanas"
+    assert f["social"]["instagram"] == "https://www.instagram.com/protec_ventanas"
+    assert f["social"]["linkedin"] == "https://www.linkedin.com/company/protec-ventanas"
+    assert f["sources"]["phone"] == "json-ld"
+
+
+def test_share_widgets_are_not_mistaken_for_the_company_profile():
+    """A sharer link points at OUR page on Facebook, not the company's — treating
+    it as the company's profile would attribute someone else's ads."""
+    from adwatch.enrich import site_facts
+    html = ('<a href="https://www.facebook.com/sharer/sharer.php?u=x">s</a>'
+            '<a href="https://facebook.com/plugins/like.php">l</a>')
+    assert "social" not in site_facts.extract(html)
+
+
+def test_personal_mailboxes_are_not_harvested():
+    """A role inbox is a company address; a named person's is personal data the
+    app has no reason to store (same rule that excludes Geschäftsführer names)."""
+    from adwatch.enrich import site_facts
+    f = site_facts.extract('<a href="mailto:maria.gomez@firma.es">Maria</a>')
+    assert "email" not in f
+    f2 = site_facts.extract('<a href="mailto:info@firma.es">Info</a>')
+    assert f2["email"] == "info@firma.es"
+
+
+def test_malformed_jsonld_never_breaks_extraction():
+    from adwatch.enrich import site_facts
+    html = ('<script type="application/ld+json">{"@type":"Organization",}</script>'
+            '<a href="tel:+34911223344">x</a>')
+    f = site_facts.extract(html)
+    assert f["phone"] == "+34911223344"   # salvaged the trailing comma, or fell back
+
+
+def test_tri_state_booleans_keep_not_stated_distinct_from_no():
+    """A site that never mentions its workshop must not be recorded as a
+    confirmed pure trader."""
+    from adwatch.enrich.extract import _tri_state
+    assert _tri_state(True) is True
+    assert _tri_state(False) is False
+    assert _tri_state(None) is None
+    assert _tri_state("ja") is True
+    assert _tri_state("unklar") is None

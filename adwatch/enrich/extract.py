@@ -92,6 +92,11 @@ Antworte AUSSCHLIESSLICH mit diesem JSON (keine Erklärung, kein Markdown):
   "service_area": "<Region/Umkreis auf Deutsch, falls genannt, sonst null>",
   "mentions_solarlux": <true|false>,
   "competitor_brands": [<genannte Marken aus: COMPETITOR_LIST>],
+  "certifications": [<Zertifikate/Normen WÖRTLICH, z.B. "ISO 9001", "CE", "Passivhaus", "RAL" — max 6, sonst []>],
+  "own_fabrication": <true wenn eigene Fertigung/Produktion/Werkstatt belegt | false wenn ausdrücklich nur Handel/Vertrieb | null wenn unklar>,
+  "has_showroom": <true wenn Ausstellung/Showroom/Musterhaus genannt | null wenn unklar>,
+  "project_focus": [<0-4 aus: "Wohnbau", "Objektbau", "Hotel/Gastro", "Sanierung", "Gewerbe", "Öffentlich">],
+  "positioning": "<premium | mittel | budget — nur bei klaren Hinweisen (Luxus/Exklusiv vs. preiswert), sonst null>",
   "evidence": {"<feldname>": "<Zitat>", ...},
   "assessment_de": "<2-3 Sätze Einschätzung wie oben, oder null>"
 }
@@ -106,6 +111,29 @@ Website-Text:
 def _prompt() -> str:
     return (_PROMPT.replace("__PRODUCTS__", ", ".join(PRODUCT_VOCAB))
                    .replace("__COMPETITORS__", ", ".join(COMPETITOR_BRANDS)))
+
+
+PROJECT_FOCUS = ("Wohnbau", "Objektbau", "Hotel/Gastro", "Sanierung",
+                 "Gewerbe", "Öffentlich")
+POSITIONING = ("premium", "mittel", "budget")
+
+
+def _tri_state(value) -> bool | None:
+    """True / False / None, where None means 'the site does not say'.
+
+    Not `bool(value)`: that collapses null into False, which would turn "no
+    information about own fabrication" into "confirmed pure trader" on every
+    site that simply never mentions its workshop.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in ("true", "ja", "yes"):
+            return True
+        if low in ("false", "nein", "no"):
+            return False
+    return None
 
 
 def _legal_form_in_text(value, text: str) -> str | None:
@@ -203,6 +231,18 @@ def extract_facts(site_text: str, model: str | None = None) -> dict:
         "service_area": ((data.get("service_area") or "").strip() or None),
         "mentions_solarlux": bool(data.get("mentions_solarlux")),
         "competitor_brands": _clean_list(data.get("competitor_brands"), COMPETITOR_BRANDS, 12),
+        # Qualification attributes. The booleans stay TRI-STATE on purpose: null
+        # means the site does not say, which is different from a stated "no" — a
+        # dealer with no fabrication and a dealer whose site is silent about it
+        # must not be scored the same.
+        "certifications": [str(c).strip()[:40] for c in (data.get("certifications") or [])
+                           if str(c).strip()][:6],
+        "own_fabrication": _tri_state(data.get("own_fabrication")),
+        "has_showroom": _tri_state(data.get("has_showroom")),
+        "project_focus": _clean_list(data.get("project_focus"), PROJECT_FOCUS, 4),
+        "positioning": (str(data.get("positioning")).strip().lower()
+                        if str(data.get("positioning") or "").strip().lower()
+                        in POSITIONING else None),
         "evidence": {str(k)[:40]: str(v)[:200] for k, v in list(evidence.items())[:12]},
         "llm_model": use_model,
     }

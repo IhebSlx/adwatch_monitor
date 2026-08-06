@@ -237,6 +237,23 @@ def _migrate(engine) -> None:
                             ("arch_projects", "0"), ("arch_won", "0"),
                             ("arch_won_value", "0")):
                 conn.execute(text(f"UPDATE companies SET {c} = {zero} WHERE {c} IS NULL"))
+        # companies: enrichment fields that were previously trapped in
+        # CompanyEnrichment.fields JSON, plus the new qualification attributes and
+        # the self-declared facts from site_facts.py. All additive + nullable —
+        # NULL means "not stated", which must stay distinct from False.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("legal_form", "VARCHAR(60)"), ("service_area", "VARCHAR(200)"),
+                ("competitor_brands", "JSON"), ("mentions_solarlux", "BOOLEAN"),
+                ("assessment", "TEXT"), ("certifications", "JSON"),
+                ("own_fabrication", "BOOLEAN"), ("has_showroom", "BOOLEAN"),
+                ("project_focus", "JSON"), ("positioning", "VARCHAR(20)"),
+                ("facebook_url", "VARCHAR(300)"), ("instagram_url", "VARCHAR(300)"),
+                ("linkedin_url", "VARCHAR(300)"), ("site_language", "VARCHAR(8)"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
         # companies: non-CRM lead provenance + competitor flag.
         cols = _existing_columns(conn, "companies")
         if cols:

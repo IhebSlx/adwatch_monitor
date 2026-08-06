@@ -189,6 +189,14 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
     # ---- Tier 2: facts from the site's own text -------------------------------
     bundle = site.get("bundle")
     if site["domain"] and bundle and (bundle.get("text") or "").strip():
+        # Deterministic self-declared facts first — free, and more trustworthy
+        # than prose extraction, so they are recorded even when the LLM stage is
+        # skipped or fails.
+        if bundle.get("facts"):
+            fields["site_facts"] = bundle["facts"]
+            provenance["site_facts"] = _prov(
+                "website-strukturdaten", 0.9,
+                "JSON-LD / tel: / mailto: / meta — kein LLM")
         if allow_llm:
             try:
                 facts = extract.extract_facts(bundle["text"])
@@ -284,6 +292,45 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             c.products = merged.get("products") or None
             c.founded_year = merged.get("founded_year") or None
             c.employee_hint = merged.get("employee_hint") or None
+            # Previously stopped here, leaving everything below trapped in
+            # `row.fields` where no filter, export, report or ICP feature could
+            # reach it — we paid the extraction and then hid the result.
+            c.legal_form = merged.get("legal_form") or None
+            c.service_area = merged.get("service_area") or None
+            c.competitor_brands = merged.get("competitor_brands") or None
+            c.mentions_solarlux = merged.get("mentions_solarlux")
+            c.assessment = merged.get("assessment_de") or None
+            c.certifications = merged.get("certifications") or None
+            c.own_fabrication = merged.get("own_fabrication")
+            c.has_showroom = merged.get("has_showroom")
+            c.project_focus = merged.get("project_focus") or None
+            c.positioning = merged.get("positioning") or None
+            # Machine-readable self-declared facts (site_facts). These only ever
+            # FILL a gap: a phone or address from CRM is authoritative master
+            # data and must not be replaced by a website's version.
+            facts = merged.get("site_facts") or {}
+            social = facts.get("social") or {}
+            for col, key in (("facebook_url", "facebook"),
+                             ("instagram_url", "instagram"),
+                             ("linkedin_url", "linkedin")):
+                if social.get(key) and not getattr(c, col):
+                    setattr(c, col, social[key][:300])
+            if facts.get("language") and not c.site_language:
+                c.site_language = facts["language"]
+            if facts.get("phone") and not c.phone:
+                c.phone = str(facts["phone"])[:80]
+                provenance["phone"] = _prov("site_facts", 0.8, "tel/JSON-LD")
+            if facts.get("email") and not c.email:
+                c.email = str(facts["email"])[:300]
+                provenance["email"] = _prov("site_facts", 0.8, "mailto/JSON-LD")
+            if facts.get("postal_code") and not c.postal_code:
+                c.postal_code = str(facts["postal_code"])[:20]
+            if facts.get("street") and not c.street:
+                c.street = str(facts["street"])[:300]
+            if facts.get("city") and not c.city:
+                c.city = str(facts["city"])[:200]
+            if facts.get("founded_year") and not c.founded_year:
+                c.founded_year = facts["founded_year"]
         c.enrichment_status = status
         # A human's decision outranks any automatic label: once a website was
         # approved in the review queue, a later automatic pass (which now simply
