@@ -124,6 +124,19 @@ class Company(Base):
     winback_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     crm_synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # ---- Angebote (ax_sap_quote) and what became of them ----
+    # 43,922 quotes since 2023 worth EUR 1,448M against EUR 392M of orders — a
+    # 27.1% value conversion, i.e. EUR 1,056M quoted and never ordered. This is
+    # the single largest measured gap in the business.
+    #
+    # READ conversion_rate ONLY for Handel/Verarbeiter. For Architekten,
+    # Baudienstleister and Wohnungswirtschaft the quoted party is NOT the ordering
+    # party — Solarlux quotes the planner or object owner and the dealer places the
+    # order — so their near-0% is an attribution artefact, not a lost deal.
+    quote_count: Mapped[int] = mapped_column(Integer, default=0)
+    quote_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    conversion_rate: Mapped[float | None] = mapped_column(Float, nullable=True)  # beleg_sum / quote_sum
+
     # Whether the ad-tracking pipeline should consider this company. The CRM
     # population is ~46,000 active business accounts; ad monitoring costs money
     # per company and is only wanted on a chosen subset. Bulk CRM imports land
@@ -447,6 +460,16 @@ class CrmOpportunity(Base):
     closed_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     crm_modified_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    # WHY it was lost, decoded from `statuscode`. Measured over 38,523 lost
+    # opportunities: half the lost volume (EUR 557M of EUR 1,123M) sits in reasons
+    # a human could act on — "Kein Feedback vom Kunden", "Kein Interesse mehr",
+    # "Zu teuer", "Wettbewerb" — and only 6.2% is a straight competitive loss.
+    # The other half (Baugenehmigung, Projekt umgeplant, Duplikat, Endkunde hat
+    # den Auftrag nicht erhalten) is not winnable and must be excluded from any
+    # "we are losing deals" narrative, or the number becomes theatre.
+    lost_reason: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    estimated_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_customer_budget: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class CrmOrderEvent(Base):

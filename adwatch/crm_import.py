@@ -236,6 +236,184 @@ def import_accounts(path: str | Path, *, allow_insert: bool = True) -> dict:
     return stats
 
 
+OPP_STATUS = {
+    1: "Planungsphase", 2: "Angebotsphase", 3: "Gewonnen",
+    100000000: "Auftragsphase", 100000001: "Abschlussphase",
+    100000002: "Teilauftrag", 100000003: "Keine Baugenehmigung",
+    100000009: "Zu teuer",
+    102690000: "Zugehörige VC gewonnen",
+    425390000: "Wettbewerb", 425390002: "Selbst abgelehnt",
+    425390004: "Duplikat", 425390006: "Kunde hat den Auftrag nicht erhalten",
+    852850000: "Kein Feedback vom Kunden", 852850001: "Zu lange Lieferzeit",
+    852850002: "Kein Interesse mehr", 852850003: "Projekt umgeplant",
+    852850004: "Massenschließung",
+}
+
+# Reasons a human could still do something about. Measured: these carry EUR 557M
+# of the EUR 1,123M lost volume. The rest is not winnable and including it makes
+# any "we are losing deals" figure meaningless.
+ADDRESSABLE_LOSSES = frozenset({
+    "Kein Feedback vom Kunden", "Kein Interesse mehr", "Zu teuer", "Wettbewerb",
+})
+
+STATE = {0: "offen", 1: "gewonnen", 2: "verloren"}
+
+
+def import_order_events(path: str | Path, *, replace_window: bool = False) -> dict:
+    """Belege -> CrmOrderEvent, collapsing each company+day into one purchase event.
+
+    Belege are not orders: 73,112 documents in the 2023+ window are 54,534 events.
+    A multi-line order is issued as several documents, so a cadence computed on raw
+    Belege reads as 0-3 days for a large dealer and churn detection stops working.
+    """
+    from .models import CrmOrderEvent
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    cols = data.get("cols") or data.get("belege_cols")
+    rows = data.get("rows") or data.get("belege")
+    if not cols or not rows:
+        raise ValueError("export has no Beleg rows")
+    ix = {c: i for i, c in enumerate(cols)}
+
+    agg: dict[tuple[str, str], list] = {}
+    for r in rows:
+        cust = (r[ix["cust"]] or "").strip().lower()
+        day = str(r[ix["date"]] or "")[:10]
+        if not cust or not day:
+            continue
+        a = agg.setdefault((cust, day), [0.0, 0, None, []])
+        a[0] += float(r[ix["amount"]] or 0)
+        a[1] += 1
+        if a[2] is None and ix.get("channel") is not None:
+            a[2] = r[ix["channel"]] or None
+        d = r[ix["discount"]] if "discount" in ix else None
+        if d is not None:
+            a[3].append(float(d))
+
+    stats = {"belege": len(rows), "events": 0, "unmatched": 0}
+    with SessionLocal() as s:
+        by_crm = {c.crm_id.strip().lower(): c.id for c in
+                  s.scalars(select(Company).where(Company.crm_id.is_not(None)))
+                  if c.crm_id}
+        days = {d for _, d in agg}
+        if replace_window and days:
+            s.execute(CrmOrderEvent.__table__.delete().where(
+                CrmOrderEvent.order_date >= dt.date.fromisoformat(min(days)),
+                CrmOrderEvent.order_date <= dt.date.fromisoformat(max(days))))
+        existing = {(cid, d) for cid, d in s.execute(
+            select(CrmOrderEvent.company_id, CrmOrderEvent.order_date))}
+        pending = []
+        for (cust, day), (amt, n, ch, disc) in agg.items():
+            cid = by_crm.get(cust)
+            if cid is None:
+                stats["unmatched"] += 1      # deactivated or Private-Endkunde account
+                continue
+            date = dt.date.fromisoformat(day)
+            if (cid, date) in existing:
+                continue
+            pending.append(dict(company_id=cid, order_date=date,
+                                amount=round(amt, 2), beleg_count=n, channel=ch,
+                                discount=round(sum(disc) / len(disc), 3) if disc else None))
+        for i in range(0, len(pending), 5000):
+            s.bulk_insert_mappings(CrmOrderEvent, pending[i:i + 5000])
+        stats["events"] = len(pending)
+        s.commit()
+    log.info("crm_import.import_order_events: %s", stats)
+    return stats
+
+
+def import_opportunities(path: str | Path) -> dict:
+    """Opportunities -> CrmOpportunity, with the loss reason decoded."""
+    from .models import CrmOpportunity
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    ix = {c: i for i, c in enumerate(data["cols"])}
+    rows = data["rows"]
+    g = lambda r, c: r[ix[c]] if c in ix else None  # noqa: E731
+
+    def _ts(v):
+        if not v:
+            return None
+        try:
+            return dt.datetime.fromisoformat(str(v)[:10])
+        except ValueError:
+            return None
+
+    stats = {"total": len(rows), "inserted": 0, "lost": 0, "addressable": 0}
+    now = dt.datetime.utcnow()
+    with SessionLocal() as s:
+        s.execute(CrmOpportunity.__table__.delete())
+        pending = []
+        for r in rows:
+            state = STATE.get(g(r, "statecode"))
+            label = OPP_STATUS.get(g(r, "statuscode"))
+            lost = label if state == "verloren" else None
+            if lost:
+                stats["lost"] += 1
+                if lost in ADDRESSABLE_LOSSES:
+                    stats["addressable"] += 1
+            pending.append(dict(
+                crm_id=(g(r, "number") or "") or f"row-{len(pending)}",
+                number=g(r, "number") or None,
+                parent_account_crm_id=(g(r, "account") or "").strip().lower() or None,
+                architect_crm_id=(g(r, "architect") or "").strip().lower() or None,
+                end_customer_crm_id=(g(r, "endcustomer") or "").strip().lower() or None,
+                sales_channel=SALES_CHANNEL.get(g(r, "channel")),
+                state=state, lost_reason=lost,
+                order_value=float(g(r, "order_value") or 0) or None,
+                estimated_value=float(g(r, "est_value") or 0) or None,
+                end_customer_budget=float(g(r, "endcust_budget") or 0) or None,
+                created_on=_ts(g(r, "created")), closed_on=_ts(g(r, "closed")),
+                synced_at=now))
+        for i in range(0, len(pending), 5000):
+            s.bulk_insert_mappings(CrmOpportunity, pending[i:i + 5000])
+        stats["inserted"] = len(pending)
+        s.commit()
+    log.info("crm_import.import_opportunities: %s", stats)
+    return stats
+
+
+def import_quotes(path: str | Path) -> dict:
+    """Quote totals per company -> Company.quote_count/quote_sum/conversion_rate.
+
+    Only the aggregate is stored: individual quotes add ~44,000 rows and nothing
+    the ranking uses. conversion_rate is beleg_sum / quote_sum and is meaningful
+    ONLY for Handel/Verarbeiter — see the note on the Company columns.
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    ix = {c: i for i, c in enumerate(data["cols"])}
+    agg: dict[str, list] = {}
+    for r in data["rows"]:
+        cust = (r[ix["cust"]] or "").strip().lower()
+        if not cust:
+            continue
+        a = agg.setdefault(cust, [0, 0.0])
+        a[0] += 1
+        a[1] += float(r[ix["amount"]] or 0)
+
+    stats = {"companies_with_quotes": 0, "unmatched": 0,
+             "quoted_total": 0.0, "ordered_total": 0.0}
+    with SessionLocal() as s:
+        by_crm = {c.crm_id.strip().lower(): c for c in
+                  s.scalars(select(Company).where(Company.crm_id.is_not(None)))
+                  if c.crm_id}
+        for cust, (n, total) in agg.items():
+            c = by_crm.get(cust)
+            if c is None:
+                stats["unmatched"] += 1
+                continue
+            c.quote_count = n
+            c.quote_sum = round(total, 2)
+            c.conversion_rate = (round((c.beleg_sum or 0) / total, 4)
+                                 if total > 0 else None)
+            stats["companies_with_quotes"] += 1
+            stats["quoted_total"] += total
+            stats["ordered_total"] += (c.beleg_sum or 0)
+        s.commit()
+    stats["quoted_total"] = round(stats["quoted_total"], 2)
+    stats["ordered_total"] = round(stats["ordered_total"], 2)
+    log.info("crm_import.import_quotes: %s", stats)
+    return stats
+
+
 def backfill_websites(path: str | Path) -> dict:
     """Copy CRM's websiteurl into website_domain where we have nothing.
 

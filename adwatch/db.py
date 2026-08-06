@@ -237,6 +237,24 @@ def _migrate(engine) -> None:
                             ("arch_projects", "0"), ("arch_won", "0"),
                             ("arch_won_value", "0")):
                 conn.execute(text(f"UPDATE companies SET {c} = {zero} WHERE {c} IS NULL"))
+        # companies: Angebote (ax_sap_quote) + conversion. Additive.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [("quote_count", "INTEGER DEFAULT 0"),
+                              ("quote_sum", "FLOAT DEFAULT 0"),
+                              ("conversion_rate", "FLOAT")]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            for c in ("quote_count", "quote_sum"):
+                conn.execute(text(f"UPDATE companies SET {c} = 0 WHERE {c} IS NULL"))
+        # crm_opportunities: loss reason + values
+        cols = _existing_columns(conn, "crm_opportunities")
+        if cols:
+            for name, ddl in [("lost_reason", "VARCHAR(80)"),
+                              ("estimated_value", "FLOAT"),
+                              ("end_customer_budget", "FLOAT")]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE crm_opportunities ADD COLUMN {name} {ddl}"))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
         cols = _existing_columns(conn, "fetch_jobs")
         if cols and "plan" not in cols:
