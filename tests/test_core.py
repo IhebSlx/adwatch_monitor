@@ -2482,3 +2482,75 @@ def test_conflict_domains_are_never_google_fetched(temp_db):
     assert ok.id in fetchable and unknown.id in fetchable
     assert bad.id not in fetchable
     s.close()
+
+
+# ---------------------------------------------------------------------------
+# Subpage selection — which pages the enrichment crawler actually reads
+# ---------------------------------------------------------------------------
+
+_ES_HTML = """
+<html><body>
+  <nav>
+    <a href="/">Inicio</a>
+    <a href="/productos">Productos</a>
+    <a href="/servicios/ventanas-pvc/serie-70">Serie 70</a>
+    <a href="/quienes-somos">Quiénes somos</a>
+    <a href="/contacto">Contacto</a>
+    <a href="/aviso-legal">Aviso legal</a>
+    <a href="https://facebook.com/firma">Facebook</a>
+  </nav>
+  <div class="mobile-menu">
+    <a href="/contacto">Contacto</a>
+    <a href="/productos/">Productos</a>
+  </div>
+</body></html>
+"""
+
+
+def test_spanish_product_pages_are_selected_not_just_contacto():
+    """The old rule matched only impressum|kontakt|contact and took the first two
+    in document order, so a Spanish site yielded homepage + 'contacto' and the
+    product pages were NEVER read — the products list then came from whatever the
+    homepage happened to mention."""
+    from adwatch.identity import website_source as ws
+    picked = ws._subpage_urls("https://ejemplo.es/", _ES_HTML, max_pages=3)
+    cats = [ws._classify_link(u) for u in picked]
+    assert "products" in cats, picked
+    assert "legal" in cats, picked
+    assert "https://ejemplo.es/productos" in picked
+    # the section index is read BEFORE a deep single-item page: '/productos' is
+    # the whole range, '/servicios/ventanas-pvc/serie-70' is one article
+    prods = [u for u in picked if ws._classify_link(u) == "products"]
+    assert prods[0] == "https://ejemplo.es/productos", prods
+    # and with only two slots the deep page must never displace the index
+    picked2 = ws._subpage_urls("https://ejemplo.es/", _ES_HTML, max_pages=2)
+    assert not any("serie-70" in u for u in picked2), picked2
+
+
+def test_duplicate_nav_targets_do_not_consume_slots():
+    """A nav bar repeats the same href in the desktop and mobile menus; each
+    duplicate used to eat one of only two available slots."""
+    from adwatch.identity import website_source as ws
+    picked = ws._subpage_urls("https://ejemplo.es/", _ES_HTML, max_pages=4)
+    paths = [u.rstrip("/").rsplit("ejemplo.es", 1)[-1] for u in picked]
+    assert len(paths) == len(set(paths)), picked
+
+
+def test_offsite_and_non_http_links_are_never_fetched():
+    from adwatch.identity import website_source as ws
+    picked = ws._subpage_urls("https://ejemplo.es/", _ES_HTML, max_pages=6)
+    assert all("ejemplo.es" in u for u in picked), picked
+
+
+def test_link_categories_cover_the_app_markets():
+    """config/markets.yaml already knew ES='aviso legal', FR='mentions légales',
+    IT='contatti' while the crawler only looked for German terms."""
+    from adwatch.identity.website_source import _classify_link
+    assert _classify_link("https://x.es/aviso-legal") == "legal"
+    assert _classify_link("https://x.fr/mentions-legales") == "legal"
+    assert _classify_link("https://x.it/contatti") == "legal"
+    assert _classify_link("https://x.es/productos") == "products"
+    assert _classify_link("https://x.pt/produtos") == "products"
+    assert _classify_link("https://x.es/quienes-somos") == "about"
+    assert _classify_link("https://x.de/referenzen") == "references"
+    assert _classify_link("https://x.es/") is None

@@ -32,10 +32,14 @@ import requests
 from ..identity import website_source as ws
 from .domains import normalize_domain
 
-# Per-page and total text budgets. ~9k chars is plenty for the LLM stage while
-# keeping the per-company token cost (and bill) predictable.
-_PER_PAGE_CHARS = 4000
-_TOTAL_CHARS = 9000
+# Per-page and total text budgets. The TOTAL is what sets the extraction bill, so
+# it stays fixed; only how it is SPENT changed. Reading 4 shorter pages beats 2
+# long ones here: a homepage tail is navigation and footer boilerplate, while the
+# first 2,200 chars of '/productos' is the product list itself.
+_PER_PAGE_CHARS = 2200
+_HOME_CHARS = 2400           # the homepage still gets the largest single share
+_TOTAL_CHARS = 9000          # unchanged -> per-company cost unchanged
+_MAX_SUBPAGES = 3            # legal (identity) + products + about/references
 
 _MAX_BYTES = 1_500_000       # hard cap per fetched page
 _CONNECT_TIMEOUT = 6         # seconds to establish the connection
@@ -114,11 +118,17 @@ def _robots_allows(domain: str) -> bool:
 
 
 def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | None:
-    """Homepage + up to 2 of the site's own Impressum/Kontakt pages.
+    """Homepage + the site's most informative subpages (legal, products, about).
 
-    Returns {domain, home_url, text, pages, chars} or None when the site can't
-    (or shouldn't) be fetched: unresolvable, non-public address, robots-
-    disallowed, unreachable. Never raises."""
+    Page choice is by CATEGORY, not document order — see
+    identity.website_source._subpage_urls. This matters most outside Germany: the
+    old keyword set was impressum/kontakt/contact, so a Spanish site yielded the
+    homepage plus 'contacto' and the product pages were never read, leaving the
+    products list to whatever the homepage happened to mention.
+
+    Returns {domain, home_url, text, pages, chars, categories} or None when the
+    site can't (or shouldn't) be fetched: unresolvable, non-public address,
+    robots-disallowed, unreachable. Never raises."""
     dom = normalize_domain(domain)
     if not dom:
         return None
@@ -132,18 +142,20 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
         return None
     html, home_url = got
 
-    chunks = [ws._page_text(html, limit=_PER_PAGE_CHARS)]
+    chunks = [ws._page_text(html, limit=_HOME_CHARS)]
     pages = [home_url]
+    categories = {home_url: "home"}
     try:
-        for sub_url in ws._subpage_urls(home_url, html):
+        for sub_url in ws._subpage_urls(home_url, html, max_pages=_MAX_SUBPAGES):
             time.sleep(_PAGE_PAUSE)
             sub = _fetch(sub_url)
             if sub:
                 chunks.append(ws._page_text(sub[0], limit=_PER_PAGE_CHARS))
                 pages.append(sub_url)
-    except Exception:  # noqa: BLE001 — Impressum is a bonus, not a requirement
+                categories[sub_url] = ws._classify_link(sub_url) or "other"
+    except Exception:  # noqa: BLE001 — a subpage is a bonus, not a requirement
         pass
 
     text = " | ".join(c for c in chunks if c)[:total_chars]
     return {"domain": dom, "home_url": home_url, "text": text,
-            "pages": pages, "chars": len(text)}
+            "pages": pages, "chars": len(text), "categories": categories}
