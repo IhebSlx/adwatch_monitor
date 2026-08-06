@@ -20,6 +20,7 @@ import datetime as dt
 import logging
 import os
 import threading
+import time
 
 from sqlalchemy import select
 
@@ -555,15 +556,22 @@ def create_pipeline_job(company_ids: list[int], plan: dict, label: str | None = 
         return _job_to_dict(job)
 
 
+# Serialises the read-modify-write on the job row. The ads step now logs from a
+# thread pool, and two concurrent _pl_log calls would otherwise both read the
+# same `completed` value and lose an increment (and interleave log JSON).
+_pl_log_lock = threading.Lock()
+
+
 def _pl_log(job_id: int, text: str, advance: bool = True) -> None:
-    with SessionLocal() as s:
-        job = s.get(FetchJob, job_id)
-        if not job:
-            return
-        if advance:
-            job.completed = (job.completed or 0) + 1
-        _append_log(s, job, text)
-        s.commit()
+    with _pl_log_lock:
+        with SessionLocal() as s:
+            job = s.get(FetchJob, job_id)
+            if not job:
+                return
+            if advance:
+                job.completed = (job.completed or 0) + 1
+            _append_log(s, job, text)
+            s.commit()
 
 
 def _pl_cancelled(job_id: int) -> bool:
@@ -643,14 +651,33 @@ def _run_pipeline(job_id: int) -> None:
                                 f"— {len(units)} von {len(cids) * len(plan['ads'])} "
                                 "möglichen Abrufen (nur mit Meta-Seite bzw. Website)")
             s.commit()
-        for cid, src in units:
+        # Concurrent, because an ad lookup is ~95% waiting on the Apify actor.
+        # Measured on the Spain run: sequential took ~5.3 min PER COMPANY (282
+        # companies ≈ 25 hours); the work is I/O, so a small pool collapses the
+        # wall clock without changing cost or results. Bounded at 6: enough to
+        # hide the actor cold-start, small enough to stay clear of Apify's
+        # concurrent-run limits and keep SQLite write bursts short.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _one_ad_unit(cid: int, src: str) -> tuple[int, str, str | None]:
             if _pl_cancelled(job_id):
-                break
+                return cid, src, "cancelled"
             try:
                 runners[src](company_id=cid)
-                _pl_log(job_id, f"[{src}] ✓ {_name(cid)}")
+                return cid, src, None
             except Exception as exc:  # noqa: BLE001
-                _pl_log(job_id, f"[{src}] ✗ {_name(cid)} — {str(exc)[:120]}")
+                return cid, src, str(exc)[:120]
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(_one_ad_unit, cid, src) for cid, src in units]
+            for fut in as_completed(futures):
+                cid, src, err = fut.result()
+                if err == "cancelled":
+                    _pl_log(job_id, f"[{src}] ⏹ {_name(cid)} — abgebrochen", advance=False)
+                elif err:
+                    _pl_log(job_id, f"[{src}] ✗ {_name(cid)} — {err}")
+                else:
+                    _pl_log(job_id, f"[{src}] ✓ {_name(cid)}")
 
     def _do_report() -> None:
         _header("report")
@@ -746,7 +773,24 @@ def cancel_job(job_id: int) -> None:
     companies (not mid-Apify-call), so a job can take up to ~2 minutes to
     actually stop after this — set status to 'cancelling' right away so the
     UI can say so instead of looking stuck on 'running'."""
+    # The in-memory flag is what the loop actually checks, so it is set FIRST —
+    # cancellation must work even when the status write below fails. That is not
+    # theoretical: on the Spain run the cancel's commit hit 'database is locked'
+    # (a worker held the write lock), the endpoint 500ed, and because the flag
+    # was set the loop DID stop — but the row stayed 'running' forever and the
+    # UI looked stuck. The write now retries briefly through the lock instead.
     _cancel_flags[job_id] = True
+    for attempt in range(5):
+        try:
+            _write_cancel_status(job_id)
+            return
+        except Exception:  # noqa: BLE001 — typically sqlite 'database is locked'
+            if attempt == 4:
+                raise
+            time.sleep(0.8 * (attempt + 1))
+
+
+def _write_cancel_status(job_id: int) -> None:
     with SessionLocal() as s:
         job = s.get(FetchJob, job_id)
         if not job:
