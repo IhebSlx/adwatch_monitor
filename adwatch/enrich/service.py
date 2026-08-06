@@ -365,6 +365,16 @@ def accept_candidate(company_id: int, domain: str) -> dict:
         if not c:
             raise ValueError("Company not found")
         c.website_domain = dom
+        # The identity columns must agree with the enrichment provenance, or the
+        # row keeps surfacing in the review queue after a human already decided
+        # — and the Google ad gate would treat a human-approved site as unknown.
+        c.website_source = "manual"
+        c.identity_status = "verified"
+        c.identity_matched_by = "manual"
+        c.identity_checked_at = dt.datetime.utcnow()
+        ev = dict(c.identity_evidence or {})
+        ev["review"] = {"decision": "accepted", "domain": dom}
+        c.identity_evidence = ev
         row = s.scalar(select(CompanyEnrichment).where(CompanyEnrichment.company_id == company_id))
         if row is None:
             row = CompanyEnrichment(company_id=company_id)

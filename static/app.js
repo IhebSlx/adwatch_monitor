@@ -995,6 +995,7 @@
       $$(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
       if (name === "customers") ensureCustomersLoaded();
       if (name === "chancen") ensureChancenLoaded();
+      if (name === "pruefen") ensurePruefenLoaded();
       if (name === "profil") loadIcpStatus();
       if (name === "reports") {
         // If a Companies filter is active, default the report to use it — so
@@ -1013,6 +1014,7 @@
     wireCustomers();
     wireCompanyTableControls();
     wireChancen();
+    wirePruefen();
     wireLogsTabControls();
     $$(".settings-save-btn").forEach(b => b.addEventListener("click", saveSettings));
 
@@ -1475,6 +1477,79 @@
     reload.addEventListener("click", loadChancen);
     $("#chancenAdsOnly").addEventListener("change", loadChancen);
     $("#chancenMinValue").addEventListener("change", loadChancen);
+  }
+
+  // ------------------------------------------------------- Prüfen tab
+  // Human yes/no on unproven website identities. Accept re-enriches from the
+  // approved site; reject clears the domain so the finder searches again.
+  let pruefenLoaded = false;
+
+  async function loadPruefen() {
+    const wrap = $("#pruefenWrap");
+    const ls = $("#pruefenEsOnly").checked ? "&lead_source=marktanalyse_es_2026_08" : "";
+    wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
+    let data;
+    try {
+      data = await api(`/api/identity/review?limit=200${ls}`);
+    } catch (e) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Fehler: ${esc(e.message)}</p>`;
+      return;
+    }
+    const rows = data.rows || [];
+    if (!rows.length) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Nichts zu prüfen — alles entschieden. 🎉</p>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Firma</th><th>Ort</th><th>Kandidat</th>
+          <th>Hinweis</th><th style="width:170px">Entscheidung</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr data-company="${r.company_id}">
+            <td>${esc(r.name)}${r.import_type ? `<div class="sub">${esc(r.import_type)}</div>` : ""}</td>
+            <td>${esc(r.city || "—")}${r.postal_code ? ` <span class="sub">${esc(r.postal_code)}</span>` : ""}</td>
+            <td>${r.domain ? `<a href="https://${esc(r.domain)}" target="_blank" rel="noopener">${esc(r.domain)}</a>` : "—"}</td>
+            <td style="max-width:340px">${esc(r.clue || r.what || r.notes || "")}</td>
+            <td>
+              <button class="btn btn-primary pruefen-ok" data-domain="${esc(r.domain || "")}">✓ Ja</button>
+              <button class="btn pruefen-no">✗ Nein</button>
+            </td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+    $$("#pruefenWrap .pruefen-ok").forEach(b => b.addEventListener("click", async (ev) => {
+      const tr = ev.target.closest("tr");
+      const cid = Number(tr.dataset.company);
+      ev.target.disabled = true;
+      try {
+        await api(`/api/companies/${cid}/enrichment/accept`, "POST",
+                  { page_id: ev.target.dataset.domain });
+        tr.style.opacity = "0.45";
+        toast("Website bestätigt — wird angereichert.");
+      } catch (e) { toast(e.message, "error"); ev.target.disabled = false; }
+    }));
+    $$("#pruefenWrap .pruefen-no").forEach(b => b.addEventListener("click", async (ev) => {
+      const tr = ev.target.closest("tr");
+      const cid = Number(tr.dataset.company);
+      ev.target.disabled = true;
+      try {
+        await api(`/api/companies/${cid}/identity/reject`, "POST", {});
+        tr.style.opacity = "0.45";
+        toast("Abgelehnt — Suche nach der richtigen Website ist wieder offen.");
+      } catch (e) { toast(e.message, "error"); ev.target.disabled = false; }
+    }));
+  }
+
+  function ensurePruefenLoaded() {
+    if (pruefenLoaded) return;
+    pruefenLoaded = true;
+    loadPruefen();
+  }
+
+  function wirePruefen() {
+    const btn = $("#pruefenReload");
+    if (!btn) return;
+    btn.addEventListener("click", loadPruefen);
+    $("#pruefenEsOnly").addEventListener("change", loadPruefen);
   }
 
   // ---------------- Profil tab (Ideal Customer Profile) ----------------

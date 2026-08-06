@@ -39,6 +39,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"/></svg>
         Chancen
       </button>
+      <button class="tab" data-tab="pruefen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        Prüfen
+      </button>
       <button class="tab" data-tab="profil">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
         ICP
@@ -551,6 +555,28 @@
           <button class="btn" id="chancenReload" style="margin-left:auto">Aktualisieren</button>
         </div>
         <div id="chancenTableWrap" class="table-wrap">
+          <p class="muted" style="padding:12px">Wird geladen …</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= TAB: Prüfen (Identitäts-Review) ================= -->
+    <section id="tab-pruefen" class="tab-panel">
+      <header class="page-head">
+        <h1>Prüfen — gehört die Website wirklich der Firma?</h1>
+        <p>Kandidaten, die <b>plausibel, aber nicht bewiesen</b> sind. Die automatische Prüfung
+          akzeptiert nur harte Beweise (Telefon, PLZ+Straße, PLZ+Name); alles andere landet hier —
+          mit dem entscheidenden Hinweis, damit ein Klick reicht.</p>
+      </header>
+      <div class="card">
+        <div class="toolbar" style="margin-bottom:12px">
+          <label class="checkline" style="margin:0">
+            <input type="checkbox" id="pruefenEsOnly" checked>
+            <span>Nur Spanien-Marktanalyse</span>
+          </label>
+          <button class="btn" id="pruefenReload" style="margin-left:auto">Aktualisieren</button>
+        </div>
+        <div id="pruefenWrap" class="table-wrap">
           <p class="muted" style="padding:12px">Wird geladen …</p>
         </div>
       </div>

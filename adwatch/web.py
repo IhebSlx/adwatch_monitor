@@ -922,6 +922,59 @@ def reject_website_route(company_id: int):
     return {"ok": True}
 
 
+@app.get("/api/identity/review")
+def identity_review_queue_route(lead_source: str | None = None, limit: int = 200):
+    """Everything waiting for a human yes/no on a website identity, with the
+    evidence that got it there — the triage clue when Haiku judged it, the
+    candidate domain when the finder found-but-could-not-prove one."""
+    from sqlalchemy import select as _select
+    from . import scope as _scope
+    with SessionLocal() as s:
+        stmt = _scope.apply(_select(Company)).where(
+            Company.identity_status == "needs_review")
+        if lead_source:
+            stmt = stmt.where(Company.lead_source == lead_source)
+        rows = list(s.scalars(stmt.order_by(Company.beleg_sum.desc()).limit(limit)))
+        out = []
+        for c in rows:
+            ev = c.identity_evidence or {}
+            out.append({
+                "company_id": c.id, "name": c.name, "city": c.city,
+                "postal_code": c.postal_code, "segment": c.segment,
+                "import_type": c.import_type, "notes": (c.notes or "")[:200],
+                # domain set -> triage said likely_right about the CURRENT domain;
+                # domain empty -> the finder proposes ev['review_candidate']
+                "domain": c.website_domain or ev.get("review_candidate"),
+                "clue": (ev.get("triage") or {}).get("clue"),
+                "what": (ev.get("triage") or {}).get("what"),
+            })
+    return {"rows": out}
+
+
+@app.post("/api/companies/{company_id}/identity/reject")
+def identity_reject_route(company_id: int):
+    """Human says: this is NOT their site. Mirrors triage's wrong_site routing —
+    the domain is cleared into evidence so the finder can search for the real
+    one; a candidate that was never written just gets marked rejected."""
+    with SessionLocal() as s:
+        c = s.get(Company, company_id)
+        if not c:
+            raise HTTPException(404, "company not found")
+        ev = dict(c.identity_evidence or {})
+        if c.website_domain:
+            ev["review"] = {"decision": "rejected", "domain": c.website_domain}
+            c.website_domain = None
+            c.website_source = None
+            c.identity_status = None          # finder's pending_ids picks it up
+        else:
+            ev["review"] = {"decision": "rejected",
+                            "domain": ev.get("review_candidate")}
+            c.identity_status = "not_found"   # searched, human said no
+        c.identity_evidence = ev
+        s.commit()
+    return {"ok": True}
+
+
 @app.post("/api/identity-jobs")
 def create_identity_job_route(payload: IdentityJobIn):
     """Run the Meta identity check (page resolution only — no ad fetch, no sweep)
