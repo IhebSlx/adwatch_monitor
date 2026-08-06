@@ -286,10 +286,17 @@ def _migrate(engine) -> None:
                     UPDATE companies SET identity_status = 'unverified'
                     WHERE website_domain IS NOT NULL AND identity_status IS NULL
                 """))
-                # the gate ran and accepted -> carry that verdict over
+                # the gate ran and accepted -> carry that verdict over. ONLY onto
+                # rows that never got a verdict: this UPDATE re-runs on every
+                # startup, and without the NULL guard it silently flipped 188
+                # PROVEN-conflict Spanish domains back to 'verified' — after
+                # which the Google ad step happily attributed ads through
+                # domains the verifier had disproven (e.g. technal.com, a
+                # manufacturer's portal shared by several dealer rows).
                 conn.execute(text("""
                     UPDATE companies SET identity_status = 'verified'
                     WHERE website_domain IS NOT NULL
+                      AND identity_status IS NULL
                       AND enrichment_status = 'enriched'
                       AND EXISTS (SELECT 1 FROM company_enrichment e
                                   WHERE e.company_id = companies.id)
