@@ -2217,3 +2217,128 @@ def test_bulk_imported_companies_are_not_monitored(temp_db):
         c = s.scalars(select(Company).where(Company.crm_id == "guid-7")).one()
         assert c.segment == "Verarbeiter" and c.sub_segment == "Fensterbau"
         assert c.monitored is False
+
+
+# ---------------------------------------------------------------------------
+# Market list import (a colleague's scraped spreadsheet)
+# ---------------------------------------------------------------------------
+
+_MARKT_CSV = (
+    "Name;Typ;Adresse;Lat;Lng;Website;Ansprechpartner;Notizen;Untertyp;"
+    "Marken/Produkte;Einschaetzung;\n"
+    # intact row
+    "LUCOR Ventanas;potenzialkunde;Calle X 1, 14001 Cordoba, Spanien;37.8;-4.7;"
+    "https://www.lucor.es/;;;;;;\n"
+    # SHIFTED by one: the Spanish legal-form comma became a semicolon
+    "CARPYVENT; S.L.;potenzialkunde;Av Y 2, 03001 Alicante, Spanien;38.3;-0.4;"
+    "http://carpyvent.es;;;;;\n"
+    # a real competitor location: the manufacturer's name IS the company name
+    "Schueco Showroom Madrid;wettbewerber;Valdemoro, 28340 Madrid;40.1;-3.6;"
+    "https://schueco.com/es;;Eigener Showroom;Showroom;;;\n"
+    # installs a competitor's systems -> a PROSPECT, not a competitor
+    "Premial;wettbewerber;Mijas Costa, 29650 Malaga;36.5;-4.8;;;"
+    "Schueco-Premiumpartner;Produktion;Schueco Premium Partner;;\n"
+    # duplicate of the row above with a different Typ
+    "Premial;potenzialkunde;Mijas Costa, 29650 Malaga;36.5;-4.8;;;"
+    "Schueco-Premiumpartner;Produktion;Schueco Premium Partner;;\n"
+    # existing customer, joinable only by the Kd-Nr in free text
+    "IBZ Cristal;bestandskunde;Ibilbidea 80, 20115 Astigarraga;43.2;-1.9;;;"
+    "Kd-Nr. 5164611 | Lizenznehmer SL25;;;;\n"
+)
+
+
+def _write_markt(tmp_path):
+    p = tmp_path / "markt.csv"
+    p.write_text(_MARKT_CSV, encoding="utf-8-sig")
+    return p
+
+
+def test_market_list_repairs_semicolon_shifted_names(tmp_path):
+    """The Spanish legal-form comma arrived as a semicolon, shifting 46 of 534 real
+    rows. Unrepaired, 'S.L.' becomes the company TYPE and every later column lands
+    in the wrong field."""
+    from adwatch import market_list as ml
+    out = ml.parse(_write_markt(tmp_path))
+    names = {r["name"]: r for r in out["records"]}
+    assert "CARPYVENT, S.L." in names, sorted(names)
+    assert names["CARPYVENT, S.L."]["import_type"] == "potenzialkunde"
+    assert names["CARPYVENT, S.L."]["city"] == "Alicante"
+    assert names["CARPYVENT, S.L."]["postal_code"] == "03001"
+    assert out["stats"]["unparsable"] == 0
+
+
+def test_market_list_separates_competitors_from_conquest_targets(tmp_path):
+    """'wettbewerber' means two opposite things. A manufacturer's OWN location is
+    never a target; a firm that merely INSTALLS a rival's systems is the best
+    target in the file — and must stay recognisable as having arrived tagged
+    'wettbewerber'."""
+    from adwatch import market_list as ml
+    recs = {r["name"]: r for r in ml.parse(_write_markt(tmp_path))["records"]}
+
+    schueco = recs["Schueco Showroom Madrid"]
+    assert schueco["is_competitor"] is True
+    assert schueco["carries_competitor_brand"] is False
+
+    premial = recs["Premial"]
+    assert premial["is_competitor"] is False, "installs Schueco != is Schueco"
+    assert premial["carries_competitor_brand"] is True
+    assert premial["import_type"] == "wettbewerber", "origin must stay auditable"
+    assert premial["segment"] == "Verarbeiter"
+
+
+def test_market_list_dedupes_and_keeps_the_discarded_type(tmp_path):
+    from adwatch import market_list as ml
+    out = ml.parse(_write_markt(tmp_path))
+    assert out["stats"]["duplicates_removed"] == 1
+    premial = next(r for r in out["records"] if r["name"] == "Premial")
+    # the same firm was entered twice under different Typ values — the one we
+    # dropped is remembered rather than silently lost
+    assert premial["also_imported_as"] == ["potenzialkunde"]
+
+
+def test_market_list_matches_existing_customer_by_kdnr_not_name(temp_db, tmp_path):
+    """Names do not join: 'IBZ Cristal' is 'IBZ Cortinas De Cristal SL'. Only 7 of
+    534 rows matched by name, 30 matched on the Kd-Nr buried in free text."""
+    from sqlalchemy import select
+    from adwatch import market_list as ml
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add(Company(name="IBZ Cortinas De Cristal SL", country="ES",
+                  sap_number="0005164611", segment="Verarbeiter"))
+    s.commit(); s.close()
+
+    stats = ml.import_list(_write_markt(tmp_path), lead_source="test_es")
+    assert stats["matched_by"]["customer_number"] == 1
+    with temp_db.SessionLocal() as s:
+        c = s.scalars(select(Company).where(
+            Company.name == "IBZ Cortinas De Cristal SL")).one()
+        # CRM master data untouched; the research is appended to notes
+        assert c.segment == "Verarbeiter"
+        assert "Kd-Nr. 5164611" in (c.notes or "")
+        assert "test_es" in (c.notes or "")
+        # and it must NOT have been inserted a second time
+        assert not s.scalars(select(Company).where(
+            Company.name == "IBZ Cristal")).all()
+
+
+def test_market_list_rows_are_distinguishable_and_not_monitored(temp_db, tmp_path):
+    """A scraped list must never be mistakable for CRM master data, and must not
+    silently enter the paid ad-fetch queue."""
+    from sqlalchemy import select
+    from adwatch import market_list as ml
+    from adwatch.models import Company
+    from adwatch import scope
+
+    ml.import_list(_write_markt(tmp_path), lead_source="test_es")
+    with temp_db.SessionLocal() as s:
+        rows = s.scalars(select(Company).where(Company.lead_source == "test_es")).all()
+        assert rows
+        assert all(c.crm_id is None for c in rows)
+        assert all(c.source == "marktanalyse" for c in rows)
+        assert all(c.monitored is False for c in rows)
+        # the competitor is present but excluded from every count
+        in_scope = s.scalars(scope.apply(select(Company)).where(
+            Company.lead_source == "test_es")).all()
+        assert "Schueco Showroom Madrid" not in {c.name for c in in_scope}
+        assert "Premial" in {c.name for c in in_scope}

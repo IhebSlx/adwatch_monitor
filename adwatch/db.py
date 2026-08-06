@@ -237,6 +237,46 @@ def _migrate(engine) -> None:
                             ("arch_projects", "0"), ("arch_won", "0"),
                             ("arch_won_value", "0")):
                 conn.execute(text(f"UPDATE companies SET {c} = {zero} WHERE {c} IS NULL"))
+        # companies: non-CRM lead provenance + competitor flag.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [("is_competitor", "BOOLEAN DEFAULT 0"),
+                              ("lead_source", "VARCHAR(60)"),
+                              ("import_type", "VARCHAR(40)")]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            conn.execute(text("UPDATE companies SET is_competitor = 0 "
+                              "WHERE is_competitor IS NULL"))
+        # companies: website provenance + real-world identity verification.
+        # Backfill is deliberate and conservative: every existing domain becomes
+        # 'unverified' unless the enrichment gate actually ran for that company
+        # (a CompanyEnrichment row exists). 22,696 of them were bulk-filled from
+        # CRM with no check, and treating those as verified is precisely the bug
+        # these columns exist to prevent.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("website_source", "VARCHAR(20)"),
+                ("identity_status", "VARCHAR(16)"),
+                ("identity_matched_by", "VARCHAR(24)"),
+                ("identity_evidence", "JSON"),
+                ("identity_checked_at", "DATETIME"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            if _existing_columns(conn, "company_enrichment"):
+                conn.execute(text("""
+                    UPDATE companies SET identity_status = 'unverified'
+                    WHERE website_domain IS NOT NULL AND identity_status IS NULL
+                """))
+                # the gate ran and accepted -> carry that verdict over
+                conn.execute(text("""
+                    UPDATE companies SET identity_status = 'verified'
+                    WHERE website_domain IS NOT NULL
+                      AND enrichment_status = 'enriched'
+                      AND EXISTS (SELECT 1 FROM company_enrichment e
+                                  WHERE e.company_id = companies.id)
+                """))
         # companies: Angebote (ax_sap_quote) + conversion. Additive.
         cols = _existing_columns(conn, "companies")
         if cols:

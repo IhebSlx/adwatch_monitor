@@ -414,6 +414,49 @@ def import_quotes(path: str | Path) -> dict:
     return stats
 
 
+def import_contact_data(path: str | Path) -> dict:
+    """Street / phone / e-mail from CRM — the evidence the identity gate runs on.
+
+    These were missing from the first population load, which is why identity could
+    not be verified at all: enrich/validate.validate_site proves a website belongs
+    to a company by finding the company's OWN phone, PLZ+street or PLZ+name on the
+    page, and none of those were in the database. CRM has a phone for 42,256
+    accounts and a street for 46,141 — by far the strongest signals available, and
+    free.
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    ix = {c: i for i, c in enumerate(data["cols"])}
+    rows = data["rows"]
+    stats = {"total": len(rows), "matched": 0, "street": 0, "phone": 0, "email": 0}
+    with SessionLocal() as s:
+        by_crm = {c.crm_id.strip().lower(): c for c in
+                  s.scalars(select(Company).where(Company.crm_id.is_not(None)))
+                  if c.crm_id}
+        for r in rows:
+            c = by_crm.get((r[ix["crm_id"]] or "").strip().lower())
+            if c is None:
+                continue
+            stats["matched"] += 1
+            street = (r[ix["street"]] or "").strip()
+            phone = (r[ix["phone"]] or "").strip() or (r[ix["phone2"]] or "").strip()
+            email = (r[ix["email"]] or "").strip()
+            if street:
+                c.street = street
+                stats["street"] += 1
+            if phone:
+                c.phone = phone
+                stats["phone"] += 1
+            if email:
+                c.email = email
+                stats["email"] += 1
+            fax = (r[ix["fax"]] or "").strip()
+            if fax:
+                c.fax = fax
+        s.commit()
+    log.info("crm_import.import_contact_data: %s", stats)
+    return stats
+
+
 def backfill_websites(path: str | Path) -> dict:
     """Copy CRM's websiteurl into website_domain where we have nothing.
 
@@ -440,7 +483,7 @@ def backfill_websites(path: str | Path) -> dict:
             u = u[4:]
         return u or None
 
-    filled = 0
+    filled = stamped = 0
     with SessionLocal() as s:
         by_crm = {c.crm_id.strip().lower(): c
                   for c in s.scalars(select(Company).where(Company.crm_id.is_not(None)))
@@ -448,12 +491,29 @@ def backfill_websites(path: str | Path) -> dict:
         for r in rows:
             crm_id = (r[ix["crm_id"]] or "").strip().lower()
             c = by_crm.get(crm_id)
-            if c is None or c.website_domain:
+            if c is None:
+                continue
+            if c.website_domain:
+                # Already has a domain. If it IS the CRM one and provenance was
+                # never recorded, stamp it — an earlier run of this function wrote
+                # these before website_source existed, leaving 22,854 domains that
+                # looked verified because nothing said otherwise.
+                if not c.website_source and domain(r[ix["website"]]) == c.website_domain:
+                    c.website_source = "crm"
+                    if not c.identity_status:
+                        c.identity_status = "unverified"
+                    stamped += 1
                 continue
             d = domain(r[ix["website"]])
             if d:
                 c.website_domain = d
+                # A URL a colleague typed into CRM is good evidence, not proof.
+                # Marking provenance is what keeps it distinguishable from a
+                # domain the gate actually confirmed — see Company.website_source.
+                c.website_source = "crm"
+                if not c.identity_status:
+                    c.identity_status = "unverified"
                 filled += 1
         s.commit()
-    log.info("crm_import.backfill_websites: filled %s", filled)
-    return {"filled": filled}
+    log.info("crm_import.backfill_websites: filled %s, stamped %s", filled, stamped)
+    return {"filled": filled, "stamped_provenance": stamped}

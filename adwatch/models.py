@@ -67,6 +67,32 @@ class Company(Base):
 
     website_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)  # e.g. 'solarlux.com' — used to resolve the Google Ads advertiser (no name search available there)
 
+    # ---- Real-world identity of the website ----
+    # A domain in `website_domain` is only ever a CLAIM until something confirms
+    # it belongs to THIS company. The distinction is not cosmetic: this column
+    # drives the enrichment crawler and the Google advertiser lookup, so an
+    # unverified domain silently produces a description, a product list and an ad
+    # history for the WRONG company — and nothing downstream can tell.
+    #
+    # That is exactly what happened when 22,696 CRM-typed URLs were bulk-filled
+    # into this column alongside 1,426 gate-validated ones with no way to
+    # distinguish them. Hence provenance is now mandatory.
+    #
+    #   website_source: 'crm' (typed by a colleague in Dataverse — good evidence,
+    #     NOT proof) | 'serper' (a search guess) | 'email' (derived from the mail
+    #     domain) | 'manual' (a human here) | 'impressum' (found on the site)
+    website_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #   identity_status: 'unverified' = a claim nobody checked | 'verified' = the
+    #     site carries this company's own master data | 'conflict' = the site was
+    #     read and does NOT match (a portal, a parent brand, a namesake) |
+    #     'unreachable' = could not be fetched, so still unknown
+    identity_status: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    #   which signal proved it — phone | plz_street | plz_name | domain_plus_name
+    #   (see enrich/validate.validate_site; phone is the strongest)
+    identity_matched_by: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    identity_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    identity_checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
     # ---- Enrichment (see enrich/ + models.CompanyEnrichment) — the few fields
     # promoted onto Company because the Explorer filters/sorts and the PDF report
     # use them directly. The full extracted blob + per-field provenance lives in
@@ -91,6 +117,27 @@ class Company(Base):
     # without this flag the ICP learns to love the group's own companies and
     # recommends them as acquisition targets. Never a winner, never a target.
     is_intercompany: Mapped[bool] = mapped_column(Boolean, default=False)
+    # A COMPETITOR's own location (a Schüco showroom, a CORTIZO branch, a Reynaers
+    # Niederlassung). Kept in the database on purpose — knowing where Schüco is
+    # strong in Spain, and which prospects sit in its catchment, is real market
+    # intelligence — but never a target. Excluded by scope.apply(), the same
+    # mechanism that keeps Private Endkunden out of every number.
+    #
+    # Deliberately NOT set for firms that merely INSTALL a competitor's systems.
+    # Those are the opposite of a competitor: proven premium fabricators already
+    # spending with a rival, i.e. the best conquest targets in the list. They keep
+    # `import_type = 'wettbewerber'` so their origin stays visible.
+    is_competitor: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Where a NON-CRM row came from, e.g. 'marktanalyse_es_2026_08'. NULL means
+    # CRM/Excel master data. This is what separates a colleague's scraped list
+    # from the official base — permanently and with one filter.
+    lead_source: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    # The classification the SOURCE file gave this row, verbatim and unmodified
+    # ('potenzialkunde' | 'architekt' | 'wettbewerber' | 'bestandskunde' | ...).
+    # Kept separate from `segment` because routing changes the segment while the
+    # provenance must stay auditable: a firm imported as 'wettbewerber' but routed
+    # to a prospect has to remain recognisable as having come in that way.
+    import_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     fit_score: Mapped[float | None] = mapped_column(Float, nullable=True)          # 0-100 vs the applied ICP
     opportunity_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-100, Divergenz (needs ad data)
     target_score: Mapped[float | None] = mapped_column(Float, nullable=True)       # combined priority (see icp.apply)
