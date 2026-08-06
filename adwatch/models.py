@@ -67,6 +67,32 @@ class Company(Base):
 
     website_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)  # e.g. 'solarlux.com' — used to resolve the Google Ads advertiser (no name search available there)
 
+    # ---- Real-world identity of the website ----
+    # A domain in `website_domain` is only ever a CLAIM until something confirms
+    # it belongs to THIS company. The distinction is not cosmetic: this column
+    # drives the enrichment crawler and the Google advertiser lookup, so an
+    # unverified domain silently produces a description, a product list and an ad
+    # history for the WRONG company — and nothing downstream can tell.
+    #
+    # That is exactly what happened when 22,696 CRM-typed URLs were bulk-filled
+    # into this column alongside 1,426 gate-validated ones with no way to
+    # distinguish them. Hence provenance is now mandatory.
+    #
+    #   website_source: 'crm' (typed by a colleague in Dataverse — good evidence,
+    #     NOT proof) | 'serper' (a search guess) | 'email' (derived from the mail
+    #     domain) | 'manual' (a human here) | 'impressum' (found on the site)
+    website_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #   identity_status: 'unverified' = a claim nobody checked | 'verified' = the
+    #     site carries this company's own master data | 'conflict' = the site was
+    #     read and does NOT match (a portal, a parent brand, a namesake) |
+    #     'unreachable' = could not be fetched, so still unknown
+    identity_status: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    #   which signal proved it — phone | plz_street | plz_name | domain_plus_name
+    #   (see enrich/validate.validate_site; phone is the strongest)
+    identity_matched_by: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    identity_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    identity_checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
     # ---- Enrichment (see enrich/ + models.CompanyEnrichment) — the few fields
     # promoted onto Company because the Explorer filters/sorts and the PDF report
     # use them directly. The full extracted blob + per-field provenance lives in
@@ -75,6 +101,49 @@ class Company(Base):
     products: Mapped[list | None] = mapped_column(JSON, nullable=True)            # ['Fenster','Wintergarten',...]
     founded_year: Mapped[int | None] = mapped_column(Integer, nullable=True)      # only when literally stated ('seit 1952')
     employee_hint: Mapped[str | None] = mapped_column(String(120), nullable=True)  # verbatim ('15 Mitarbeiter'), never an LLM estimate
+    # ---- Enrichment, part 2: fields the extractor already produced but nobody
+    # could see. `CompanyEnrichment.fields` held legal_form, service_area,
+    # competitor_brands, mentions_solarlux and the assessment as JSON, so no
+    # filter, export, report or ICP feature could reach them — we were paying to
+    # extract data and then hiding it. Mirrored here like description/products.
+    legal_form: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    service_area: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Rival systems this firm installs (Schüco, Cortizo, Technal …). The conquest
+    # signal: a fabricator already building premium façades with a competitor's
+    # profiles is a proven capable buyer, and this names which brand to displace.
+    competitor_brands: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    mentions_solarlux: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    assessment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ---- Qualification attributes, all nullable because "not stated" must stay
+    # distinguishable from "no". Chosen to match the columns the Spain market
+    # research already used by hand (Eigene Fertigung, Zertifizierungen,
+    # Projektfokus), so machine and human research are directly comparable.
+    certifications: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    own_fabrication: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    has_showroom: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    project_focus: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    positioning: Mapped[str | None] = mapped_column(String(20), nullable=True)  # premium|mittel|budget
+    # ---- Self-declared machine-readable facts (enrich/site_facts.py) — no LLM.
+    # facebook_url is the strongest Meta identity anchor available: a page linked
+    # FROM the verified website provably belongs to this company, unlike a name
+    # search. Feeds identity resolution rather than replacing it.
+    # ---- Architekten-spezifisch (enrich profile 'architekt') ----
+    # An architect's value is not "do they buy" but "do they specify projects
+    # where Solarlux fits, and do they decide". A prestigious office doing
+    # interiors or infrastructure is irrelevant however large it is.
+    #   solarlux_relevance  hoch|mittel|gering — does the portfolio involve large
+    #                       glazing, façades, folding/sliding systems at all
+    #   decision_role       'vergibt Aufträge' vs 'empfiehlt' — the Spain/Germany
+    #                       asymmetry made concrete per office
+    solarlux_relevance: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    office_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    decision_role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reference_scale: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    enrich_profile: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    facebook_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    instagram_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    linkedin_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    site_language: Mapped[str | None] = mapped_column(String(8), nullable=True)
     enrichment_status: Mapped[str] = mapped_column(String(20), default="none")
     # none = never enriched | enriched = data found & accepted | needs_review = a
     # candidate website failed deterministic validation (a human decides)
@@ -91,11 +160,80 @@ class Company(Base):
     # without this flag the ICP learns to love the group's own companies and
     # recommends them as acquisition targets. Never a winner, never a target.
     is_intercompany: Mapped[bool] = mapped_column(Boolean, default=False)
+    # A COMPETITOR's own location (a Schüco showroom, a CORTIZO branch, a Reynaers
+    # Niederlassung). Kept in the database on purpose — knowing where Schüco is
+    # strong in Spain, and which prospects sit in its catchment, is real market
+    # intelligence — but never a target. Excluded by scope.apply(), the same
+    # mechanism that keeps Private Endkunden out of every number.
+    #
+    # Deliberately NOT set for firms that merely INSTALL a competitor's systems.
+    # Those are the opposite of a competitor: proven premium fabricators already
+    # spending with a rival, i.e. the best conquest targets in the list. They keep
+    # `import_type = 'wettbewerber'` so their origin stays visible.
+    is_competitor: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Where a NON-CRM row came from, e.g. 'marktanalyse_es_2026_08'. NULL means
+    # CRM/Excel master data. This is what separates a colleague's scraped list
+    # from the official base — permanently and with one filter.
+    lead_source: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    # The classification the SOURCE file gave this row, verbatim and unmodified
+    # ('potenzialkunde' | 'architekt' | 'wettbewerber' | 'bestandskunde' | ...).
+    # Kept separate from `segment` because routing changes the segment while the
+    # provenance must stay auditable: a firm imported as 'wettbewerber' but routed
+    # to a prospect has to remain recognisable as having come in that way.
+    import_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     fit_score: Mapped[float | None] = mapped_column(Float, nullable=True)          # 0-100 vs the applied ICP
     opportunity_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-100, Divergenz (needs ad data)
     target_score: Mapped[float | None] = mapped_column(Float, nullable=True)       # combined priority (see icp.apply)
     fit_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True)        # per-feature 'Warum' for the drawer
     scores_updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # ---- Belege (ax_sap_order) — the AUTHORITATIVE revenue source ----
+    # Measured 2026-08: `slx_revenue_current_year` is filled on only 2.9% of CRM
+    # accounts, so the revenue_y0..y4 snapshot above is near-empty for anyone
+    # outside the original Excel export. The SAP Belege are transaction-level,
+    # 99.9% of them carry a customer link, and they go back to 2019. Everything
+    # that ranks or scores should prefer these. The snapshot columns are kept
+    # untouched rather than overwritten, so nothing that already relied on them
+    # silently changes meaning — `effective_revenue()` in insights/rfm.py picks.
+    beleg_count: Mapped[int] = mapped_column(Integer, default=0)          # Belege in the loaded window
+    beleg_sum: Mapped[float] = mapped_column(Float, default=0.0)          # EUR, same window
+    beleg_first: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    beleg_last: Mapped[dt.date | None] = mapped_column(Date, nullable=True)  # -> Recency, the churn signal
+    beleg_by_year: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # {"2023": 12345.0, ...}
+    avg_discount: Mapped[float | None] = mapped_column(Float, nullable=True)  # Ø Grundrabatt = partner tier
+    # Prescriptor influence, from opportunity.slx_executingarchitect_accountid.
+    # Only 12.7% of opportunities name an architect, so a 0 here means "not
+    # recorded" at least as often as it means "influences nothing" — never rank
+    # a company DOWN on this, only up.
+    arch_projects: Mapped[int] = mapped_column(Integer, default=0)
+    arch_won: Mapped[int] = mapped_column(Integer, default=0)
+    arch_won_value: Mapped[float] = mapped_column(Float, default=0.0)
+    # Lifecycle from Beleg recency (see insights/rfm.classify) — distinct from
+    # customer_state, which is derived from the sparse snapshot columns.
+    health: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    winback_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    crm_synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # ---- Angebote (ax_sap_quote) and what became of them ----
+    # 43,922 quotes since 2023 worth EUR 1,448M against EUR 392M of orders — a
+    # 27.1% value conversion, i.e. EUR 1,056M quoted and never ordered. This is
+    # the single largest measured gap in the business.
+    #
+    # READ conversion_rate ONLY for Handel/Verarbeiter. For Architekten,
+    # Baudienstleister and Wohnungswirtschaft the quoted party is NOT the ordering
+    # party — Solarlux quotes the planner or object owner and the dealer places the
+    # order — so their near-0% is an attribution artefact, not a lost deal.
+    quote_count: Mapped[int] = mapped_column(Integer, default=0)
+    quote_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    conversion_rate: Mapped[float | None] = mapped_column(Float, nullable=True)  # beleg_sum / quote_sum
+
+    # Whether the ad-tracking pipeline should consider this company. The CRM
+    # population is ~46,000 active business accounts; ad monitoring costs money
+    # per company and is only wanted on a chosen subset. Bulk CRM imports land
+    # with monitored=False so they feed the ICP and the analysis without
+    # flooding the identity check, the fetch queue or the Explorer's ad views.
+    # Every row that existed before the bulk import stays monitored=True.
+    monitored: Mapped[bool] = mapped_column(Boolean, default=True)
 
     page_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     page_name: Mapped[str | None] = mapped_column(String(300), nullable=True)   # matched Facebook page name
@@ -412,6 +550,94 @@ class CrmOpportunity(Base):
     closed_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     crm_modified_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    # WHY it was lost, decoded from `statuscode`. Measured over 38,523 lost
+    # opportunities: half the lost volume (EUR 557M of EUR 1,123M) sits in reasons
+    # a human could act on — "Kein Feedback vom Kunden", "Kein Interesse mehr",
+    # "Zu teuer", "Wettbewerb" — and only 6.2% is a straight competitive loss.
+    # The other half (Baugenehmigung, Projekt umgeplant, Duplikat, Endkunde hat
+    # den Auftrag nicht erhalten) is not winnable and must be excluded from any
+    # "we are losing deals" narrative, or the number becomes theatre.
+    lost_reason: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    estimated_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_customer_budget: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # ---- Projekt-Verknüpfung (Besonderheit Objektvertrieb) ----
+    # `sl_primary_opportunityid` groups several Verkaufschancen into ONE Objekt:
+    # the primary VC *is* the project (its name is the building address), the
+    # members are the per-firm attempts to win it. Business rule from Iheb: a
+    # project counts as WON when ANY member wins — one win plus four "losses"
+    # is a won project, and the CRM even closes those members as "Zugehörige VC
+    # gewonnen". Counting them as losses (as the first loss analysis did)
+    # overstates failure; the 1,355 such closures are wins at project level.
+    project_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    opportunity_guid: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    project_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # ---- Felder, die im ersten Zug fehlten ("alles was nützlich sein könnte") ----
+    # Each is a decoded LABEL, never the raw option-set integer.
+    #
+    # type_of_use   Gebäudenutzung: Wohnen 19.868 · Hotel/Gastgewerbe 1.115 ·
+    #               Verwaltung/Büro 541 · Kultur/Sport 407 · Einzelhandel 373 ·
+    #               Bildung 317 · Gesundheit/Pflege · Ausstellung. 99% filled —
+    #               the project-type dimension the IPP will need, and already
+    #               useful for "which firm wins which kind of building".
+    # vc_type       Vertriebs-VC 38.767 vs Architekten-VC 2.796 — the CRM states
+    #               the motion outright; we had been inferring it from roles.
+    # dealer_status the DEALER's own pipeline state (Neu · Erstkontakt · Termin
+    #               vereinbart · Angebot erstellen · Auftrag erhalten · Rückgabe ·
+    #               Verloren). Engagement BEHAVIOUR, the strongest non-leaky
+    #               partner-quality signal available for existing dealers.
+    # origin        wer die Chance gebracht hat: vom Händler · vom Architekten ·
+    #               von Solarlux · aus Online Konfigurator · vom Objektkunden ·
+    #               von Linara <Standort>. Distinguishes self-generating partners
+    #               from those who only convert leads we hand them.
+    type_of_use: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    vc_type: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    dealer_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    origin: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    rating: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    priority: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    sales_stage: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    vr_presented: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    business_unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    total_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    estimated_close: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    # Was tatsächlich fakturiert wurde — über ax_sap_order.ax_opportunityid.
+    # 23.955 Belege tragen diesen Link, 35.856 Angebote ebenfalls. Das schließt
+    # die Kette Angebot → Auftrag → Beleg auf PROJEKT-Ebene; vorher war Umsatz
+    # nur firmenweit bekannt und die Konversionsquote entsprechend grob.
+    invoiced_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    invoiced_count: Mapped[int] = mapped_column(Integer, default=0)
+    quoted_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quoted_count: Mapped[int] = mapped_column(Integer, default=0)
+    sap_order_numbers: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+
+class CrmOrderEvent(Base):
+    """One purchase EVENT: a company + a day, with the Belege of that day summed.
+
+    Belege are not orders. 73,112 Belege collapse to 54,534 events (1.34 per
+    event) because a multi-line order is issued as several documents. Computing
+    an order rhythm on raw Belege gives medians of 0-3 days for big dealers and
+    makes churn detection meaningless — this table exists so the cadence is
+    measured on commercial events instead.
+
+    Two more properties of the raw data that this table deliberately preserves
+    rather than hides, because both matter when interpreting a number:
+      * ~25% of Belege are 0 EUR (warranty, samples, replacements). They are
+        real contact but not revenue, so `amount` can legitimately be 0.
+      * a Beleg can be negative (Storno/Retoure) — only 4 in the window, but
+        summing without care would silently lose them.
+    """
+    __tablename__ = "crm_order_events"
+    __table_args__ = (UniqueConstraint("company_id", "order_date",
+                                       name="uq_order_event_company_day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    order_date: Mapped[dt.date] = mapped_column(Date, index=True)
+    amount: Mapped[float] = mapped_column(Float, default=0.0)   # EUR, all Belege that day
+    beleg_count: Mapped[int] = mapped_column(Integer, default=1)
+    channel: Mapped[str | None] = mapped_column(String(40), nullable=True)   # ax_sales_channel
+    discount: Mapped[float | None] = mapped_column(Float, nullable=True)     # Ø Grundrabatt that day
 
 
 class IcpProfile(Base):

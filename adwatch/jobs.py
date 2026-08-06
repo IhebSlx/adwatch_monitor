@@ -20,6 +20,7 @@ import datetime as dt
 import logging
 import os
 import threading
+import time
 
 from sqlalchemy import select
 
@@ -109,10 +110,18 @@ def _google_fetchable_ids(s, company_ids: list[int]) -> set[int]:
     """Which of these companies the Google ad lookup will actually fetch: any
     with a website domain set. Google resolves the advertiser straight from the
     domain (no name search), so a website is both necessary and sufficient to
-    try; a company without one is skipped by the pipeline (status='no_domain')."""
+    try; a company without one is skipped by the pipeline (status='no_domain').
+
+    Except a domain that FAILED identity verification: 'conflict' means the site
+    was read and provably does not carry this company's own address or name —
+    a portal, a parent brand, a namesake. Attributing an ad history through it
+    would file the wrong company's ads under this row with nothing downstream
+    able to tell. 'unverified' (never checked) stays fetchable, matching the
+    behaviour before identity_status existed — unknown is not disproven."""
     return set(s.scalars(select(Company.id).where(
         Company.id.in_(company_ids),
-        Company.website_domain.is_not(None), Company.website_domain != "")))
+        Company.website_domain.is_not(None), Company.website_domain != "",
+        (Company.identity_status.is_(None)) | (Company.identity_status != "conflict"))))
 
 
 def _plan_units(s, company_ids: list[int], sources: list[str]) -> list[tuple[int, str]]:
@@ -547,15 +556,36 @@ def create_pipeline_job(company_ids: list[int], plan: dict, label: str | None = 
         return _job_to_dict(job)
 
 
+# Serialises the read-modify-write on the job row. The ads step now logs from a
+# thread pool, and two concurrent _pl_log calls would otherwise both read the
+# same `completed` value and lose an increment (and interleave log JSON).
+_pl_log_lock = threading.Lock()
+
+
 def _pl_log(job_id: int, text: str, advance: bool = True) -> None:
-    with SessionLocal() as s:
-        job = s.get(FetchJob, job_id)
-        if not job:
+    # Retries through 'database is locked': with 6 ad workers writing collection
+    # runs concurrently, the progress UPDATE can lose the race for the write
+    # lock. Job 46 proved the cost of not retrying — the FIRST log write of the
+    # ads step raised, the step-level catch killed all 214 remaining units, and
+    # the job reported 'done' with the ads silently missing. A progress line is
+    # never worth a step: after 5 failed attempts the entry is dropped instead.
+    for attempt in range(5):
+        try:
+            with _pl_log_lock:
+                with SessionLocal() as s:
+                    job = s.get(FetchJob, job_id)
+                    if not job:
+                        return
+                    if advance:
+                        job.completed = (job.completed or 0) + 1
+                    _append_log(s, job, text)
+                    s.commit()
             return
-        if advance:
-            job.completed = (job.completed or 0) + 1
-        _append_log(s, job, text)
-        s.commit()
+        except Exception:  # noqa: BLE001 — typically sqlite 'database is locked'
+            if attempt == 4:
+                logger.warning("job %s: progress line dropped after lock retries", job_id)
+                return
+            time.sleep(0.5 * (attempt + 1))
 
 
 def _pl_cancelled(job_id: int) -> bool:
@@ -610,7 +640,7 @@ def _run_pipeline(job_id: int) -> None:
 
     # Each step is a closure; the loop below runs them in the RESOLVED order, so
     # changing resolve_step_order() changes execution and not just the labels.
-    state: dict = {"filename": None}
+    state: dict = {"filename": None, "step_failures": []}
 
     def _do_domains() -> None:
         _per_company(DOMAIN_PREPASS, "domains", enrich_service.derive_domain, _DOMAIN_LOG)
@@ -635,14 +665,33 @@ def _run_pipeline(job_id: int) -> None:
                                 f"— {len(units)} von {len(cids) * len(plan['ads'])} "
                                 "möglichen Abrufen (nur mit Meta-Seite bzw. Website)")
             s.commit()
-        for cid, src in units:
+        # Concurrent, because an ad lookup is ~95% waiting on the Apify actor.
+        # Measured on the Spain run: sequential took ~5.3 min PER COMPANY (282
+        # companies ≈ 25 hours); the work is I/O, so a small pool collapses the
+        # wall clock without changing cost or results. Bounded at 6: enough to
+        # hide the actor cold-start, small enough to stay clear of Apify's
+        # concurrent-run limits and keep SQLite write bursts short.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _one_ad_unit(cid: int, src: str) -> tuple[int, str, str | None]:
             if _pl_cancelled(job_id):
-                break
+                return cid, src, "cancelled"
             try:
                 runners[src](company_id=cid)
-                _pl_log(job_id, f"[{src}] ✓ {_name(cid)}")
+                return cid, src, None
             except Exception as exc:  # noqa: BLE001
-                _pl_log(job_id, f"[{src}] ✗ {_name(cid)} — {str(exc)[:120]}")
+                return cid, src, str(exc)[:120]
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(_one_ad_unit, cid, src) for cid, src in units]
+            for fut in as_completed(futures):
+                cid, src, err = fut.result()
+                if err == "cancelled":
+                    _pl_log(job_id, f"[{src}] ⏹ {_name(cid)} — abgebrochen", advance=False)
+                elif err:
+                    _pl_log(job_id, f"[{src}] ✗ {_name(cid)} — {err}")
+                else:
+                    _pl_log(job_id, f"[{src}] ✓ {_name(cid)}")
 
     def _do_report() -> None:
         _header("report")
@@ -690,15 +739,37 @@ def _run_pipeline(job_id: int) -> None:
         try:
             runners[step]()
         except Exception as exc:  # noqa: BLE001 — a broken STEP must not lose the rest
+            state["step_failures"].append(step)
             _pl_log(job_id, f"[{step}] ✗ Schritt abgebrochen — {exc}", advance=False)
 
     with SessionLocal() as s:
         job = s.get(FetchJob, job_id)
         cancelled = _pl_cancelled(job_id)
-        job.status = "cancelled" if cancelled else "done"
+        # 'done' must MEAN done. Job 47 finished 26 of 382 units, reported
+        # done/0 errors, and the missing ads were only noticed by reading the
+        # log by hand. Now: a job that lost a step or left units unprocessed
+        # says so in its status and error count, loudly.
+        incomplete = (not cancelled and (
+            state["step_failures"] or (job.total or 0) > (job.completed or 0)))
+        if cancelled:
+            job.status = "cancelled"
+        elif incomplete:
+            job.status = "incomplete"
+            job.errors = (job.errors or 0) + max(
+                (job.total or 0) - (job.completed or 0), len(state["step_failures"]))
+        else:
+            job.status = "done"
         job.finished_at = dt.datetime.utcnow()
         job.completed = max(job.completed or 0, 0)
-        _append_log(s, job, "Pipeline abgebrochen." if cancelled else "Pipeline abgeschlossen.")
+        if cancelled:
+            _append_log(s, job, "Pipeline abgebrochen.")
+        elif incomplete:
+            _append_log(s, job, f"Pipeline UNVOLLSTÄNDIG — {job.completed}/{job.total} "
+                                f"Einheiten, fehlgeschlagene Schritte: "
+                                f"{', '.join(state['step_failures']) or 'keine'}. "
+                                "Erneut starten holt nur das Fehlende nach.")
+        else:
+            _append_log(s, job, "Pipeline abgeschlossen.")
         s.commit()
     _cancel_flags.pop(job_id, None)
 
@@ -738,7 +809,24 @@ def cancel_job(job_id: int) -> None:
     companies (not mid-Apify-call), so a job can take up to ~2 minutes to
     actually stop after this — set status to 'cancelling' right away so the
     UI can say so instead of looking stuck on 'running'."""
+    # The in-memory flag is what the loop actually checks, so it is set FIRST —
+    # cancellation must work even when the status write below fails. That is not
+    # theoretical: on the Spain run the cancel's commit hit 'database is locked'
+    # (a worker held the write lock), the endpoint 500ed, and because the flag
+    # was set the loop DID stop — but the row stayed 'running' forever and the
+    # UI looked stuck. The write now retries briefly through the lock instead.
     _cancel_flags[job_id] = True
+    for attempt in range(5):
+        try:
+            _write_cancel_status(job_id)
+            return
+        except Exception:  # noqa: BLE001 — typically sqlite 'database is locked'
+            if attempt == 4:
+                raise
+            time.sleep(0.8 * (attempt + 1))
+
+
+def _write_cancel_status(job_id: int) -> None:
     with SessionLocal() as s:
         job = s.get(FetchJob, job_id)
         if not job:

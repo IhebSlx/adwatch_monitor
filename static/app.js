@@ -994,6 +994,9 @@
       $$(".tab").forEach(t => t.classList.toggle("active", t === btn));
       $$(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
       if (name === "customers") ensureCustomersLoaded();
+      if (name === "chancen") ensureChancenLoaded();
+      if (name === "pruefen") ensurePruefenLoaded();
+      if (name === "objekte") ensureObjekteLoaded();
       if (name === "profil") loadIcpStatus();
       if (name === "reports") {
         // If a Companies filter is active, default the report to use it — so
@@ -1011,6 +1014,9 @@
     }));
     wireCustomers();
     wireCompanyTableControls();
+    wireChancen();
+    wirePruefen();
+    wireObjekte();
     wireLogsTabControls();
     $$(".settings-save-btn").forEach(b => b.addEventListener("click", saveSettings));
 
@@ -1383,6 +1389,312 @@
         await loadSavedReports();
       });
     });
+  }
+
+  // ------------------------------------------------------- Chancen tab
+  // Customers quiet against their OWN order rhythm. The health labels come
+  // straight from insights/rfm.py — kept identical so a value in the table can
+  // always be traced to the classification that produced it.
+  // Millions/thousands short form. A full "€27.567.067" overflows a KPI card and
+  // gets clipped to "€27.567.06", which reads as a completely different number.
+  const eurShort = (v) => {
+    if (v == null) return "—";
+    const n = Math.abs(v);
+    if (n >= 1e6) return "€" + (v / 1e6).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " Mio.";
+    if (n >= 1e4) return "€" + Math.round(v / 1e3).toLocaleString("de-DE") + " Tsd.";
+    return eur(v);
+  };
+  const HEALTH_LABEL = {
+    aktiv: "aktiv", beobachten: "beobachten", "gefährdet": "gefährdet",
+    verloren: "verloren", einmalig: "nur Kleinteile", nie: "nie gekauft",
+  };
+  let chancenLoaded = false;
+
+  async function loadChancen() {
+    const wrap = $("#chancenTableWrap");
+    const adsOnly = $("#chancenAdsOnly").checked;
+    const minValue = Number($("#chancenMinValue").value || 0);
+    wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
+    let data;
+    try {
+      data = await api(`/api/chancen?limit=500&min_value=${minValue}`
+        + `&advertising_only=${adsOnly ? "true" : "false"}`);
+    } catch (e) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Konnte nicht geladen werden: ${esc(e.message)}</p>`;
+      return;
+    }
+    const rows = data.rows || [];
+    const s = data.summary || {};
+    const risk = (s["gefährdet"]?.companies || 0) + (s.verloren?.companies || 0);
+    const riskEur = (s["gefährdet"]?.value || 0) + (s.verloren?.value || 0);
+    $("#chancenSummary").innerHTML = `
+      <div class="kpi"><div class="kpi-label">Überfällig / verloren</div>
+        <div class="kpi-value">${risk.toLocaleString("de-DE")}</div></div>
+      <div class="kpi"><div class="kpi-label">Umsatz historisch</div>
+        <div class="kpi-value" title="${eur(riskEur)}">${eurShort(riskEur)}</div></div>
+      <div class="kpi"><div class="kpi-label">Davon mit Werbung</div>
+        <div class="kpi-value">${(data.advertising || 0).toLocaleString("de-DE")}</div></div>
+      <div class="kpi"><div class="kpi-label">Aktive Kunden</div>
+        <div class="kpi-value">${(s.aktiv?.companies || 0).toLocaleString("de-DE")}</div></div>`;
+    if (!rows.length) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Keine Treffer für diesen Filter.</p>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr>
+          <th>Firma</th><th>Segment / Untersegment</th><th>Land</th>
+          <th class="num">Umsatz</th><th class="num">Bestellungen</th>
+          <th class="num">Rhythmus</th><th class="num">still seit</th>
+          <th class="num">überfällig</th><th>Status</th><th>Werbung</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `
+          <tr class="clickable" data-company="${r.company_id}">
+            <td>${esc(r.name)}${r.city ? `<div class="sub">${esc(r.city)}</div>` : ""}</td>
+            <td>${esc(r.segment || "—")}${r.sub_segment ? `<div class="sub">${esc(r.sub_segment)}</div>` : ""}</td>
+            <td>${esc(r.country || "—")}</td>
+            <td class="num">${eur(r.value)}</td>
+            <td class="num">${r.events}${r.material_events !== r.events
+              ? `<div class="sub">${r.material_events} materiell</div>` : ""}</td>
+            <td class="num">${r.cadence_days ? Math.round(r.cadence_days) + " T" : "—"}</td>
+            <td class="num">${r.days_since != null ? r.days_since + " T" : "—"}</td>
+            <td class="num">${r.overdue_factor ? r.overdue_factor.toFixed(1) + "×" : "—"}</td>
+            <td><span class="state-chip">${esc(HEALTH_LABEL[r.health] || r.health)}</span></td>
+            <td>${r.advertising ? "✓" : ""}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+    $$("#chancenTableWrap tr.clickable").forEach(tr =>
+      tr.addEventListener("click", () => openCompanyDrawer(Number(tr.dataset.company))));
+  }
+
+  function ensureChancenLoaded() {
+    if (chancenLoaded) return;
+    chancenLoaded = true;
+    loadChancen();
+  }
+
+  function wireChancen() {
+    const reload = $("#chancenReload");
+    if (!reload) return;
+    reload.addEventListener("click", loadChancen);
+    $("#chancenAdsOnly").addEventListener("change", loadChancen);
+    $("#chancenMinValue").addEventListener("change", loadChancen);
+  }
+
+  // Das Dossier — Kurzprofil, Belege-Historie, jede VC in jeder ROLLE, Objekte.
+  const ROLE_LABEL = { kaeufer: "Als Käufer", architekt: "Als Architekt", endkunde: "Als Endkunde" };
+
+  function dossierSection(d) {
+    if (!d) return "";
+    const kv = (o) => Object.entries(o || {}).map(([k, v]) => `${esc(k)} (${v})`).join(" · ");
+    let html = `<div class="drawer-section"><h3>Dossier</h3>`;
+    if (d.kurzprofil) html += `<p style="font-size:13px;line-height:1.55">${esc(d.kurzprofil)}</p>`;
+    const b = d.belege || {};
+    if (b.events) {
+      const years = Object.entries(b.by_year || {})
+        .map(([y, v]) => `${y}: ${eurShort(v)}`).join(" · ");
+      html += `<div style="font-size:12.5px;margin-top:6px">
+        <b>Belege:</b> ${b.events} Bestellungen · ${eurShort(b.total)} · ${esc(b.first)} → ${esc(b.last)}
+        <div class="sub">${esc(years)}</div></div>`;
+    }
+    for (const [role, blk] of Object.entries(d.rollen || {})) {
+      html += `<div style="margin-top:10px;font-size:12.5px">
+        <b>${ROLE_LABEL[role] || role}:</b> ${blk.vcs} Verkaufschancen —
+        ${blk.won} gewonnen${blk.win_rate != null ? ` (${Math.round(blk.win_rate * 100)} %)` : ""},
+        ${blk.open} offen${blk.invoiced_value ? ` · fakturiert ${eurShort(blk.invoiced_value)}` : ""}${blk.quoted_value ? ` · angeboten ${eurShort(blk.quoted_value)}` : ""}
+        ${Object.keys(blk.building_types || {}).length ? `<div class="sub">Gebäude: ${kv(blk.building_types)}</div>` : ""}
+        ${Object.keys(blk.origins || {}).length ? `<div class="sub">Herkunft: ${kv(blk.origins)}</div>` : ""}
+        ${Object.keys(blk.lost_reasons || {}).length ? `<div class="sub">Verluste: ${kv(blk.lost_reasons)}</div>` : ""}
+      </div>`;
+    }
+    const pj = d.projekte || [];
+    if (pj.length) {
+      html += `<div style="margin-top:10px;font-size:12.5px"><b>Objekte (${pj.length}):</b>
+        ${pj.slice(0, 6).map(p => `<div class="sub">• ${esc((p.name || "").slice(0, 60))} —
+          ${esc(p.status)}, ${p.members} VC${p.members > 1 ? "s" : ""}${p.type_of_use ? `, ${esc(p.type_of_use)}` : ""}${p.value ? `, ${eurShort(p.value)}` : ""}</div>`).join("")}
+      </div>`;
+    }
+    return html + `</div>`;
+  }
+
+  // CRM / Belege / Anreicherung im Drawer — every column the DB holds, visible.
+  // Nulls are shown as '—' rather than hidden: "nicht angegeben" is information.
+  function crmSection(c) {
+    if (!c) return "";
+    const j = (v) => Array.isArray(v) ? v.join(", ") : (v ?? null);
+    const yn = (v) => v === true || v === 1 ? "ja" : v === false || v === 0 ? "nein" : null;
+    const dt2 = (v) => v ? String(v).slice(0, 10) : null;
+    const money = (v) => v != null ? eur(v) : null;
+    const rows = [
+      ["CRM-ID", c.crm_id], ["SAP-Nr.", c.sap_number], ["Quelle", c.lead_source || (c.crm_id ? "CRM" : "manuell")],
+      ["Import-Typ", c.import_type], ["Kundenstatus", c.customer_state], ["Gesundheit", c.health],
+      ["Belege (Anzahl)", c.beleg_count], ["Belege (Umsatz)", money(c.beleg_sum)],
+      ["Erster / letzter Beleg", [dt2(c.beleg_first), dt2(c.beleg_last)].filter(Boolean).join(" → ") || null],
+      ["Ø Grundrabatt", c.avg_discount != null ? c.avg_discount + " %" : null],
+      ["Angebote (Anzahl)", c.quote_count], ["Angebote (Summe)", money(c.quote_sum)],
+      ["Angebots-Konversion", c.conversion_rate != null ? Math.round(c.conversion_rate * 100) + " %" : null],
+      ["Rückgewinnungs-Score", c.winback_score],
+      ["Architekt: Projekte / gewonnen", c.arch_projects ? `${c.arch_projects} / ${c.arch_won} (${money(c.arch_won_value) || "€0"})` : null],
+      ["Website geprüft", c.identity_status ? `${c.identity_status}${c.identity_matched_by ? " (" + c.identity_matched_by + ")" : ""}` : null],
+      ["Profil", c.enrich_profile === "architekt" ? "Architekt/Planer" : (c.enrich_profile ? "Betrieb" : null)],
+      ["Solarlux-Relevanz", c.solarlux_relevance], ["Bürotyp", c.office_type],
+      ["Entscheidungsrolle", c.decision_role], ["Referenz-Umfang", c.reference_scale],
+      ["Rechtsform", c.legal_form], ["Positionierung", c.positioning],
+      ["Eigene Fertigung", yn(c.own_fabrication)], ["Showroom", yn(c.has_showroom)],
+      ["Projektfokus", j(c.project_focus)], ["Zertifikate", j(c.certifications)],
+      ["Fremdmarken", j(c.competitor_brands)], ["Erwähnt Solarlux", yn(c.mentions_solarlux)],
+      ["Einsatzgebiet", c.service_area], ["Seitensprache", c.site_language],
+      ["Facebook", c.facebook_url ? `<a class="link" target="_blank" href="${esc(c.facebook_url)}">Profil ↗</a>` : null],
+      ["Instagram", c.instagram_url ? `<a class="link" target="_blank" href="${esc(c.instagram_url)}">Profil ↗</a>` : null],
+      ["LinkedIn", c.linkedin_url ? `<a class="link" target="_blank" href="${esc(c.linkedin_url)}">Profil ↗</a>` : null],
+    ];
+    const cells = rows.map(([k, v]) => `
+      <div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)">
+        <span class="muted" style="flex:0 0 46%">${k}</span>
+        <span style="flex:1">${v === null || v === undefined || v === "" ? "—" : (String(v).startsWith("<a") ? v : esc(String(v)))}</span>
+      </div>`).join("");
+    const assess = c.assessment ? `<p class="hint" style="margin-top:8px">${esc(c.assessment)}</p>` : "";
+    return `
+      <div class="drawer-section">
+        <h3>CRM &amp; Anreicherung — alle Felder</h3>
+        <div style="font-size:12.5px">${cells}</div>
+        ${assess}
+      </div>`;
+  }
+
+  // ------------------------------------------------------- Objekte tab
+  // Projects instead of loose Verkaufschancen — one win makes a project won.
+  let objekteLoaded = false;
+
+  async function loadObjekte() {
+    const wrap = $("#objekteWrap");
+    const st = $("#objekteStatus").value;
+    const mm = $("#objekteMulti").checked ? 2 : 1;
+    wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
+    let data;
+    try {
+      data = await api(`/api/projekte?limit=300&min_members=${mm}${st ? `&status=${st}` : ""}`);
+    } catch (e) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Fehler: ${esc(e.message)}</p>`;
+      return;
+    }
+    const o = data.overview || {};
+    $("#objekteKpis").innerHTML = `
+      <div class="kpi"><div class="kpi-label">Projekte</div>
+        <div class="kpi-value">${(o.projects || 0).toLocaleString("de-DE")}</div></div>
+      <div class="kpi"><div class="kpi-label">Gewonnen</div>
+        <div class="kpi-value">${(o.gewonnen || 0).toLocaleString("de-DE")}</div></div>
+      <div class="kpi"><div class="kpi-label">Projekt-Gewinnrate</div>
+        <div class="kpi-value">${o.project_win_rate != null ? (o.project_win_rate * 100).toFixed(1) + " %" : "—"}</div></div>
+      <div class="kpi"><div class="kpi-label">Gewonnener Wert</div>
+        <div class="kpi-value" title="${eur(o.won_value)}">${eurShort(o.won_value)}</div></div>`;
+    const rows = data.rows || [];
+    if (!rows.length) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Keine Projekte für diesen Filter.</p>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Objekt</th><th>Status</th><th class="num">VCs</th>
+          <th class="num">Wert</th><th>Firmen</th><th>Architekten</th><th>Verlustgründe</th></tr></thead>
+        <tbody>${rows.map(p => `
+          <tr>
+            <td style="max-width:280px">${esc(p.name)}${p.created ? `<div class="sub">${esc(p.created)}</div>` : ""}</td>
+            <td><span class="state-chip">${esc(p.status)}</span></td>
+            <td class="num">${p.members}${p.won_members ? ` <span class="sub">(${p.won_members} gew.)</span>` : ""}</td>
+            <td class="num">${eur(p.order_value ?? p.estimated_value)}</td>
+            <td style="max-width:220px">${esc((p.firms || []).join(", "))}</td>
+            <td style="max-width:180px">${esc((p.architects || []).join(", "))}</td>
+            <td style="max-width:200px" class="sub">${esc((p.lost_reasons || []).join(", "))}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+  }
+
+  function ensureObjekteLoaded() {
+    if (objekteLoaded) return;
+    objekteLoaded = true;
+    loadObjekte();
+  }
+
+  function wireObjekte() {
+    const btn = $("#objekteReload");
+    if (!btn) return;
+    btn.addEventListener("click", loadObjekte);
+    $("#objekteStatus").addEventListener("change", loadObjekte);
+    $("#objekteMulti").addEventListener("change", loadObjekte);
+  }
+
+  // ------------------------------------------------------- Prüfen tab
+  // Human yes/no on unproven website identities. Accept re-enriches from the
+  // approved site; reject clears the domain so the finder searches again.
+  let pruefenLoaded = false;
+
+  async function loadPruefen() {
+    const wrap = $("#pruefenWrap");
+    const ls = $("#pruefenEsOnly").checked ? "&lead_source=marktanalyse_es_2026_08" : "";
+    wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
+    let data;
+    try {
+      data = await api(`/api/identity/review?limit=200${ls}`);
+    } catch (e) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Fehler: ${esc(e.message)}</p>`;
+      return;
+    }
+    const rows = data.rows || [];
+    if (!rows.length) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Nichts zu prüfen — alles entschieden. 🎉</p>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Firma</th><th>Ort</th><th>Kandidat</th>
+          <th>Hinweis</th><th style="width:170px">Entscheidung</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr data-company="${r.company_id}">
+            <td>${esc(r.name)}${r.import_type ? `<div class="sub">${esc(r.import_type)}</div>` : ""}</td>
+            <td>${esc(r.city || "—")}${r.postal_code ? ` <span class="sub">${esc(r.postal_code)}</span>` : ""}</td>
+            <td>${r.domain ? `<a href="https://${esc(r.domain)}" target="_blank" rel="noopener">${esc(r.domain)}</a>` : "—"}</td>
+            <td style="max-width:340px">${esc(r.clue || r.what || r.notes || "")}</td>
+            <td>
+              <button class="btn btn-primary pruefen-ok" data-domain="${esc(r.domain || "")}">✓ Ja</button>
+              <button class="btn pruefen-no">✗ Nein</button>
+            </td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+    $$("#pruefenWrap .pruefen-ok").forEach(b => b.addEventListener("click", async (ev) => {
+      const tr = ev.target.closest("tr");
+      const cid = Number(tr.dataset.company);
+      ev.target.disabled = true;
+      try {
+        await api(`/api/companies/${cid}/enrichment/accept`, "POST",
+                  { page_id: ev.target.dataset.domain });
+        tr.style.opacity = "0.45";
+        toast("Website bestätigt — wird angereichert.");
+      } catch (e) { toast(e.message, "error"); ev.target.disabled = false; }
+    }));
+    $$("#pruefenWrap .pruefen-no").forEach(b => b.addEventListener("click", async (ev) => {
+      const tr = ev.target.closest("tr");
+      const cid = Number(tr.dataset.company);
+      ev.target.disabled = true;
+      try {
+        await api(`/api/companies/${cid}/identity/reject`, "POST", {});
+        tr.style.opacity = "0.45";
+        toast("Abgelehnt — Suche nach der richtigen Website ist wieder offen.");
+      } catch (e) { toast(e.message, "error"); ev.target.disabled = false; }
+    }));
+  }
+
+  function ensurePruefenLoaded() {
+    if (pruefenLoaded) return;
+    pruefenLoaded = true;
+    loadPruefen();
+  }
+
+  function wirePruefen() {
+    const btn = $("#pruefenReload");
+    if (!btn) return;
+    btn.addEventListener("click", loadPruefen);
+    $("#pruefenEsOnly").addEventListener("change", loadPruefen);
   }
 
   // ---------------- Profil tab (Ideal Customer Profile) ----------------
@@ -2517,6 +2829,8 @@
           <p class="hint">Locking freezes this page as verified — automatic identity checks will never overwrite it.</p>
         </div>
         ${candHtml}
+        ${dossierSection(detail?.dossier)}
+        ${crmSection(detail?.company || row)}
         <div class="drawer-section">
           <h3>Ad activity</h3>
           ${adBlock}

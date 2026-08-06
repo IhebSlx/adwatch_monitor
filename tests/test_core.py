@@ -484,7 +484,7 @@ def test_enrich_never_overwrites_sap_website(temp_db, monkeypatch):
                         lambda domain, total_chars=9000: {
                             "domain": domain, "home_url": f"https://{domain}",
                             "text": "Wir bauen Fenster. Tel. 05405 1234-0", "pages": [], "chars": 36})
-    monkeypatch.setattr(extract_mod, "extract_facts", lambda text, model=None: {
+    monkeypatch.setattr(extract_mod, "extract_facts", lambda text, model=None, **kw: {
         "description_de": "Baut Fenster.", "products": ["Fenster"], "founded_year": 1952,
         "employee_hint": None, "legal_form": "GmbH", "service_area": None,
         "mentions_solarlux": True, "competitor_brands": [],
@@ -1265,10 +1265,12 @@ def test_thinly_known_features_do_not_score(temp_db):
         "weights": {"segment": 1.0, "size_bucket": 1.0},
         "features": {
             # solidly known, and discriminating
-            "segment": {"coverage": 1.0, "shares": {"Handel": 0.7, "Verarbeiter": 0.3}},
+            "segment": {"coverage": 1.0, "shares": {"Handel": 0.7, "Verarbeiter": 0.3},
+                        "lifts": {"Handel": 1.8, "Verarbeiter": 0.6}},
             # the live case: a spread that LOOKS informative but rests on ~20 rows
             "size_bucket": {"coverage": 0.03,
-                            "shares": {"20-49": 0.5, "10-19": 0.3, "50+": 0.2}},
+                            "shares": {"20-49": 0.5, "10-19": 0.3, "50+": 0.2},
+                            "lifts": {"20-49": 2.5, "10-19": 1.1, "50+": 0.7}},
         },
     }
     # a company matching ONLY the thin feature has nothing comparable left
@@ -1386,7 +1388,7 @@ def test_reenrichment_can_retract_a_fact_but_not_a_human_edit(temp_db, monkeypat
                         lambda d: {"text": "Retract SL, Alicante", "pages": [d]})
 
     # run 1: the old, wrong extraction
-    monkeypatch.setattr(extract, "extract_facts", lambda t: {
+    monkeypatch.setattr(extract, "extract_facts", lambda t, **kw: {
         "description_de": "Baut Fenster.", "legal_form": "e.K.",
         "employee_hint": "Un gran equipo", "products": ["Fenster"],
         "founded_year": None, "service_area": None, "mentions_solarlux": False,
@@ -1402,7 +1404,7 @@ def test_reenrichment_can_retract_a_fact_but_not_a_human_edit(temp_db, monkeypat
     s.commit(); s.close()
 
     # run 2: the corrected extractor returns null for both
-    monkeypatch.setattr(extract, "extract_facts", lambda t: {
+    monkeypatch.setattr(extract, "extract_facts", lambda t, **kw: {
         "description_de": "Baut Fenster und Türen.", "legal_form": None,
         "employee_hint": None, "products": ["Fenster", "Türen"],
         "founded_year": None, "service_area": None, "mentions_solarlux": False,
@@ -1923,60 +1925,112 @@ def test_icp_diagnose_guards(temp_db):
     assert any("Gemischte Grundgesamtheit" in r for r in d["reasons"])
 
 
-def test_icp_profile_and_fit(temp_db):
-    """The heart: the profile counts winner distributions; fit scores a company
-    by how typical its values are (modal winner value = 1.0); unknown values are
-    skipped with weight renormalisation; near-uniform features are excluded;
-    apply writes scores + breakdown to every company."""
+def test_icp_scores_propensity_not_popularity(temp_db):
+    """The heart, and the correction that made it work.
+
+    Scoring used to reward the winners' most COMMON value. That ranks popularity,
+    not propensity: measured live, Bauelementehandel is 36.5% of winners but
+    converts at 1.03x, while Wintergartenbau is ~1% of winners and converts at
+    1.62x — share ordered them backwards. fit_for now scores LIFT, so a value is
+    rewarded for being over-represented among winners RELATIVE to the population.
+
+    Fixture: Tischler is the common trade (60 of 90 companies) but converts
+    poorly; Metallbau is rarer but converts well. Share-based scoring would rank
+    Tischler top; lift must rank Metallbau top.
+    """
     from adwatch import customers
     from adwatch.insights import icp
     from adwatch.models import Company
     from sqlalchemy import select
 
     s = temp_db.SessionLocal()
-    # 30 winners (the guard rejects smaller sets as noise): 20× Metallbau in
-    # PLZ 4x, 10× Tischler in PLZ 8x; ALL share the same Vertriebsweg
-    # (non-discriminating -> must be excluded from scoring)
-    for i in range(20):
-        s.add(Company(name=f"W Metall {i}", country="DE", segment="Verarbeiter",
-                      sub_segment="Metallbau-Schlosser", sales_channel="Fachhandelsvertrieb",
-                      postal_code="49134", revenue_y0=50000, revenue_y1=40000))
-    for i in range(10):
-        s.add(Company(name=f"W Tisch {i}", country="DE", segment="Verarbeiter",
-                      sub_segment="Tischler", sales_channel="Fachhandelsvertrieb",
-                      postal_code="80331", revenue_y0=50000, revenue_y1=40000))
-    # candidates: a look-alike (Metallbau, PLZ 4x), a partial match, a blank
-    lookalike = Company(name="K Passt", country="DE", segment="Verarbeiter",
-                        sub_segment="Metallbau-Schlosser", sales_channel="Fachhandelsvertrieb",
-                        postal_code="49076")
-    partial = Company(name="K Halb", country="DE", segment="Verarbeiter",
-                      sub_segment="Tischler", postal_code="80000")
+    win_ids = []
+    # 20 Metallbau winners out of 30 Metallbau companies  -> strongly over-represented
+    for i in range(30):
+        c = Company(name=f"Metall {i}", country="DE", segment="Verarbeiter",
+                    sub_segment="Metallbau-Schlosser", sales_channel="Fachhandelsvertrieb",
+                    postal_code="49134")
+        s.add(c); s.flush()
+        if i < 20:
+            win_ids.append(c.id)
+    # 10 Tischler winners out of 60 Tischler companies -> the COMMON trade, but
+    # under-represented among winners
+    for i in range(60):
+        c = Company(name=f"Tisch {i}", country="DE", segment="Verarbeiter",
+                    sub_segment="Tischler", sales_channel="Fachhandelsvertrieb",
+                    postal_code="80331")
+        s.add(c); s.flush()
+        if i < 10:
+            win_ids.append(c.id)
     blank = Company(name="K Leer", country="DE")
-    s.add_all([lookalike, partial, blank]); s.commit()
-    # derive states so the default winners filter (active+new) finds the six
-    for c in s.scalars(select(Company)):
-        c.customer_state = customers.derive_customer_state(
-            c.revenue_y0, c.revenue_y1, c.revenue_y2, c.revenue_y3, c.revenue_y4)
-    s.commit()
-    la_id, pa_id, bl_id = lookalike.id, partial.id, blank.id
+    s.add(blank); s.commit()
+    bl_id = blank.id
+    # a non-winner of each trade, to compare
+    metall_id = s.scalars(select(Company).where(
+        Company.name == "Metall 29")).one().id
+    tisch_id = s.scalars(select(Company).where(
+        Company.name == "Tisch 59")).one().id
     s.close()
 
-    p = icp.build_profile(None)
+    p = icp.build_profile({"ids": win_ids})
     assert p["winners_count"] == 30
-    assert dict(p["features"]["sub_segment"]["shares"])["Metallbau-Schlosser"] == pytest.approx(20 / 30)
+    subs = p["features"]["sub_segment"]
+    # Tischler is the LARGER share of winners' trade population but Metallbau is
+    # the over-represented one — this is exactly the inversion that broke ranking
+    assert dict(subs["shares"])["Metallbau-Schlosser"] == pytest.approx(20 / 30)
+    assert subs["lifts"]["Metallbau-Schlosser"] > subs["lifts"]["Tischler"]
+    assert subs["lifts"]["Metallbau-Schlosser"] > 1.0 > subs["lifts"]["Tischler"]
 
-    res = icp.apply_profile(None, name="test")
-    assert res["companies_scored"] >= 32  # everyone with any comparable value
+    res = icp.apply_profile({"ids": win_ids}, name="test")
+    assert res["companies_scored"] >= 90
 
     s = temp_db.SessionLocal()
-    la, pa, bl = s.get(Company, la_id), s.get(Company, pa_id), s.get(Company, bl_id)
-    assert la.fit_score == 100.0                       # modal value on every scored feature
-    assert pa.fit_score is not None and pa.fit_score < la.fit_score
+    me, ti, bl = (s.get(Company, metall_id), s.get(Company, tisch_id),
+                  s.get(Company, bl_id))
+    assert me.fit_score > 50 > ti.fit_score, (me.fit_score, ti.fit_score)
     assert bl.fit_score is None and bl.target_score is None   # nothing comparable -> unrated, not 0
-    feats = {f["feature"] for f in la.fit_breakdown["features"]}
+    feats = {f["feature"] for f in me.fit_breakdown["features"]}
     assert "sales_channel" not in feats               # 100%-uniform -> excluded
     assert "sub_segment" in feats
     s.close()
+
+
+def test_availability_leakage_is_detected_and_excluded(temp_db):
+    """A feature known for winners far more often than for the population is
+    measuring 'we already engaged this account', not fit. Live cases: products
+    (13.4x), Betriebsgröße (13.7x), Firmenalter (11.9x), Anzeigen-Aktivität
+    (9.6x) — all only exist for the enriched/monitored base, which WAS the old
+    buyers-only export. Scoring on them yields a confident model that says
+    'accounts we already sell to, buy from us'."""
+    from adwatch.insights import icp
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    win_ids = []
+    for i in range(40):
+        # winners are enriched (products known)
+        c = Company(name=f"Gewinner {i}", country="DE", segment="Handel",
+                    sub_segment="Bauelementehandel", postal_code="49134",
+                    products=["Fenster"])
+        s.add(c); s.flush(); win_ids.append(c.id)
+    for i in range(160):
+        # the population is not enriched at all
+        s.add(Company(name=f"Rest {i}", country="DE", segment="Handel",
+                      sub_segment="Bauelementehandel", postal_code="49134"))
+    s.commit(); s.close()
+
+    p = icp.build_profile({"ids": win_ids})
+    prod = p["features"]["products"]
+    assert prod["coverage"] == 1.0
+    assert prod["pop_coverage"] < 0.3
+    assert prod["leaky"] is True, prod
+    assert p["features"]["sub_segment"]["leaky"] is False
+
+    # and the leaky feature must not contribute to any score
+    fit, bd = icp.fit_for({"products": ["Fenster"], "sub_segment": "Bauelementehandel",
+                           "segment": "Handel"}, p)
+    assert "products" not in {b["feature"] for b in bd}
 
 
 def test_downgrade_resets_collected_ads(temp_db):
@@ -2043,3 +2097,851 @@ def test_unlink_resets_collected_ads(temp_db):
     c = s.get(Company, cid)
     assert c.page_id is None and c.resolution_status in ("ambiguous", "pending")
     s.close()
+
+
+# ---------------------------------------------------------------------------
+# Belege / RFM — the corrections that make churn detection meaningful
+# ---------------------------------------------------------------------------
+
+def _ev(*items):
+    """[(date, amount)] from (iso, amount) pairs."""
+    import datetime as _dt
+    return [(_dt.date.fromisoformat(d), a) for d, a in items]
+
+
+def test_cadence_is_measured_not_assumed():
+    """A dealer ordering every 14 days that has been quiet 120 days is overdue;
+    a Wohnungswirtschaft ordering yearly at 120 days is not. A fixed 12-month
+    cutoff cannot tell these apart, which is the whole point of the module."""
+    from adwatch.insights import rfm
+    import datetime as dt
+    today = dt.date(2026, 8, 5)
+
+    fortnightly = _ev(("2025-06-01", 5000), ("2025-06-15", 5000),
+                      ("2025-06-29", 5000), ("2026-04-01", 5000))
+    r = rfm.classify(fortnightly, today)
+    assert r["cadence_days"] == 14
+    assert r["health"] in ("gefährdet", "verloren")
+    assert r["overdue_factor"] > 3
+
+    yearly = _ev(("2022-01-10", 90000), ("2023-01-20", 90000),
+                 ("2024-02-01", 90000), ("2025-06-01", 90000))
+    r2 = rfm.classify(yearly, today)
+    assert r2["cadence_days"] >= 365
+    assert r2["health"] == "aktiv", r2
+
+
+def test_spare_parts_only_is_not_a_system_customer():
+    """~25% of Belege are 0 EUR and the median is EUR 194. Without a materiality
+    floor a gasket order makes a company look like a customer and poisons any ICP
+    trained on 'buyers'."""
+    from adwatch.insights import rfm
+    import datetime as dt
+    today = dt.date(2026, 8, 5)
+    trivial = _ev(("2026-01-05", 0), ("2026-02-05", 120), ("2026-03-05", 80),
+                  ("2026-04-05", 300))
+    assert rfm.classify(trivial, today)["health"] == "einmalig"
+    # the same monthly rhythm, but material and still current, is a live customer
+    real = _ev(("2026-04-05", 9000), ("2026-05-05", 9000), ("2026-06-05", 9000),
+               ("2026-07-05", 9000))
+    assert rfm.classify(real, today)["health"] == "aktiv"
+
+
+def test_no_events_is_never_not_lost():
+    from adwatch.insights import rfm
+    r = rfm.classify([])
+    assert r["health"] == "nie" and r["value"] == 0.0
+    # and it must not produce a win-back rank — there is nothing to win back
+    assert rfm.winback_score(r, 0.0) == 0.0
+
+
+def test_winback_ad_signal_is_a_multiplier_and_value_is_log_scaled():
+    """50% of revenue sits with 66 companies, so a linear value term would make
+    the list nothing but whales; and an advertising lapsed customer must outrank
+    an equally-valuable silent one."""
+    from adwatch.insights import rfm
+    import datetime as dt
+    evs = _ev(("2024-01-05", 60000), ("2024-03-05", 60000),
+              ("2024-05-05", 60000), ("2024-07-05", 60000))
+    cls = rfm.classify(evs, dt.date(2026, 8, 5))
+    quiet = rfm.winback_score(cls, cls["value"])
+    ads = rfm.winback_score(cls, cls["value"], advertising=True)
+    assert ads > quiet > 0
+    # log scaling: 100x the revenue must not give anything like 100x the score
+    big = rfm.winback_score(cls, cls["value"] * 100)
+    assert big < quiet * 2
+
+
+def test_crm_import_refuses_a_truncated_download(tmp_path):
+    """A partial download must not be mistaken for the full population — it would
+    look like thousands of accounts had vanished."""
+    import json, pytest
+    from adwatch import crm_import
+    p = tmp_path / "part.json"
+    p.write_text(json.dumps({"cols": ["crm_id", "name"], "rows": [["a", "X"]]}),
+                 encoding="utf-8")
+    with pytest.raises(ValueError, match="partial"):
+        crm_import.load_export(p)
+
+
+def test_crm_import_never_writes_local_owned_columns():
+    """Enrichment, scores and linked ad identities survive a full re-import."""
+    from adwatch.crm_accounts import LOCAL_OWNED
+    from adwatch.crm_import import WRITES
+    assert not (WRITES & LOCAL_OWNED), sorted(WRITES & LOCAL_OWNED)
+
+
+def test_bulk_imported_companies_are_not_monitored(temp_db):
+    """46,000 CRM accounts must feed the ICP without flooding the ad pipeline."""
+    import json
+    from sqlalchemy import select
+    from adwatch import crm_import
+    from adwatch.models import Company
+    rows = [[f"guid-{i}", f"Firma {i}", "", 101, 101000, 102690001, 102690000,
+             "Deutschland", "49", "Ort", "", None, "2024-01-01",
+             0, 0, "", "", 0, 0, 0, 0, None, 0, 0, 0] for i in range(600)]
+    cols = ["crm_id", "name", "accountnumber", "segment", "sub_segment",
+            "sales_channel", "kunde_interessent", "country", "postal_code",
+            "city", "website", "employees", "created_on", "beleg_count",
+            "beleg_sum", "beleg_first", "beleg_last", "rev_2023", "rev_2024",
+            "rev_2025", "rev_2026", "avg_discount", "arch_projects",
+            "arch_won", "arch_won_value"]
+    p = temp_db.config.DATA_DIR if hasattr(temp_db, "config") else None
+    import tempfile, pathlib
+    f = pathlib.Path(tempfile.mkdtemp()) / "e.json"
+    f.write_text(json.dumps({"cols": cols, "rows": rows}), encoding="utf-8")
+    stats = crm_import.import_accounts(f)
+    assert stats["inserted"] == 600
+    with temp_db.SessionLocal() as s:
+        assert s.scalars(select(Company).where(Company.monitored.is_(False))).all()
+        c = s.scalars(select(Company).where(Company.crm_id == "guid-7")).one()
+        assert c.segment == "Verarbeiter" and c.sub_segment == "Fensterbau"
+        assert c.monitored is False
+
+
+# ---------------------------------------------------------------------------
+# Market list import (a colleague's scraped spreadsheet)
+# ---------------------------------------------------------------------------
+
+_MARKT_CSV = (
+    "Name;Typ;Adresse;Lat;Lng;Website;Ansprechpartner;Notizen;Untertyp;"
+    "Marken/Produkte;Einschaetzung;\n"
+    # intact row
+    "LUCOR Ventanas;potenzialkunde;Calle X 1, 14001 Cordoba, Spanien;37.8;-4.7;"
+    "https://www.lucor.es/;;;;;;\n"
+    # SHIFTED by one: the Spanish legal-form comma became a semicolon
+    "CARPYVENT; S.L.;potenzialkunde;Av Y 2, 03001 Alicante, Spanien;38.3;-0.4;"
+    "http://carpyvent.es;;;;;\n"
+    # a real competitor location: the manufacturer's name IS the company name
+    "Schueco Showroom Madrid;wettbewerber;Valdemoro, 28340 Madrid;40.1;-3.6;"
+    "https://schueco.com/es;;Eigener Showroom;Showroom;;;\n"
+    # installs a competitor's systems -> a PROSPECT, not a competitor
+    "Premial;wettbewerber;Mijas Costa, 29650 Malaga;36.5;-4.8;;;"
+    "Schueco-Premiumpartner;Produktion;Schueco Premium Partner;;\n"
+    # duplicate of the row above with a different Typ
+    "Premial;potenzialkunde;Mijas Costa, 29650 Malaga;36.5;-4.8;;;"
+    "Schueco-Premiumpartner;Produktion;Schueco Premium Partner;;\n"
+    # existing customer, joinable only by the Kd-Nr in free text
+    "IBZ Cristal;bestandskunde;Ibilbidea 80, 20115 Astigarraga;43.2;-1.9;;;"
+    "Kd-Nr. 5164611 | Lizenznehmer SL25;;;;\n"
+)
+
+
+def _write_markt(tmp_path):
+    p = tmp_path / "markt.csv"
+    p.write_text(_MARKT_CSV, encoding="utf-8-sig")
+    return p
+
+
+def test_market_list_repairs_semicolon_shifted_names(tmp_path):
+    """The Spanish legal-form comma arrived as a semicolon, shifting 46 of 534 real
+    rows. Unrepaired, 'S.L.' becomes the company TYPE and every later column lands
+    in the wrong field."""
+    from adwatch import market_list as ml
+    out = ml.parse(_write_markt(tmp_path))
+    names = {r["name"]: r for r in out["records"]}
+    assert "CARPYVENT, S.L." in names, sorted(names)
+    assert names["CARPYVENT, S.L."]["import_type"] == "potenzialkunde"
+    assert names["CARPYVENT, S.L."]["city"] == "Alicante"
+    assert names["CARPYVENT, S.L."]["postal_code"] == "03001"
+    assert out["stats"]["unparsable"] == 0
+
+
+def test_market_list_separates_competitors_from_conquest_targets(tmp_path):
+    """'wettbewerber' means two opposite things. A manufacturer's OWN location is
+    never a target; a firm that merely INSTALLS a rival's systems is the best
+    target in the file — and must stay recognisable as having arrived tagged
+    'wettbewerber'."""
+    from adwatch import market_list as ml
+    recs = {r["name"]: r for r in ml.parse(_write_markt(tmp_path))["records"]}
+
+    schueco = recs["Schueco Showroom Madrid"]
+    assert schueco["is_competitor"] is True
+    assert schueco["carries_competitor_brand"] is False
+
+    premial = recs["Premial"]
+    assert premial["is_competitor"] is False, "installs Schueco != is Schueco"
+    assert premial["carries_competitor_brand"] is True
+    assert premial["import_type"] == "wettbewerber", "origin must stay auditable"
+    assert premial["segment"] == "Verarbeiter"
+
+
+def test_market_list_dedupes_and_keeps_the_discarded_type(tmp_path):
+    from adwatch import market_list as ml
+    out = ml.parse(_write_markt(tmp_path))
+    assert out["stats"]["duplicates_removed"] == 1
+    premial = next(r for r in out["records"] if r["name"] == "Premial")
+    # the same firm was entered twice under different Typ values — the one we
+    # dropped is remembered rather than silently lost
+    assert premial["also_imported_as"] == ["potenzialkunde"]
+
+
+def test_market_list_matches_existing_customer_by_kdnr_not_name(temp_db, tmp_path):
+    """Names do not join: 'IBZ Cristal' is 'IBZ Cortinas De Cristal SL'. Only 7 of
+    534 rows matched by name, 30 matched on the Kd-Nr buried in free text."""
+    from sqlalchemy import select
+    from adwatch import market_list as ml
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add(Company(name="IBZ Cortinas De Cristal SL", country="ES",
+                  sap_number="0005164611", segment="Verarbeiter"))
+    s.commit(); s.close()
+
+    stats = ml.import_list(_write_markt(tmp_path), lead_source="test_es")
+    assert stats["matched_by"]["customer_number"] == 1
+    with temp_db.SessionLocal() as s:
+        c = s.scalars(select(Company).where(
+            Company.name == "IBZ Cortinas De Cristal SL")).one()
+        # CRM master data untouched; the research is appended to notes
+        assert c.segment == "Verarbeiter"
+        assert "Kd-Nr. 5164611" in (c.notes or "")
+        assert "test_es" in (c.notes or "")
+        # and it must NOT have been inserted a second time
+        assert not s.scalars(select(Company).where(
+            Company.name == "IBZ Cristal")).all()
+
+
+def test_market_list_rows_are_distinguishable_and_not_monitored(temp_db, tmp_path):
+    """A scraped list must never be mistakable for CRM master data, and must not
+    silently enter the paid ad-fetch queue."""
+    from sqlalchemy import select
+    from adwatch import market_list as ml
+    from adwatch.models import Company
+    from adwatch import scope
+
+    ml.import_list(_write_markt(tmp_path), lead_source="test_es")
+    with temp_db.SessionLocal() as s:
+        rows = s.scalars(select(Company).where(Company.lead_source == "test_es")).all()
+        assert rows
+        assert all(c.crm_id is None for c in rows)
+        assert all(c.source == "marktanalyse" for c in rows)
+        assert all(c.monitored is False for c in rows)
+        # the competitor is present but excluded from every count
+        in_scope = s.scalars(scope.apply(select(Company)).where(
+            Company.lead_source == "test_es")).all()
+        assert "Schueco Showroom Madrid" not in {c.name for c in in_scope}
+        assert "Premial" in {c.name for c in in_scope}
+
+
+# ---------------------------------------------------------------------------
+# Website discovery — "do not add it unless you are very sure"
+# ---------------------------------------------------------------------------
+
+def test_domain_in_name_is_extracted_but_socials_are_not():
+    """'CBF (calviabalear.com)' states its own domain — that is the researcher
+    telling us, not a guess. A LinkedIn URL in the notes is NOT a company site."""
+    from adwatch.identity.find_website import domain_from_name
+    assert domain_from_name("CBF (calviabalear.com)") == "calviabalear.com"
+    assert domain_from_name("Aluminios Lago, S.L.") is None
+    assert domain_from_name("Óscar RV Arquitecto linkedin.com/in/oscar") is None
+    assert domain_from_name("Studio facebook.com/studio") is None
+
+
+def test_only_locality_backed_matches_are_auto_accepted():
+    """The gate here is deliberately STRICTER than enrichment's. domain_plus_name
+    proves a name coincidence, not that this is the right company — 'Premial' or
+    'Al-Andalus' would match a namesake in another province, and a wrong website
+    silently produces a description and an ad history for the wrong firm."""
+    from adwatch.identity.find_website import PROVEN
+    assert "domain_plus_name" not in PROVEN
+    for strong in ("phone", "plz_street", "plz_name", "domain_in_name"):
+        assert strong in PROVEN
+
+
+def test_unproven_candidate_is_queued_not_written(temp_db, monkeypatch):
+    """A plausible-but-unproven candidate must leave website_domain EMPTY."""
+    from sqlalchemy import select
+    from adwatch.identity import find_website as fw
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Aluminios Ejemplo", country="ES", city="Valencia",
+                postal_code="46020", street="Av. Catalunya 13",
+                lead_source="t", segment="Verarbeiter")
+    s.add(c); s.commit(); cid = c.id; s.close()
+
+    monkeypatch.setattr(fw, "search_candidates",
+                        lambda *a, **k: [{"domain": "aluminios-ejemplo.com",
+                                          "title": "Aluminios Ejemplo"}])
+    # a page that confirms the NAME but carries neither the postcode nor the street
+    monkeypatch.setattr(fw, "page_bundle",
+                        lambda d, **k: {"text": "Aluminios Ejemplo — ventanas",
+                                        "pages": [f"https://{d}"]})
+    r = fw.find_for(cid)
+    assert r["status"] == fw.NEEDS_REVIEW
+    with temp_db.SessionLocal() as s:
+        got = s.get(Company, cid)
+        assert got.website_domain is None, "an unproven domain must not be stored"
+        assert got.identity_status == fw.NEEDS_REVIEW
+        assert got.identity_evidence["review_candidate"] == "aluminios-ejemplo.com"
+    # ...and it is surfaced for a human instead of being dropped
+    assert any(q["company_id"] == cid for q in fw.review_queue(lead_source="t"))
+
+
+def test_postcode_backed_match_is_accepted(temp_db, monkeypatch):
+    from adwatch.identity import find_website as fw
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Aluminios Ejemplo", country="ES", city="Valencia",
+                postal_code="46020", street="Av. Catalunya 13",
+                lead_source="t", segment="Verarbeiter")
+    s.add(c); s.commit(); cid = c.id; s.close()
+
+    monkeypatch.setattr(fw, "search_candidates",
+                        lambda *a, **k: [{"domain": "aluminios-ejemplo.com"}])
+    monkeypatch.setattr(fw, "page_bundle", lambda d, **k: {
+        "text": "Aluminios Ejemplo, Av. Catalunya 13, 46020 Valencia",
+        "pages": [f"https://{d}"]})
+    r = fw.find_for(cid)
+    assert r["status"] == fw.VERIFIED
+    assert r["matched_by"] in ("plz_street", "plz_name")
+    with temp_db.SessionLocal() as s:
+        got = s.get(Company, cid)
+        assert got.website_domain == "aluminios-ejemplo.com"
+        assert got.website_source == "serper"
+
+
+def test_searched_companies_are_not_paid_for_twice(temp_db, monkeypatch):
+    """not_found and needs_review both count as done, or a re-run bills Serper
+    again for the same company."""
+    from adwatch.identity import find_website as fw
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    for i, st in enumerate([fw.NOT_FOUND, fw.NEEDS_REVIEW, None]):
+        s.add(Company(name=f"Firma {i}", country="ES", lead_source="t",
+                      segment="Verarbeiter", identity_status=st))
+    s.commit(); s.close()
+    pend = fw.pending_ids("t")
+    assert len(pend) == 1, "only the never-searched company may be queued"
+
+
+def test_spanish_trade_words_are_not_identifying():
+    """The AURIA incident: the generic-word list was German-only, so 'estudio' and
+    'arquitectura' counted as identifying. A DIFFERENT architecture studio in the
+    same town (same postcode, 'estudio de arquitectura' on its homepage) then
+    passed the plz_name gate and was stored as AURIA's website — the exact
+    wrong-website failure the identity gate exists to prevent."""
+    from adwatch.enrich.validate import distinctive_tokens, validate_site
+
+    assert distinctive_tokens("Estudio de Arquitectura AURIA") == {"auria"}
+    assert distinctive_tokens("Protec Ventanas") == {"protec"}
+    assert distinctive_tokens("Aluminios Baraza") == {"baraza"}
+    assert distinctive_tokens("Carpinteria Metalica FEVEGAR") == {"fevegar"}
+
+    # the live failure, replayed: another studio's page in the same town
+    company = {"name": "Estudio de Arquitectura AURIA", "phone": None,
+               "postal_code": "06220", "street": "Calle Cisneros 12"}
+    other_studio = "Estudio de arquitectura en Villafranca de los Barros, 06220"
+    res = validate_site(company, "thau.es", other_studio)
+    assert res["ok"] is False, "generic trade words must not prove identity"
+    # ...while the real match (name token present) still works
+    own = "AURIA estudio, Calle Cisneros 12, 06220 Villafranca"
+    assert validate_site(company, "auria.es", own)["ok"] is True
+
+
+def test_conflict_domains_are_never_google_fetched(temp_db):
+    """A domain that FAILED identity verification must not be used to attribute a
+    Google ad history — 188 of the 430 Spanish market-list sites came back
+    'conflict', and fetching through them files someone else's ads under the
+    company. Unverified (never checked) stays fetchable; disproven does not."""
+    from adwatch.jobs import _google_fetchable_ids
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    ok = Company(name="Ok Co", country="ES", website_domain="ok.es",
+                 identity_status="verified")
+    unknown = Company(name="Unknown Co", country="ES", website_domain="unknown.es")
+    bad = Company(name="Bad Co", country="ES", website_domain="portal.es",
+                  identity_status="conflict")
+    s.add_all([ok, unknown, bad]); s.commit()
+    ids = [ok.id, unknown.id, bad.id]
+    fetchable = _google_fetchable_ids(s, ids)
+    assert ok.id in fetchable and unknown.id in fetchable
+    assert bad.id not in fetchable
+    s.close()
+
+
+# ---------------------------------------------------------------------------
+# Subpage selection — which pages the enrichment crawler actually reads
+# ---------------------------------------------------------------------------
+
+_ES_HTML = """
+<html><body>
+  <nav>
+    <a href="/">Inicio</a>
+    <a href="/productos">Productos</a>
+    <a href="/servicios/ventanas-pvc/serie-70">Serie 70</a>
+    <a href="/quienes-somos">Quiénes somos</a>
+    <a href="/contacto">Contacto</a>
+    <a href="/aviso-legal">Aviso legal</a>
+    <a href="https://facebook.com/firma">Facebook</a>
+  </nav>
+  <div class="mobile-menu">
+    <a href="/contacto">Contacto</a>
+    <a href="/productos/">Productos</a>
+  </div>
+</body></html>
+"""
+
+
+def test_spanish_product_pages_are_selected_not_just_contacto():
+    """The old rule matched only impressum|kontakt|contact and took the first two
+    in document order, so a Spanish site yielded homepage + 'contacto' and the
+    product pages were NEVER read — the products list then came from whatever the
+    homepage happened to mention."""
+    from adwatch.identity import website_source as ws
+    picked = ws._subpage_urls("https://ejemplo.es/", _ES_HTML, max_pages=3)
+    cats = [ws._classify_link(u) for u in picked]
+    assert "products" in cats, picked
+    assert "legal" in cats, picked
+    assert "https://ejemplo.es/productos" in picked
+    # the section index is read BEFORE a deep single-item page: '/productos' is
+    # the whole range, '/servicios/ventanas-pvc/serie-70' is one article
+    prods = [u for u in picked if ws._classify_link(u) == "products"]
+    assert prods[0] == "https://ejemplo.es/productos", prods
+    # and with only two slots the deep page must never displace the index
+    picked2 = ws._subpage_urls("https://ejemplo.es/", _ES_HTML, max_pages=2)
+    assert not any("serie-70" in u for u in picked2), picked2
+
+
+def test_duplicate_nav_targets_do_not_consume_slots():
+    """A nav bar repeats the same href in the desktop and mobile menus; each
+    duplicate used to eat one of only two available slots."""
+    from adwatch.identity import website_source as ws
+    picked = ws._subpage_urls("https://ejemplo.es/", _ES_HTML, max_pages=4)
+    paths = [u.rstrip("/").rsplit("ejemplo.es", 1)[-1] for u in picked]
+    assert len(paths) == len(set(paths)), picked
+
+
+def test_offsite_and_non_http_links_are_never_fetched():
+    from adwatch.identity import website_source as ws
+    picked = ws._subpage_urls("https://ejemplo.es/", _ES_HTML, max_pages=6)
+    assert all("ejemplo.es" in u for u in picked), picked
+
+
+def test_link_categories_cover_the_app_markets():
+    """config/markets.yaml already knew ES='aviso legal', FR='mentions légales',
+    IT='contatti' while the crawler only looked for German terms."""
+    from adwatch.identity.website_source import _classify_link
+    assert _classify_link("https://x.es/aviso-legal") == "legal"
+    assert _classify_link("https://x.fr/mentions-legales") == "legal"
+    assert _classify_link("https://x.it/contatti") == "legal"
+    assert _classify_link("https://x.es/productos") == "products"
+    assert _classify_link("https://x.pt/produtos") == "products"
+    assert _classify_link("https://x.es/quienes-somos") == "about"
+    assert _classify_link("https://x.de/referenzen") == "references"
+    assert _classify_link("https://x.es/") is None
+
+
+# ---------------------------------------------------------------------------
+# site_facts — machine-readable facts, no LLM
+# ---------------------------------------------------------------------------
+
+_FACTS_HTML = """
+<html lang="es-ES"><head>
+  <meta property="og:description" content="Carpintería de aluminio en Málaga">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"LocalBusiness","name":"Protec Ventanas",
+   "telephone":"+34 952 58 75 73","email":"info@protec.es",
+   "foundingDate":"1998-04-01",
+   "address":{"@type":"PostalAddress","streetAddress":"Calle Sol 4",
+              "postalCode":"29620","addressLocality":"Torremolinos"},
+   "sameAs":["https://www.facebook.com/protecventanas",
+             "https://www.instagram.com/protec_ventanas"]}
+  </script>
+</head><body>
+  <a href="tel:+34952587573">Llamar</a>
+  <a href="mailto:info@protec.es">Escribir</a>
+  <a href="https://www.facebook.com/sharer/sharer.php?u=x">Compartir</a>
+  <a href="https://www.linkedin.com/company/protec-ventanas">LinkedIn</a>
+</body></html>
+"""
+
+
+def test_site_facts_reads_jsonld_contact_and_socials():
+    """Free, deterministic, and it unlocks the two strongest identity signals:
+    phone (ranked first by validate_site) and the company's OWN Facebook page.
+    Not one of the 39 Spain rows without a website had a phone number."""
+    from adwatch.enrich import site_facts
+    f = site_facts.extract(_FACTS_HTML, base_url="https://protec.es/")
+    assert f["phone"] == "+34 952 58 75 73"
+    assert f["email"] == "info@protec.es"
+    assert f["postal_code"] == "29620" and f["city"] == "Torremolinos"
+    assert f["street"] == "Calle Sol 4"
+    assert f["founded_year"] == 1998
+    assert f["language"] == "es-es"
+    assert f["social"]["facebook"] == "https://www.facebook.com/protecventanas"
+    assert f["social"]["instagram"] == "https://www.instagram.com/protec_ventanas"
+    assert f["social"]["linkedin"] == "https://www.linkedin.com/company/protec-ventanas"
+    assert f["sources"]["phone"] == "json-ld"
+
+
+def test_share_widgets_are_not_mistaken_for_the_company_profile():
+    """A sharer link points at OUR page on Facebook, not the company's — treating
+    it as the company's profile would attribute someone else's ads."""
+    from adwatch.enrich import site_facts
+    html = ('<a href="https://www.facebook.com/sharer/sharer.php?u=x">s</a>'
+            '<a href="https://facebook.com/plugins/like.php">l</a>')
+    assert "social" not in site_facts.extract(html)
+
+
+def test_personal_mailboxes_are_not_harvested():
+    """A role inbox is a company address; a named person's is personal data the
+    app has no reason to store (same rule that excludes Geschäftsführer names)."""
+    from adwatch.enrich import site_facts
+    f = site_facts.extract('<a href="mailto:maria.gomez@firma.es">Maria</a>')
+    assert "email" not in f
+    f2 = site_facts.extract('<a href="mailto:info@firma.es">Info</a>')
+    assert f2["email"] == "info@firma.es"
+
+
+def test_malformed_jsonld_never_breaks_extraction():
+    from adwatch.enrich import site_facts
+    html = ('<script type="application/ld+json">{"@type":"Organization",}</script>'
+            '<a href="tel:+34911223344">x</a>')
+    f = site_facts.extract(html)
+    assert f["phone"] == "+34911223344"   # salvaged the trailing comma, or fell back
+
+
+def test_tri_state_booleans_keep_not_stated_distinct_from_no():
+    """A site that never mentions its workshop must not be recorded as a
+    confirmed pure trader."""
+    from adwatch.enrich.extract import _tri_state
+    assert _tri_state(True) is True
+    assert _tri_state(False) is False
+    assert _tri_state(None) is None
+    assert _tri_state("ja") is True
+    assert _tri_state("unklar") is None
+
+
+# ---------------------------------------------------------------------------
+# Haiku conflict triage — diagnoses, never verifies
+# ---------------------------------------------------------------------------
+
+def test_triage_routes_but_never_writes_verified(temp_db, monkeypatch):
+    """The design rule from the migration incident: only the deterministic gate
+    may write 'verified'. Triage clears a diagnosed wrong_site domain (kept in
+    evidence), queues likely_right for review with the clue, leaves too_thin as
+    conflict — and no path produces 'verified'."""
+    from adwatch.identity import triage
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    wrong = Company(name="Dealer A", country="ES", website_domain="technal.com",
+                    identity_status="conflict", lead_source="t", segment="Handel")
+    right = Company(name="Dealer B", country="ES", website_domain="dealerb.es",
+                    identity_status="conflict", lead_source="t", segment="Handel")
+    thin = Company(name="Dealer C", country="ES", website_domain="thin.es",
+                   identity_status="conflict", lead_source="t", segment="Handel")
+    s.add_all([wrong, right, thin]); s.commit()
+    ids = {wrong.id: "wrong_site", right.id: "likely_right", thin.id: "too_thin"}
+    s.close()
+
+    monkeypatch.setattr(triage, "_evidence_for",
+                        lambda c: {"reachable": True, "excerpt": "x" * 100})
+    # confident on purpose: this test covers ROUTING, not the confidence gate
+    monkeypatch.setattr(triage, "_judge_batch", lambda blocks: {
+        cid: {"verdict": v, "confidence": 0.9, "what": "w", "clue": "c"}
+        for cid, v in ids.items()})
+    monkeypatch.setattr(triage.config, "ANTHROPIC_API_KEY", "test", raising=False)
+
+    r = triage.run(lead_source="t")
+    assert r["wrong_site"] == 1 and r["likely_right"] == 1 and r["too_thin"] == 1
+
+    with temp_db.SessionLocal() as s:
+        w, ri, th = (s.get(Company, cid) for cid in ids)
+        assert w.website_domain is None                    # cleared for the finder
+        assert w.identity_evidence["triage"]["domain_at_triage"] == "technal.com"
+        assert ri.identity_status == "needs_review"
+        assert ri.website_domain == "dealerb.es"           # kept, human decides
+        assert th.identity_status == "conflict"
+        for c in (w, ri, th):
+            assert c.identity_status != "verified"
+
+
+def test_backup_verify_catches_the_snapshots_that_bit_us(temp_db, tmp_path, monkeypatch):
+    """13 of 14 retained snapshots were once 4 KB empty files written by the test
+    suite, with the only good copy one rotation from deletion. verify_latest()
+    exists so a useless snapshot is FOUND rather than trusted."""
+    import sqlite3
+    from adwatch import backup, config as cfg
+
+    bdir = tmp_path / "b"; bdir.mkdir()
+    monkeypatch.setattr(cfg, "BACKUP_DIR", bdir, raising=False)
+    monkeypatch.setattr(backup.config, "BACKUP_DIR", bdir, raising=False)
+
+    # no backup at all
+    assert backup.verify_latest()["ok"] is False
+
+    # a tiny/empty snapshot must be rejected, not reported as fine
+    tiny = bdir / "adwatch_20260101_000000_x.db"
+    con = sqlite3.connect(tiny); con.execute("CREATE TABLE companies (id INTEGER)")
+    con.commit(); con.close()
+    r = backup.verify_latest()
+    assert r["ok"] is False and "small" in (r.get("error") or "")
+
+
+def test_postcode_check_is_country_aware():
+    """Requiring exactly 5 digits was German thinking. It silently never matched
+    for ~8,200 companies: AT/DK/NO/BE (4 digits), NL/GB (alphanumeric) — so one
+    of only three hard identity proofs was dead in six countries, with no error
+    anywhere."""
+    from adwatch.enrich.validate import plz_matches
+
+    # DE: unchanged 5-digit behaviour
+    assert plz_matches("49134", "Wallenhorst, 49134 Deutschland", country="DE")
+    assert not plz_matches("49134", "nothing here", country="DE")
+
+    # AT 4-digit: needs the town too, so a year cannot pass as a postcode
+    at_page = "Musterweg 3, 4020 Linz, Österreich"
+    assert plz_matches("4020", at_page, country="AT", city="Linz")
+    assert not plz_matches("4020", "gegründet 4020 Stück verkauft", country="AT",
+                           city="Linz"), "bare 4-digit match must not count"
+    assert not plz_matches("1998", "Firma seit 1998", country="AT", city="Linz")
+
+    # NL alphanumeric, spacing-insensitive
+    assert plz_matches("1234 AB", "Straat 5, 1234AB Amsterdam", country="NL")
+    assert plz_matches("1234AB", "Straat 5, 1234 AB Amsterdam", country="NL")
+
+    # GB outcode+incode
+    assert plz_matches("SW1A 1AA", "London SW1A 1AA", country="GB")
+
+    # unknown country falls back to the safe 5-digit rule
+    assert plz_matches("28001", "Madrid 28001") is True
+    assert plz_matches("4020", "Linz 4020") is False
+
+
+def test_triage_brand_overlap_is_deterministic_evidence():
+    """If the researcher wrote 'Schüco + Drutex' and the site says Schüco, that is
+    hard evidence independent of the LLM — a namesake in another province does not
+    happen to carry the same profile systems."""
+    from adwatch.identity.triage import _brand_overlap
+    notes = "Schueco + Drutex, eigener Ausstellungsraum"
+    # the researcher wrote 'Schueco', the Spanish site writes 'Schüco' — a naive
+    # substring match found NO overlap and silently threw the evidence away
+    assert _brand_overlap(notes, "Somos distribuidor Schüco oficial") == ["Schüco"]
+    assert _brand_overlap(notes, "Schuco y Drutex") == ["Drutex", "Schüco"]
+    assert _brand_overlap(notes, "ventanas de PVC baratas") == []
+    assert _brand_overlap(None, "Schüco") == []
+
+
+def test_triage_downgrades_unconfident_guesses(temp_db, monkeypatch):
+    """A four-way label choice always returns something. Without a quotable clue
+    or a brand match, low confidence must not reach the human queue."""
+    from adwatch.identity import triage
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Vago SL", country="ES", website_domain="vago.es",
+                identity_status="conflict", lead_source="t", segment="Handel")
+    s.add(c); s.commit(); cid = c.id; s.close()
+
+    monkeypatch.setattr(triage.config, "ANTHROPIC_API_KEY", "test", raising=False)
+    monkeypatch.setattr(triage, "_evidence_for",
+                        lambda x: {"reachable": True, "excerpt": "y" * 80,
+                                   "brand_overlap": []})
+    monkeypatch.setattr(triage, "_judge_batch", lambda blocks: {
+        cid: {"verdict": "likely_right", "confidence": 0.3, "what": "", "clue": ""}})
+    r = triage.run(lead_source="t")
+    assert r["too_thin"] == 1 and r["likely_right"] == 0
+    with temp_db.SessionLocal() as s:
+        assert s.get(Company, cid).identity_status == "conflict"
+
+
+def test_dossier_separates_roles_and_synthesises_profile(temp_db):
+    """The FBI file: every VC in every ROLE the company plays, never mixed —
+    an architect's 'lost' VC is not a lost sale — plus a Kurzprofil whose every
+    clause traces to a column (deterministic, no LLM per view)."""
+    import datetime as _dt
+    from adwatch import dossier
+    from adwatch.models import Company, CrmOpportunity, CrmOrderEvent
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Muster Bau GmbH", country="DE", city="Osnabrück",
+                crm_id="GUID-1", segment="Handel", sub_segment="Bauelementehandel",
+                positioning="premium", own_fabrication=True,
+                quote_sum=100000, conversion_rate=0.25)
+    s.add(c); s.flush()
+    s.add(CrmOrderEvent(company_id=c.id, order_date=_dt.date(2024, 3, 1),
+                        amount=50000, beleg_count=2))
+    # as buyer: one won VC with invoiced value and SAP trace
+    s.add(CrmOpportunity(crm_id="1", number="1", parent_account_crm_id="guid-1",
+                         state="gewonnen", order_value=40000, invoiced_value=38000,
+                         sap_order_numbers=["4711"], type_of_use="Wohnen",
+                         origin="vom Händler", project_id="p1",
+                         opportunity_guid="v1",
+                         created_on=_dt.datetime(2024, 1, 1)))
+    # as architect: a lost VC — must land in the ARCHITECT block, not the buyer's
+    s.add(CrmOpportunity(crm_id="2", number="2", architect_crm_id="guid-1",
+                         state="verloren", lost_reason="Zu teuer",
+                         project_id="p2", opportunity_guid="v2",
+                         created_on=_dt.datetime(2024, 2, 1)))
+    s.commit(); cid = c.id; s.close()
+
+    d = dossier.build(cid)
+    assert d["rollen"]["kaeufer"]["won"] == 1
+    assert d["rollen"]["kaeufer"]["invoiced_value"] == 38000
+    assert d["rollen"]["kaeufer"]["recent"][0]["sap_orders"] == ["4711"]
+    assert d["rollen"]["architekt"]["lost"] == 1
+    assert "kaeufer" in d["rollen"] and d["rollen"]["architekt"]["vcs"] == 1
+    assert len(d["projekte"]) == 2
+    kp = d["kurzprofil"]
+    assert "Bauelementehandel" in kp and "Osnabrück" in kp
+    assert "eigene Fertigung" in kp and "Konversion 25%" in kp
+
+
+def test_dossier_project_outcome_uses_the_one_win_rule(temp_db):
+    """A project with one win and one sibling loss is a WON project in the
+    dossier's Objekte list, per the Objektvertrieb rule."""
+    import datetime as _dt
+    from adwatch import dossier
+    from adwatch.models import Company, CrmOpportunity
+
+    s = temp_db.SessionLocal()
+    c = Company(name="GU Beispiel", country="DE", crm_id="GUID-9",
+                segment="Baudienstleister")
+    s.add(c); s.flush()
+    s.add(CrmOpportunity(crm_id="10", number="10", parent_account_crm_id="guid-9",
+                         state="verloren", lost_reason="Zugehörige VC gewonnen",
+                         project_id="prj", opportunity_guid="prj",
+                         project_name="Objekt Musterstraße",
+                         created_on=_dt.datetime(2024, 5, 1)))
+    s.add(CrmOpportunity(crm_id="11", number="11",
+                         parent_account_crm_id="someone-else",
+                         state="gewonnen", order_value=90000,
+                         project_id="prj", opportunity_guid="v11",
+                         created_on=_dt.datetime(2024, 5, 2)))
+    s.commit(); cid = c.id; s.close()
+
+    d = dossier.build(cid)
+    prj = next(p for p in d["projekte"] if p["project_id"] == "prj")
+    assert prj["status"] == "gewonnen", "one win makes the project won"
+    assert prj["members"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Architekten need their own extraction profile
+# ---------------------------------------------------------------------------
+
+def test_architect_profile_is_selected_from_segment():
+    from adwatch.enrich.extract import (profile_for, PROFILE_ARCHITEKT,
+                                        PROFILE_BETRIEB)
+    assert profile_for("Architekten") == PROFILE_ARCHITEKT
+    # planners filed under another segment still behave like architects
+    assert profile_for("Baudienstleister", "Generalplaner") == PROFILE_ARCHITEKT
+    assert profile_for("Handel", "Bauelementehandel") == PROFILE_BETRIEB
+    assert profile_for(None) == PROFILE_BETRIEB
+
+
+def test_architect_prompt_never_asks_a_planner_to_sell():
+    """The dealer prompt opens with 'Bauelemente-/Handwerksbetrieb' and asks for
+    own_fabrication and has_showroom — wrong in kind for a planning office, which
+    SPECIFIES systems. The architect prompt must ask the architect questions."""
+    from adwatch.enrich.extract import _prompt, PROFILE_ARCHITEKT, PROFILE_BETRIEB
+    arch = _prompt(PROFILE_ARCHITEKT)
+    deal = _prompt(PROFILE_BETRIEB)
+    assert "ARCHITEKTUR" in arch and "VERKAUFT keine Bauelemente" in arch
+    assert "own_fabrication" not in arch and "has_showroom" not in arch
+    assert "solarlux_relevance" in arch and "decision_role" in arch
+    # and the dealer prompt is untouched
+    assert "own_fabrication" in deal and "Bauelemente-/Handwerksbetrieb" in deal
+
+
+def test_architect_answer_maps_onto_shared_storage_keys(monkeypatch):
+    """Same columns wherever the meaning carries over, so no downstream filter
+    needs a per-segment branch: elements->products, specified_systems->
+    competitor_brands, memberships->certifications. own_fabrication/has_showroom
+    stay NULL — for a planner they are not 'no', they are not applicable."""
+    import json as _json
+    from adwatch.enrich import extract
+
+    class _Blk:
+        type = "text"
+        text = _json.dumps({
+            "description_de": "Architekturbüro für Wohn- und Hotelbauten.",
+            "elements": ["Schiebetüren", "Fassade"],
+            "specified_systems": ["Schüco", "Sky-Frame"],
+            "solarlux_relevance": "hoch",
+            "office_type": "Architekturbüro",
+            "decision_role": "vergibt Aufträge",
+            "project_focus": ["Wohnbau", "Hotel/Gastro"],
+            "reference_scale": "über 200 Projekte",
+            "memberships": ["COAM"],
+            "founded_year": 1998, "employee_hint": "12 Architekten",
+            "legal_form": "S.L.P.", "service_area": "Madrid",
+            "mentions_solarlux": False, "evidence": {}, "assessment_de": "Gross.",
+        })
+
+    class _Msg:
+        content = [_Blk()]
+
+    class _Client:
+        def __init__(self, **kw): self.messages = self
+        def create(self, **kw):
+            assert "ARCHITEKTUR" in kw["messages"][0]["content"]
+            return _Msg()
+
+    monkeypatch.setattr(extract.config, "ANTHROPIC_API_KEY", "test", raising=False)
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+
+    # the form must be IN the text — _legal_form_in_text rejects one that is not
+    f = extract.extract_facts("Estudio S.L.P. " + "x" * 200,
+                              profile=extract.PROFILE_ARCHITEKT)
+    assert f["products"] == ["Schiebetüren", "Fassade"]      # plans with
+    assert set(f["competitor_brands"]) == {"Schüco", "Sky-Frame"}  # specifies
+    assert f["certifications"] == ["COAM"]
+    assert f["solarlux_relevance"] == "hoch"
+    assert f["decision_role"] == "vergibt Aufträge"
+    assert f["own_fabrication"] is None and f["has_showroom"] is None
+    assert f["legal_form"] == "S.L.P."
+    assert f["profile"] == extract.PROFILE_ARCHITEKT
+
+
+def test_architect_relevance_rejects_invented_values(monkeypatch):
+    """A free-text answer outside the allowed set must become null, not be stored."""
+    import json as _json
+    from adwatch.enrich import extract
+
+    class _Blk:
+        type = "text"
+        text = _json.dumps({"description_de": "x", "solarlux_relevance": "sehr hoch",
+                            "office_type": "Weltmeister", "decision_role": "vielleicht",
+                            "evidence": {}})
+
+    class _Msg:
+        content = [_Blk()]
+
+    class _Client:
+        def __init__(self, **kw): self.messages = self
+        def create(self, **kw): return _Msg()
+
+    monkeypatch.setattr(extract.config, "ANTHROPIC_API_KEY", "test", raising=False)
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+    f = extract.extract_facts("y" * 200, profile=extract.PROFILE_ARCHITEKT)
+    assert f["solarlux_relevance"] is None
+    assert f["office_type"] is None and f["decision_role"] is None

@@ -491,6 +491,41 @@ def _to_dict(c: Company) -> dict:
         "description": c.description, "products": c.products,
         "founded_year": c.founded_year, "employee_hint": c.employee_hint,
         "enrichment_status": c.enrichment_status,
+        # ---- everything below arrived with the CRM/Beleg/enrichment expansion
+        # and was invisible in the UI until Iheb noticed ("I am not seeing all
+        # the columns"). A column we hold but never show may as well not exist.
+        "crm_id": c.crm_id,
+        "lead_source": c.lead_source, "import_type": c.import_type,
+        "is_competitor": c.is_competitor, "monitored": c.monitored,
+        # Belege (authoritative revenue) + customer health
+        "beleg_count": c.beleg_count, "beleg_sum": c.beleg_sum,
+        "beleg_first": c.beleg_first.isoformat() if c.beleg_first else None,
+        "beleg_last": c.beleg_last.isoformat() if c.beleg_last else None,
+        "beleg_by_year": c.beleg_by_year, "avg_discount": c.avg_discount,
+        "health": c.health, "winback_score": c.winback_score,
+        # Angebote
+        "quote_count": c.quote_count, "quote_sum": c.quote_sum,
+        "conversion_rate": c.conversion_rate,
+        # Architekten-Einfluss
+        "arch_projects": c.arch_projects, "arch_won": c.arch_won,
+        "arch_won_value": c.arch_won_value,
+        # Website-Identität
+        "identity_status": c.identity_status,
+        "identity_matched_by": c.identity_matched_by,
+        "website_source": c.website_source,
+        # Anreicherung, Teil 2
+        "legal_form": c.legal_form, "service_area": c.service_area,
+        "competitor_brands": c.competitor_brands,
+        "mentions_solarlux": c.mentions_solarlux,
+        "assessment": c.assessment, "certifications": c.certifications,
+        "own_fabrication": c.own_fabrication, "has_showroom": c.has_showroom,
+        "project_focus": c.project_focus, "positioning": c.positioning,
+        # Architekten-Profil (enrich profile 'architekt')
+        "solarlux_relevance": c.solarlux_relevance, "office_type": c.office_type,
+        "decision_role": c.decision_role, "reference_scale": c.reference_scale,
+        "enrich_profile": c.enrich_profile,
+        "facebook_url": c.facebook_url, "instagram_url": c.instagram_url,
+        "linkedin_url": c.linkedin_url, "site_language": c.site_language,
     }
 
 

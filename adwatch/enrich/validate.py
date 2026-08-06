@@ -30,12 +30,29 @@ try:
 except Exception:  # noqa: BLE001 — keep enrichment working if that module moves
     _id_distinctive_tokens = None
 
+# Fallback only — the primary vocabulary lives in identity/serper_source.py
+# (_GENERIC_TOKENS, multilingual since the AURIA incident). This set is used when
+# that import is unavailable, so it carries the same Spanish/PT/FR/IT/EN trade
+# words: a fallback that silently accepts 'arquitectura' as identifying would
+# reintroduce the exact wrong-website bug the primary list fixed.
 _GENERIC_FALLBACK = {
     "gmbh", "kg", "ag", "co", "ohg", "ek", "mbh", "und", "der", "die", "das", "inh",
     "fenster", "tueren", "turen", "tore", "glas", "glaserei", "metallbau", "holzbau",
     "tischlerei", "schreinerei", "bauelemente", "bau", "sonnenschutz", "wintergarten",
     "fassade", "fassaden", "rollladen", "markisen", "terrassendach", "elemente",
     "technik", "service", "handel", "montage", "zentrum", "profi", "meister",
+    # ES/PT/FR/IT/EN — ascii-folded, since callers fold before comparing
+    "ventanas", "ventana", "puertas", "puerta", "aluminio", "aluminios",
+    "cristal", "cristales", "cristaleria", "vidrio", "vidrios", "carpinteria",
+    "metalica", "metalicas", "cerramientos", "cerramiento", "toldos",
+    "persianas", "estudio", "arquitectura", "arquitecto", "arquitectos",
+    "sistemas", "construccion", "construcciones", "reformas", "fachadas",
+    "pergolas", "mamparas", "exteriores", "interiores", "talleres",
+    "janelas", "portas", "caixilharia", "vidros", "serralharia",
+    "fenetres", "menuiserie", "verre", "stores", "vitrages", "verandas",
+    "finestre", "serramenti", "infissi", "vetro", "alluminio", "vetreria",
+    "windows", "doors", "glazing", "aluminium", "joinery", "architecture",
+    "architects", "studio",
 }
 
 
@@ -110,11 +127,59 @@ def phone_matches(company_phone: str | None, page_text: str | None) -> bool:
 
 
 # --------------------------------------------------------------------------- address
-def plz_matches(postal_code: str | None, page_text: str | None) -> bool:
-    plz = _digits(postal_code)
-    if len(plz) != 5 or not page_text:
+# Postcode shapes by market. The old rule was "exactly 5 digits", which is DE/
+# FR/ES/IT/SE — and silently never matched for ~8,200 companies in AT (4),
+# NL (1234 AB), DK/NO/BE (4) and GB (alphanumeric). Since the postcode is one of
+# only three hard identity proofs, those countries lost a third of their evidence
+# with no error anywhere: they just failed verification more often than Germany.
+#
+# 4-digit codes need care: a bare "1234" collides with years, prices and article
+# numbers, which is why 5 was chosen originally. So a short code counts ONLY when
+# the town name is on the page too — effectively plz+city, which is stronger
+# evidence than a 5-digit match on its own.
+_SHORT_PLZ_COUNTRIES = {"AT", "DK", "NO", "BE", "CH", "PT", "LU", "HU", "SI"}
+_ALNUM_PLZ_COUNTRIES = {"NL", "GB", "IE", "MT", "PL", "CZ", "SK", "SE"}
+
+
+def plz_matches(postal_code: str | None, page_text: str | None,
+                country: str | None = None, city: str | None = None) -> bool:
+    """Is this company's postcode on the page?
+
+    `country` and `city` are optional so every existing caller keeps working;
+    without them the safe 5-digit rule applies, exactly as before.
+    """
+    raw = str(postal_code or "").strip()
+    plz = _digits(raw)
+    if not plz or not page_text:
         return False
-    return re.search(rf"(?<!\d){re.escape(plz)}(?!\d)", page_text) is not None
+    cc = (country or "").upper()
+    hay = page_text
+    folded = _ascii_fold(page_text)
+
+    # NL '1234 AB' / GB 'SW1A 1AA': match the full alphanumeric code, spacing-
+    # insensitive, since sites write it both ways.
+    if cc in _ALNUM_PLZ_COUNTRIES:
+        compact = re.sub(r"\s+", "", raw).upper()
+        if len(compact) >= 4:
+            spaced = re.escape(compact)
+            loose = r"\s*".join(re.escape(ch) for ch in compact)
+            if re.search(rf"(?<![A-Z0-9]){spaced}(?![A-Z0-9])",
+                         re.sub(r"\s+", "", hay.upper())) or \
+               re.search(rf"(?<![A-Z0-9]){loose}(?![A-Z0-9])", hay.upper()):
+                return True
+        # SE/PL/CZ write 5 digits with a space ('123 45') — fall through to digits
+
+    if len(plz) >= 5:
+        return re.search(rf"(?<!\d){re.escape(plz)}(?!\d)", hay) is not None
+
+    if len(plz) == 4 and (cc in _SHORT_PLZ_COUNTRIES or cc in _ALNUM_PLZ_COUNTRIES):
+        if re.search(rf"(?<!\d){re.escape(plz)}(?!\d)", hay) is None:
+            return False
+        # guard against years/prices: the town must appear as well
+        town = _ascii_fold(re.split(r"[(/,]", str(city or ""))[0].strip())
+        return bool(town and len(town) >= 4 and town in folded)
+
+    return False
 
 
 def street_matches(street: str | None, page_text: str | None) -> bool:
@@ -164,7 +229,11 @@ def validate_site(company: dict, domain: str | None, page_text: str | None) -> d
     """
     signals = {
         "phone": phone_matches(company.get("phone"), page_text),
-        "plz": plz_matches(company.get("postal_code"), page_text),
+        # country+city let the postcode check handle non-German formats — see
+        # plz_matches; without them AT/NL/DK/NO/BE/GB never matched at all
+        "plz": plz_matches(company.get("postal_code"), page_text,
+                           country=company.get("country"),
+                           city=company.get("city")),
         "street": street_matches(company.get("street"), page_text),
         "name_in_text": name_token_matches(company.get("name"), page_text),
         "name_in_domain": domain_name_matches(company.get("name"), domain),

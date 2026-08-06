@@ -462,6 +462,39 @@ def run_identity_check(company_id: int, backend: str = "serper") -> dict:
         main = s.scalar(select(CompanyPage).where(
             CompanyPage.company_id == company.id, CompanyPage.role == "main"))
         human_set = main is not None and main.status in ("manual", "locked")
+
+        # STEP 0 — a Facebook URL that enrichment already harvested from the
+        # company's OWN verified website (JSON-LD sameAs / footer icon). That is
+        # the company declaring its page; resolving its numeric id via the free
+        # embed endpoint costs nothing and skips the whole crawl+search cascade.
+        if (not human_set and not company.page_id
+                and (company.facebook_url or "")):
+            from .page_id_lookup import fb_page_id_from_handle
+            from .serper_source import canonicalize_fb
+            canon = canonicalize_fb(company.facebook_url)
+            pid = (fb_page_id_from_handle(canon["handle"])
+                   if canon and canon.get("handle") else None)
+            if pid:
+                taken = s.scalar(select(CompanyPage).where(
+                    CompanyPage.source == "meta", CompanyPage.page_id == pid,
+                    CompanyPage.company_id != company.id))
+                if not taken:
+                    company.page_id = pid
+                    company.page_url = company.facebook_url
+                    company.resolution_status = "confirmed"
+                    if not s.scalar(select(CompanyPage).where(
+                            CompanyPage.source == "meta",
+                            CompanyPage.page_id == pid)):
+                        s.add(CompanyPage(
+                            company_id=company.id, source="meta", page_id=pid,
+                            role="main", status="auto",
+                            evidence={"method": "website_declared_link",
+                                      "url": company.facebook_url}))
+                    s.commit()
+                    return {"status": "confirmed", "page_id": pid,
+                            "page_name": company.page_name,
+                            "method": "website_declared_link"}
+
         crawl = None
         wres = None
         if company.website_domain:

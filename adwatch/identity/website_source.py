@@ -30,12 +30,13 @@ from __future__ import annotations
 
 import re
 from html import unescape
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
 from ..collect.meta_source import _registered_domain
-from .serper_source import canonicalize_fb, canonicalize_ig, _page_key, _profile_url
+from .serper_source import (canonicalize_fb, canonicalize_ig, _page_key,
+                            _profile_url, _umlaut_ascii)
 
 # Social links that belong to the manufacturer / a partner / a platform widget
 # rather than the partner company itself — never treat these as the match.
@@ -63,6 +64,90 @@ _SOCIAL_URL_RE = re.compile(
 # hrefs that lead to the site's own Impressum/Kontakt page
 _SUBPAGE_RE = re.compile(
     r'''href\s*=\s*["']([^"']*(?:impressum|kontakt|contact)[^"']*)["']''', re.I)
+
+# ---------------------------------------------------------------------------
+# Subpage selection
+# ---------------------------------------------------------------------------
+# Two different consumers want two different things from a company's own site:
+#
+#   identity   the LEGAL page — German law (and the ES/FR/IT equivalents) put the
+#              phone number and postal address there, which is what proves the
+#              site belongs to this company.
+#   enrichment the PRODUCT and ABOUT pages — what the firm actually sells, since
+#              a homepage is usually a slogan and a hero image.
+#
+# The old rule served only the first: three German/English keywords, then the
+# first two matches in document order. On a Spanish site that reads the homepage
+# and 'contacto' (which matched only by accident, being a superstring of
+# 'contact') and never sees 'productos' — so the products list came from whatever
+# the homepage happened to mention. `aviso legal`, the actual Spanish Impressum,
+# did not match at all, even though config/markets.yaml already knows the term.
+#
+# Keywords are matched against the URL path, ascii-folded, so 'mentions-légales'
+# and 'quiénes-somos' hit regardless of accents.
+_LINK_CATEGORIES: dict[str, tuple[str, ...]] = {
+    # strongest identity evidence (phone + postal address)
+    "legal": (
+        "impressum", "kontakt", "contact", "contacto", "contactos", "contatti",
+        "aviso-legal", "avisolegal", "aviso_legal", "mentions-legales",
+        "mentionslegales", "legal-notice", "legalnotice", "note-legali",
+        "chi-siamo-contatti", "imprint", "colofon", "wettelijke",
+    ),
+    # what they sell — the highest-value pages for the ICP
+    "products": (
+        "produkt", "produkte", "leistungen", "sortiment", "katalog",
+        "producto", "productos", "servicio", "servicios", "catalogo",
+        "prodotti", "servizi", "produits", "produtos", "servicos",
+        "product", "products", "services", "solutions", "soluciones",
+        "sistemas", "systeme", "gama",
+    ),
+    # who they are — description, founding year, size, certifications
+    "about": (
+        "ueber-uns", "uber-uns", "ueberuns", "unternehmen", "firma", "profil",
+        "about", "about-us", "aboutus", "empresa", "quienes-somos",
+        "quienessomos", "sobre-nosotros", "nosotros", "conocenos",
+        "chi-siamo", "chisiamo", "a-propos", "apropos", "qui-sommes-nous",
+        "sobre-nos", "historia", "geschichte", "team", "wij", "over-ons",
+    ),
+    # proof of what they build — often the richest product evidence of all
+    "references": (
+        "referenzen", "projekte", "projects", "proyectos", "obras",
+        "realizaciones", "progetti", "realisations", "realisaties",
+        "galeria", "galerie", "gallery",
+    ),
+}
+
+# How many subpages to take per category, and in which priority order. `legal`
+# is capped at 1: a second contact page adds nothing, and spending a slot on it
+# is exactly what starved the product pages before.
+_CATEGORY_BUDGET: tuple[tuple[str, int], ...] = (
+    ("legal", 1), ("products", 2), ("about", 1), ("references", 1),
+)
+
+
+def _ascii_lower(s: str) -> str:
+    return _umlaut_ascii((s or "").lower())
+
+
+def _classify_link(url: str) -> str | None:
+    """Which category a URL's PATH belongs to, or None.
+
+    Only the path is inspected — a query string like '?ref=contact' says nothing
+    about the destination, and the host is already known to be this company's.
+    Longest keyword wins so 'aviso-legal' is not shadowed by a shorter match.
+    """
+    try:
+        path = _ascii_lower(urlsplit(url).path)
+    except ValueError:
+        return None
+    if not path or path == "/":
+        return None
+    best: tuple[int, str] | None = None
+    for cat, words in _LINK_CATEGORIES.items():
+        for w in words:
+            if w in path and (best is None or len(w) > best[0]):
+                best = (len(w), cat)
+    return best[1] if best else None
 
 _SCRIPT_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -95,23 +180,58 @@ def _page_text(html: str, limit: int = 1200) -> str:
     return unescape(f"{head} — {body}" if head else body)[:limit]
 
 
-def _subpage_urls(base_url: str, html: str) -> list[str]:
-    """Absolute URLs of the site's own Impressum/Kontakt pages (max 2)."""
+def _own_links(base_url: str, html: str) -> list[str]:
+    """Every on-site absolute URL in the page, deduped, in document order."""
     out, seen = [], set()
     base_dom = _registered_domain(base_url)
-    for href in _SUBPAGE_RE.findall(html or ""):
+    for href in re.findall(r'''href\s*=\s*["']([^"']+)["']''', html or ""):
         href = href.strip()
-        if href.lower().startswith(("mailto:", "tel:", "javascript:")) or href.startswith("#"):
+        if href.lower().startswith(("mailto:", "tel:", "javascript:", "data:")) \
+                or href.startswith("#"):
             continue
-        full = urljoin(base_url, href).split("#")[0]
+        full = urljoin(base_url, href).split("#")[0].rstrip("/")
         if not full.lower().startswith(("http://", "https://")):
             continue
         if _registered_domain(full) != base_dom:
             continue  # off-site link, not this company's page
-        if full not in seen:
-            seen.add(full)
-            out.append(full)
-    return out[:2]
+        # Nav bars repeat the same target (desktop + mobile menu); a duplicate
+        # used to consume one of only two slots.
+        key = _ascii_lower(urlsplit(full).path).rstrip("/")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(full)
+    return out
+
+
+def _subpage_urls(base_url: str, html: str, max_pages: int = 2,
+                  budget: tuple[tuple[str, int], ...] | None = None) -> list[str]:
+    """The most informative subpages of the site, best first.
+
+    Chosen by CATEGORY rather than document order, so one legal page (identity
+    evidence) is fetched alongside the product/about pages that say what the firm
+    actually sells. Within a category the shortest path wins: '/productos' is the
+    section index, '/productos/ventanas/pvc/serie-70' is one item.
+
+    `max_pages` defaults to 2 to preserve the previous cost for existing callers;
+    enrichment asks for more.
+    """
+    ranked: dict[str, list[str]] = {}
+    for url in _own_links(base_url, html):
+        cat = _classify_link(url)
+        if cat:
+            ranked.setdefault(cat, []).append(url)
+    for urls in ranked.values():
+        urls.sort(key=lambda u: (len(urlsplit(u).path.rstrip("/")), u))
+
+    out: list[str] = []
+    for cat, take in (budget or _CATEGORY_BUDGET):
+        for url in ranked.get(cat, [])[:take]:
+            if url not in out:
+                out.append(url)
+            if len(out) >= max_pages:
+                return out
+    return out[:max_pages]
 
 
 def crawl_site(website_domain: str) -> dict | None:

@@ -363,11 +363,15 @@ def company_detail(cid: int):
     m = next((x for x in metrics if x["company_id"] == cid), None)
     if m is None:
         raise HTTPException(404, "Company not found")
+    from . import dossier
     return {
         "company": customers.get_company(cid),   # full master data — drawer works from any tab
         "metric": m,
         "history": services.company_history(cid),
         "week": services.latest_week_detail(cid),
+        # the FBI file: Belege timeline, every VC in every ROLE, the Objekte
+        # they group into, and the deterministic Kurzprofil
+        "dossier": dossier.build(cid),
     }
 
 
@@ -707,6 +711,66 @@ def icp_latest_route():
     return icp.latest_profile() or {"id": None}
 
 
+@app.post("/api/icp/trust")
+def icp_trust_route(payload: SelectTopIn):
+    """Ampel für ein On-Demand-ICP: darf man einem Profil aus DIESEM Filter
+    trauen? Prüft Positives, Basisrate (die 87%-Falle), Feature-Kollaps im
+    Filter und den Zeitsplit-Backtest — BEVOR jemand die Scores glaubt."""
+    from .insights import icp
+    try:
+        return icp.filter_trust(payload.filters or {})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/icp/backtest")
+def icp_backtest_route(cut: str | None = None, dealers_only: bool = False):
+    """Does the ICP actually rank? Always read the dealers-only number.
+
+    Across all segments the profile shows a spectacular lift, but that is mostly
+    "Architekten never buy, dealers do" — one categorical filter, not a ranking.
+    Restricted to Handel+Verarbeiter it currently does NOT rank, and the UI says
+    so rather than presenting a confident order that is noise.
+    """
+    import datetime as _dt
+    from .insights import icp
+    cutoff = None
+    if cut:
+        try:
+            cutoff = _dt.date.fromisoformat(cut)
+        except ValueError:
+            raise HTTPException(400, "cut muss YYYY-MM-DD sein")
+    segs = ("Handel", "Verarbeiter") if dealers_only else None
+    return icp.backtest(cutoff, segments=segs)
+
+
+@app.get("/api/chancen")
+def chancen_route(limit: int = 200, min_value: float = 0.0,
+                  advertising_only: bool = False):
+    """Customers who have gone quiet against their OWN order rhythm, worst first.
+
+    The list this app exists for: 32% of all lost opportunities are lost to
+    silence ("Kein Feedback vom Kunden" 23.5% + "Kein Interesse mehr" 8.8%)
+    against only 6.2% lost to competitors. A quiet customer that is still
+    visibly running ads is still spending money in the market — and that
+    combination is not visible anywhere else in the Solarlux stack.
+    """
+    from .insights import rfm
+    rows = rfm.overdue_customers(limit=max(1, min(limit, 1000)),
+                                 min_value=max(min_value, 0.0))
+    if advertising_only:
+        rows = [r for r in rows if r["advertising"]]
+    return {"rows": rows, "summary": rfm.summary(),
+            "advertising": sum(1 for r in rows if r["advertising"]),
+            "value_at_risk": round(sum(r["value"] for r in rows), 2)}
+
+
+@app.post("/api/chancen/recompute")
+def chancen_recompute_route():
+    from .insights import rfm
+    return rfm.recompute()
+
+
 @app.get("/api/customers")
 def list_customers_route(
     q: str | None = None,
@@ -871,6 +935,73 @@ def accept_website_route(company_id: int, payload: PageIn):
 def reject_website_route(company_id: int):
     from .enrich import service as enrich_service
     enrich_service.reject_candidates(company_id)
+    return {"ok": True}
+
+
+@app.get("/api/projekte")
+def projekte_route(status: str | None = None, min_members: int = 1,
+                   limit: int = 200):
+    """Objekte statt einzelner Verkaufschancen. Besonderheit Objektvertrieb:
+    mehrere VCs teilen sich ein Projekt (sl_primary_opportunityid); EIN Gewinn
+    macht das Projekt gewonnen — Geschwister-VCs mit 'Zugehörige VC gewonnen'
+    sind keine Verluste."""
+    from .insights import projekte
+    return {"overview": projekte.overview(),
+            "rows": projekte.list_projects(status=status,
+                                           min_members=max(1, min_members),
+                                           limit=max(1, min(limit, 1000)))}
+
+
+@app.get("/api/identity/review")
+def identity_review_queue_route(lead_source: str | None = None, limit: int = 200):
+    """Everything waiting for a human yes/no on a website identity, with the
+    evidence that got it there — the triage clue when Haiku judged it, the
+    candidate domain when the finder found-but-could-not-prove one."""
+    from sqlalchemy import select as _select
+    from . import scope as _scope
+    with SessionLocal() as s:
+        stmt = _scope.apply(_select(Company)).where(
+            Company.identity_status == "needs_review")
+        if lead_source:
+            stmt = stmt.where(Company.lead_source == lead_source)
+        rows = list(s.scalars(stmt.order_by(Company.beleg_sum.desc()).limit(limit)))
+        out = []
+        for c in rows:
+            ev = c.identity_evidence or {}
+            out.append({
+                "company_id": c.id, "name": c.name, "city": c.city,
+                "postal_code": c.postal_code, "segment": c.segment,
+                "import_type": c.import_type, "notes": (c.notes or "")[:200],
+                # domain set -> triage said likely_right about the CURRENT domain;
+                # domain empty -> the finder proposes ev['review_candidate']
+                "domain": c.website_domain or ev.get("review_candidate"),
+                "clue": (ev.get("triage") or {}).get("clue"),
+                "what": (ev.get("triage") or {}).get("what"),
+            })
+    return {"rows": out}
+
+
+@app.post("/api/companies/{company_id}/identity/reject")
+def identity_reject_route(company_id: int):
+    """Human says: this is NOT their site. Mirrors triage's wrong_site routing —
+    the domain is cleared into evidence so the finder can search for the real
+    one; a candidate that was never written just gets marked rejected."""
+    with SessionLocal() as s:
+        c = s.get(Company, company_id)
+        if not c:
+            raise HTTPException(404, "company not found")
+        ev = dict(c.identity_evidence or {})
+        if c.website_domain:
+            ev["review"] = {"decision": "rejected", "domain": c.website_domain}
+            c.website_domain = None
+            c.website_source = None
+            c.identity_status = None          # finder's pending_ids picks it up
+        else:
+            ev["review"] = {"decision": "rejected",
+                            "domain": ev.get("review_candidate")}
+            c.identity_status = "not_found"   # searched, human said no
+        c.identity_evidence = ev
+        s.commit()
     return {"ok": True}
 
 

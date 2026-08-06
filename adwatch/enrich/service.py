@@ -35,7 +35,10 @@ _CONFIDENCE = {"sap": 1.0, "phone": 0.97, "plz_street": 0.95, "plz_name": 0.9,
                "domain_plus_name": 0.8, "manual": 1.0}
 
 _COMPANY_KEYS = ("id", "name", "phone", "postal_code", "street", "city", "country",
-                 "email", "website_domain")
+                 "email", "website_domain",
+                 # segment/sub_segment select the extraction PROFILE (a planning
+                 # office needs different questions than a fabricator)
+                 "segment", "sub_segment")
 
 
 def _company_dict(c: Company) -> dict:
@@ -189,9 +192,22 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
     # ---- Tier 2: facts from the site's own text -------------------------------
     bundle = site.get("bundle")
     if site["domain"] and bundle and (bundle.get("text") or "").strip():
+        # Deterministic self-declared facts first — free, and more trustworthy
+        # than prose extraction, so they are recorded even when the LLM stage is
+        # skipped or fails.
+        if bundle.get("facts"):
+            fields["site_facts"] = bundle["facts"]
+            provenance["site_facts"] = _prov(
+                "website-strukturdaten", 0.9,
+                "JSON-LD / tel: / mailto: / meta — kein LLM")
         if allow_llm:
             try:
-                facts = extract.extract_facts(bundle["text"])
+                # Architekturbüros get their own prompt: they SPECIFY systems,
+                # they never sell or fabricate them, so the dealer prompt asks
+                # the wrong questions and yields empty or misleading fields.
+                prof = extract.profile_for(comp.get("segment"),
+                                           comp.get("sub_segment"))
+                facts = extract.extract_facts(bundle["text"], profile=prof)
                 ev = facts.pop("evidence", {}) or {}
                 model = facts.pop("llm_model", None)
                 for key, value in facts.items():
@@ -284,6 +300,52 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             c.products = merged.get("products") or None
             c.founded_year = merged.get("founded_year") or None
             c.employee_hint = merged.get("employee_hint") or None
+            # Previously stopped here, leaving everything below trapped in
+            # `row.fields` where no filter, export, report or ICP feature could
+            # reach it — we paid the extraction and then hid the result.
+            c.legal_form = merged.get("legal_form") or None
+            c.service_area = merged.get("service_area") or None
+            c.competitor_brands = merged.get("competitor_brands") or None
+            c.mentions_solarlux = merged.get("mentions_solarlux")
+            c.assessment = merged.get("assessment_de") or None
+            c.certifications = merged.get("certifications") or None
+            c.own_fabrication = merged.get("own_fabrication")
+            c.has_showroom = merged.get("has_showroom")
+            c.project_focus = merged.get("project_focus") or None
+            c.positioning = merged.get("positioning") or None
+            # architect profile only — null for dealers, which is correct:
+            # 'not applicable' and 'not stated' are both null in this app
+            c.solarlux_relevance = merged.get("solarlux_relevance") or None
+            c.office_type = merged.get("office_type") or None
+            c.decision_role = merged.get("decision_role") or None
+            c.reference_scale = merged.get("reference_scale") or None
+            c.enrich_profile = merged.get("profile") or c.enrich_profile
+            # Machine-readable self-declared facts (site_facts). These only ever
+            # FILL a gap: a phone or address from CRM is authoritative master
+            # data and must not be replaced by a website's version.
+            facts = merged.get("site_facts") or {}
+            social = facts.get("social") or {}
+            for col, key in (("facebook_url", "facebook"),
+                             ("instagram_url", "instagram"),
+                             ("linkedin_url", "linkedin")):
+                if social.get(key) and not getattr(c, col):
+                    setattr(c, col, social[key][:300])
+            if facts.get("language") and not c.site_language:
+                c.site_language = facts["language"]
+            if facts.get("phone") and not c.phone:
+                c.phone = str(facts["phone"])[:80]
+                provenance["phone"] = _prov("site_facts", 0.8, "tel/JSON-LD")
+            if facts.get("email") and not c.email:
+                c.email = str(facts["email"])[:300]
+                provenance["email"] = _prov("site_facts", 0.8, "mailto/JSON-LD")
+            if facts.get("postal_code") and not c.postal_code:
+                c.postal_code = str(facts["postal_code"])[:20]
+            if facts.get("street") and not c.street:
+                c.street = str(facts["street"])[:300]
+            if facts.get("city") and not c.city:
+                c.city = str(facts["city"])[:200]
+            if facts.get("founded_year") and not c.founded_year:
+                c.founded_year = facts["founded_year"]
         c.enrichment_status = status
         # A human's decision outranks any automatic label: once a website was
         # approved in the review queue, a later automatic pass (which now simply
@@ -318,6 +380,16 @@ def accept_candidate(company_id: int, domain: str) -> dict:
         if not c:
             raise ValueError("Company not found")
         c.website_domain = dom
+        # The identity columns must agree with the enrichment provenance, or the
+        # row keeps surfacing in the review queue after a human already decided
+        # — and the Google ad gate would treat a human-approved site as unknown.
+        c.website_source = "manual"
+        c.identity_status = "verified"
+        c.identity_matched_by = "manual"
+        c.identity_checked_at = dt.datetime.utcnow()
+        ev = dict(c.identity_evidence or {})
+        ev["review"] = {"decision": "accepted", "domain": dom}
+        c.identity_evidence = ev
         row = s.scalar(select(CompanyEnrichment).where(CompanyEnrichment.company_id == company_id))
         if row is None:
             row = CompanyEnrichment(company_id=company_id)

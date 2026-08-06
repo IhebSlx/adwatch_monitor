@@ -62,6 +62,29 @@ _FEATURE_LABEL_DE = {
 }
 
 # ---------------------------------------------------------------------------
+# Availability leakage
+# ---------------------------------------------------------------------------
+# A feature can separate winners from everyone else for the wrong reason: it is
+# simply KNOWN more often for winners. Two live cases in this app:
+#
+#   size_bucket   comes from website enrichment, and enrichment was run on the
+#                 monitored base — which was the old buyers-only Excel export.
+#   ad_presence   exists only for the ~580 companies with a linked ad page, and
+#                 those were chosen from that same buyer base.
+#
+# Both then "predict" buying with high confidence while carrying no information
+# about fit at all. The equivalent trap in CRM is `numberofemployees`: filled on
+# 467 of 15,235 dealers, buy rate 47-75% where filled vs 20.7% where not, because
+# a rep fills it in for accounts they are already working. It is deliberately NOT
+# imported, and tests assert it stays out.
+#
+# A feature is dropped from SCORING when it is known for winners far more often
+# than for the population being scored. Reporting it in diagnose() is still
+# useful — knowing the leak exists is what stops someone re-adding the feature.
+_LEAK_RATIO = 2.5      # winners' coverage this many times the population's
+_LEAK_POP_FLOOR = 0.6  # ...and the population is not broadly covered anyway
+
+# ---------------------------------------------------------------------------
 # feature extraction per company
 # ---------------------------------------------------------------------------
 
@@ -157,6 +180,74 @@ def company_features(c: Company, ads: dict[int, str]) -> dict:
 # profile building
 # ---------------------------------------------------------------------------
 
+def material_buyer_ids(min_eur: float | None = None) -> list[int]:
+    """Companies with at least one order EVENT at or above the materiality floor.
+
+    Uses CrmOrderEvent (Belege collapsed per company+day) rather than Company
+    revenue columns, and `max(amount)` rather than a sum: one real system order is
+    what makes a company a system customer. Summing hundreds of small orders to
+    clear the floor would readmit exactly the spare-parts buyers the floor exists
+    to keep out.
+    """
+    from ..models import CrmOrderEvent
+    from .rfm import MATERIAL_EUR
+    floor = MATERIAL_EUR if min_eur is None else min_eur
+    with SessionLocal() as s:
+        q = (select(CrmOrderEvent.company_id)
+             .group_by(CrmOrderEvent.company_id)
+             .having(func.max(CrmOrderEvent.amount) >= floor))
+        return [cid for (cid,) in s.execute(q)]
+
+
+def _population_stats(feats: tuple[str, ...], pop_ids: list[int] | None = None) -> dict:
+    """Per feature: how often it is known in the SCORED population, and how the
+    population distributes across its values.
+
+    Both halves are needed. Coverage catches availability leakage (see _LEAK_RATIO
+    above). The value distribution is what turns a winners' share into a LIFT —
+    without it the profile can only say "this value is common among customers",
+    which is not the same as "this value predicts becoming one".
+    """
+    with SessionLocal() as s:
+        stmt = scope.apply(select(Company))
+        if pop_ids is not None:
+            stmt = stmt.where(Company.id.in_(pop_ids))
+        pop = list(s.scalars(stmt))
+    ads = _ad_presence_map()
+    out: dict[str, dict] = {}
+    for f in feats:
+        counts: dict[str, int] = {}
+        known = 0
+        for c in pop:
+            v = company_features(c, ads)[f]
+            if f == "products":
+                if v:
+                    known += 1
+                    for p in v:
+                        counts[p] = counts.get(p, 0) + 1
+            elif v:
+                known += 1
+                counts[v] = counts.get(v, 0) + 1
+        out[f] = {"coverage": (known / len(pop)) if pop else 0.0,
+                  "counts": counts, "known": known}
+    return out
+
+
+# Laplace smoothing when turning counts into a lift. Without it a value held by
+# three winners and three population rows would read as a perfect 1.0 predictor,
+# and a value no winner happens to have would read as lift 0 = "impossible".
+_SMOOTH = 2.0
+
+# A value must appear at least this often in the population before its lift is
+# trusted for scoring. Rare values produce enormous lifts from tiny numerators.
+_MIN_VALUE_SUPPORT = 15
+
+# Lift is clamped into this band before scoring. The cap stops one extreme value
+# dominating the weighted sum; the floor keeps a "never buys" value informative
+# without letting it veto everything else about a company.
+_LIFT_CLAMP = (0.2, 5.0)
+
+
 def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
     """Compute the winners' feature distributions for a chosen filter (default:
     everyone who ever bought — customer_state active/new/lapsed). Returns the
@@ -165,13 +256,25 @@ def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
 
     filters = dict(filters or {})
     if not any(filters.values()):
-        # Default winners: the companies buying NOW (active + new), minus the
-        # segments that are not partner material at all. Deliberately NOT
-        # "everyone who ever bought" — in this dataset that is the entire
-        # population (it's a customer export, never-bought = 0), and a profile
-        # built from everyone just mirrors the population and ranks nothing.
-        filters = {"customer_state": ["active", "new"],
-                   "exclude_segment": list(WINNER_EXCLUDED_SEGMENTS)}
+        # Default winners: companies with a MATERIAL purchase on record.
+        #
+        # This used to be customer_state active/new, derived from the
+        # revenue_y0..y4 snapshot — a CRM field filled on 2.9% of accounts. That
+        # was defensible only while the base WAS the buyers-only Excel export.
+        # Now that the full population is loaded, the snapshot marks almost
+        # nobody and the Belege are the authoritative source.
+        #
+        # "Material" matters as much as "bought": ~25% of Belege are 0 EUR and the
+        # median is 194 EUR, so a spare-parts order would otherwise make a company
+        # a winner and teach the profile the traits of a gasket buyer.
+        ids = material_buyer_ids()
+        if len(ids) >= MIN_WINNERS_USABLE:
+            filters = {"ids": ids,
+                       "exclude_segment": list(WINNER_EXCLUDED_SEGMENTS)}
+        else:
+            # No Beleg data loaded yet — fall back so a fresh DB still works.
+            filters = {"customer_state": ["active", "new"],
+                       "exclude_segment": list(WINNER_EXCLUDED_SEGMENTS)}
     elif not filters.get("include_consumers"):
         # An explicit filter is respected, but consumers never DEFINE the profile.
         # Keyed on include_consumers, not on whether ids were supplied: a
@@ -213,6 +316,49 @@ def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
             "top": sorted(shares.items(), key=lambda kv: -kv[1])[:8],
             "shares": shares,
         }
+
+    # ---- population comparison: leakage check + LIFT per value ----
+    pstats = _population_stats(tuple(DEFAULT_WEIGHTS))
+    for feat, dist in dists.items():
+        ps = pstats.get(feat) or {"coverage": 0.0, "counts": {}, "known": 0}
+        pc, wc = ps["coverage"], dist["coverage"]
+        dist["pop_coverage"] = round(pc, 3)
+        ratio = (wc / pc) if pc > 0 else (float("inf") if wc > 0 else 0.0)
+        dist["availability_ratio"] = (round(ratio, 2) if ratio != float("inf")
+                                      else None)
+        dist["leaky"] = bool(wc > 0 and pc < _LEAK_POP_FLOOR
+                             and (pc == 0 or ratio >= _LEAK_RATIO))
+
+        # lift(value) = P(winner | value) / P(winner), computed from the two
+        # distributions by Bayes: (winner share of value) / (population share).
+        # This is the number that replaced winners'-share scoring, because a
+        # share only says "common among customers". Measured case: Bauelemente-
+        # handel is 36.5% of winners but converts at 1.03x, while Wintergartenbau
+        # is ~1% of winners and converts at 1.62x — share ranked them backwards.
+        p_known = ps["known"] or 0
+        w_known = max(int(round(dist["coverage"] * len(winners))), 0) if winners else 0
+        k = max(len(set(dist["shares"]) | set(ps["counts"])), 1)
+        lifts: dict[str, float] = {}
+        support: dict[str, int] = {}
+        for value, w_share in (dist["shares"] or {}).items():
+            p_count = ps["counts"].get(value, 0)
+            support[value] = p_count
+            # Never demand more support than a tenth of the data — otherwise the
+            # floor that protects a 46,000-row population from noise silently
+            # refuses to score anything at all on a small base.
+            floor = max(3, min(_MIN_VALUE_SUPPORT, p_known // 10))
+            if p_count < floor or not p_known or not w_known:
+                continue
+            w_rate = (w_share * w_known + _SMOOTH) / (w_known + _SMOOTH * k)
+            p_rate = (p_count + _SMOOTH) / (p_known + _SMOOTH * k)
+            if p_rate <= 0:
+                continue
+            lifts[value] = round(min(max(w_rate / p_rate, _LIFT_CLAMP[0]),
+                                     _LIFT_CLAMP[1]), 4)
+        dist["lifts"] = lifts
+        dist["support"] = support
+        dist["top_lift"] = sorted(lifts.items(), key=lambda kv: -kv[1])[:8]
+
     return {"name": name, "winners_filter": filters, "winners_count": len(winners),
             "features": dists, "weights": dict(DEFAULT_WEIGHTS)}
 
@@ -234,9 +380,10 @@ def fit_for(features: dict, profile: dict) -> tuple[float | None, list[dict]]:
     the feature's modal share (so the most typical winner value = 1.0).
     Unknown company values are skipped and weights renormalised. Returns
     (None, []) when NOTHING was comparable."""
+    import math
     weights = profile.get("weights") or DEFAULT_WEIGHTS
     breakdown: list[dict] = []
-    total_w = scored = 0.0
+    total_w = raw = 0.0
     for feat, weight in weights.items():
         dist = (profile.get("features") or {}).get(feat) or {}
         shares = dist.get("shares") or {}
@@ -249,6 +396,17 @@ def fit_for(features: dict, profile: dict) -> tuple[float | None, list[dict]]:
         # number and then scoring with it is worse than not having it.
         if (dist.get("coverage") or 0) < _MIN_COVERAGE:
             continue
+        # Known for winners far more often than for the population — it separates
+        # them because of who got enriched/monitored, not because of fit. Scoring
+        # with it produces a confident model that says "accounts we already sell
+        # to, buy from us". diagnose() still reports it so the leak stays visible.
+        if dist.get("leaky"):
+            continue
+        lifts = dist.get("lifts")
+        if lifts is None:
+            # profile saved before lift scoring existed — refuse to score rather
+            # than silently fall back to the share method this replaced
+            continue
         max_share = max(shares.values())
         if max_share >= 0.9 and feat != "products":
             # non-discriminating: ~every winner has the same value (live case:
@@ -259,22 +417,30 @@ def fit_for(features: dict, profile: dict) -> tuple[float | None, list[dict]]:
         if feat == "products":
             if not value:
                 continue
-            pts = sum(shares.get(p, 0.0) for p in value) / (len(value) * max_share)
+            known = [lifts[p] for p in value if p in lifts]
+            if not known:
+                continue
+            lift = sum(known) / len(known)
             shown = ", ".join(value[:4])
         else:
-            if not value:
+            if not value or value not in lifts:
+                # unknown, or too rare in the population to have a trusted lift
                 continue
-            pts = shares.get(value, 0.0) / max_share
+            lift = lifts[value]
             shown = value
-        pts = min(pts, 1.0)
         total_w += weight
-        scored += weight * pts
+        raw += weight * math.log(lift)
         breakdown.append({"feature": feat, "label": dist.get("label", feat),
-                          "value": shown, "points": round(pts, 3), "weight": weight})
+                          "value": shown, "lift": round(lift, 2),
+                          "points": round(lift, 3), "weight": weight})
     if total_w <= 0:
         return None, []
-    fit = round(100.0 * scored / total_w, 1)
-    breakdown.sort(key=lambda b: -(b["points"] * b["weight"]))
+    # Weighted mean log-lift, squashed to 0-100. The squash is monotonic, so it
+    # changes no ranking — it only makes the number readable. 50 = exactly the
+    # base rate, above 50 = more likely than average to buy, below = less.
+    mean_log = raw / total_w
+    fit = round(100.0 / (1.0 + math.exp(-mean_log)), 1)
+    breakdown.sort(key=lambda b: -(abs(math.log(max(b["points"], 1e-9))) * b["weight"]))
     return fit, breakdown
 
 
@@ -477,6 +643,216 @@ def diagnose(filters: dict | None = None) -> dict:
     return {"verdict": verdict, "winners": n, "population": len(population),
             "reasons": reasons, "features": features, "splits": splits,
             "winners_filter": win_filter}
+
+
+def filter_trust(filters: dict | None = None, cut: dt.date | None = None) -> dict:
+    """Can an ICP built from THIS filter be trusted? The on-demand guardrail.
+
+    "Enough positives" is necessary but not sufficient — this project hit every
+    other failure mode an on-demand filter can produce, so each is checked:
+
+      * positives         < 30 unusable, < 150 indicative only (noise floors we
+                          measured; below them distributions are decoration)
+      * base rate         near 100% inside the filter = the 87% trap: everyone a
+                          buyer, nothing to discriminate (the original Excel base)
+      * near 0% = nothing to learn FROM either
+      * outcome leakage   a filter that selects on the outcome ("has ads" ->
+                          profile 'predicts' ads) can't be caught mechanically in
+                          general, but ad/enrichment-derived filters are flagged
+      * feature collapse  filtering ON the best feature makes it uniform inside
+                          the filter (Wintergartenbau-only -> sub_segment says
+                          nothing anymore); reported so the drop in power is
+                          expected rather than mysterious
+      * backtest          the final word: does it actually RANK within the
+                          filter, on a time split (lift@decile + monotonicity)
+
+    Verdict: 'green' (rank and use), 'yellow' (directional — use as a scorecard,
+    not an ordering), 'red' (do not rank; use plain filters). Written for the
+    Profil tab so a colleague sees the verdict BEFORE trusting a score.
+    """
+    from ..customers import _apply_filters
+    from ..models import CrmOrderEvent
+    from .rfm import MATERIAL_EUR
+
+    filters = dict(filters or {})
+    reasons: list[str] = []
+    flags: list[str] = []
+
+    # filters derived from ad or enrichment activity select on engagement — the
+    # profile then "discovers" the funnel that produced the filter
+    for k in filters:
+        if k in ("resolution_status", "enrichment_status", "has_ads", "advertising"):
+            flags.append(f"Filter '{k}' basiert auf unserer eigenen Aktivität — "
+                         "das Profil würde den eigenen Funnel 'entdecken'")
+
+    with SessionLocal() as s:
+        pop = list(s.scalars(_apply_filters(scope.apply(select(Company)), filters)
+                             .where(Company.is_intercompany.is_(False))))
+        events: dict[int, float] = {}
+        for cid, amt in s.execute(select(CrmOrderEvent.company_id,
+                                         func.max(CrmOrderEvent.amount))
+                                  .group_by(CrmOrderEvent.company_id)):
+            events[cid] = float(amt or 0)
+
+    positives = [c for c in pop if events.get(c.id, 0.0) >= MATERIAL_EUR]
+    n_pop, n_pos = len(pop), len(positives)
+    base = (n_pos / n_pop) if n_pop else 0.0
+
+    if n_pos < MIN_WINNERS_USABLE:
+        reasons.append(f"nur {n_pos} Gewinner im Filter — unter {MIN_WINNERS_USABLE} "
+                       "sind Verteilungen Rauschen; Scorecard statt Statistik verwenden")
+    elif n_pos < 150:
+        flags.append(f"{n_pos} Gewinner — indikativ, nicht stabil (ab ~150 belastbar)")
+    else:
+        # Events-per-variable guidance (Peduzzi 1996: >=10 EPV for stable
+        # estimates; Harrell suggests 15-20). Our scoring is per-category lift
+        # with smoothing, which is more forgiving than raw logistic regression —
+        # and 'green' is ultimately decided by the OUT-OF-TIME backtest below,
+        # which van Smeden et al. argue matters more than any EPV rule. So this
+        # is a warning, never a blocker: thin-per-feature evidence with a
+        # passing backtest is usable; the warning explains the residual risk.
+        epv = n_pos / max(len(DEFAULT_WEIGHTS), 1)
+        if epv < 10:
+            flags.append(
+                f"~{epv:.0f} Gewinner je Merkmal (Richtwert >=10): einzelne "
+                "Merkmalswerte können überangepasst sein — Backtest entscheidet")
+    if n_pop and base >= 0.7:
+        reasons.append(f"Basisrate {base:.0%} im Filter — fast alle sind Käufer, "
+                       "es gibt nichts zu diskriminieren (die 87%-Falle)")
+    if n_pop and n_pos and base <= 0.005:
+        flags.append(f"Basisrate {base:.2%} — extrem selten; Ranking möglich, aber "
+                     "Treffer bleiben absolut selten")
+
+    # feature collapse: which scoring features become near-uniform INSIDE the filter
+    collapsed: list[str] = []
+    if n_pop >= 30:
+        ads = _ad_presence_map([c.id for c in pop])
+        for feat in DEFAULT_WEIGHTS:
+            vals = {}
+            known = 0
+            for c in pop:
+                v = company_features(c, ads)[feat]
+                if feat == "products":
+                    continue
+                if v:
+                    known += 1
+                    vals[v] = vals.get(v, 0) + 1
+            if known >= n_pop * 0.5 and vals and max(vals.values()) / known >= 0.95:
+                collapsed.append(feat)
+        if collapsed:
+            flags.append("im Filter (nahezu) konstant und damit wirkungslos: "
+                         + ", ".join(collapsed))
+
+    result = {"filters": filters, "population": n_pop, "positives": n_pos,
+              "base_rate": round(base, 4), "blockers": reasons, "warnings": flags,
+              "collapsed_features": collapsed}
+
+    if reasons:
+        result["verdict"] = "red"
+        return result
+
+    # the final word: does it rank, on a time split, WITHIN the filter?
+    ids = [c.id for c in pop]
+    bt = backtest(cut, ids=ids)
+    result["backtest"] = {k: bt.get(k) for k in
+                          ("train", "test", "positives", "base_rate",
+                           "top_decile_lift", "monotone_steps", "of_steps", "ranks")}
+    if bt.get("ranks"):
+        result["verdict"] = "yellow" if flags else "green"
+    else:
+        result["verdict"] = "yellow" if n_pos >= 150 else "red"
+        result["warnings"].append(
+            "Backtest: kein Ranking innerhalb des Filters (Lift "
+            f"{bt.get('top_decile_lift')}) — Ergebnis als Scorecard/Filter nutzen, "
+            "nicht als Reihenfolge")
+    return result
+
+
+def backtest(cut: dt.date | None = None, segments: tuple[str, ...] | None = None,
+             deciles: int = 10, ids: list[int] | None = None) -> dict:
+    """Does the profile actually RANK? Train before `cut`, test after it.
+
+    This exists because the app twice reported a spectacular top-vs-bottom lift
+    that was an artefact. Both times the profile was really only sorting segments
+    — "Architekten never buy, dealers do" — which is true, already known, and one
+    categorical filter rather than a ranking. Measured here: 164x across all
+    segments, but 0.63x restricted to Handel+Verarbeiter, i.e. no ordering power
+    at all inside the population anyone actually prospects.
+
+    So always read `by_segment_restricted` alongside the headline, and treat
+    `ranks` as the verdict. Pass `segments` to restrict the test population.
+    """
+    from ..models import CrmOrderEvent
+    from .rfm import MATERIAL_EUR
+    cut = cut or (dt.date.today() - dt.timedelta(days=365 * 2))
+
+    with SessionLocal() as s:
+        events: dict[int, list[tuple[dt.date, float]]] = {}
+        for cid, d, amt in s.execute(select(CrmOrderEvent.company_id,
+                                            CrmOrderEvent.order_date,
+                                            CrmOrderEvent.amount)):
+            events.setdefault(cid, []).append((d, float(amt or 0)))
+        pop = [c for c in s.scalars(scope.apply(select(Company)))
+               if not c.is_intercompany
+               and (segments is None or c.segment in segments)
+               and (ids is None or c.id in set(ids))]
+
+    train, later, test_ids = [], set(), []
+    for c in pop:
+        mats = [d for d, a in events.get(c.id, []) if a >= MATERIAL_EUR]
+        if any(d <= cut for d in mats):
+            train.append(c.id)
+        else:
+            test_ids.append(c.id)
+            if mats:
+                later.add(c.id)
+
+    out = {"cut": cut.isoformat(), "segments": list(segments) if segments else None,
+           "train": len(train), "test": len(test_ids), "positives": len(later)}
+    if len(train) < MIN_WINNERS_USABLE or not test_ids or not later:
+        out["ranks"] = False
+        out["reason"] = ("zu wenige Trainings-Gewinner" if len(train) < MIN_WINNERS_USABLE
+                         else "keine Käufer im Testzeitraum")
+        return out
+
+    profile = build_profile({"ids": train,
+                             "exclude_segment": list(WINNER_EXCLUDED_SEGMENTS)},
+                            name="Backtest")
+    ads = _ad_presence_map()
+    with SessionLocal() as s:
+        comps = list(s.scalars(select(Company).where(Company.id.in_(test_ids))))
+    scored = []
+    for c in comps:
+        fit, _ = fit_for(company_features(c, ads), profile)
+        if fit is not None:
+            scored.append((fit, c.id in later))
+    if not scored:
+        out["ranks"] = False
+        out["reason"] = "nichts bewertbar"
+        return out
+
+    scored.sort(key=lambda x: -x[0])
+    n = len(scored)
+    base = sum(1 for _, y in scored if y) / n
+    rates = []
+    for i in range(deciles):
+        lo, hi = i * n // deciles, (i + 1) * n // deciles
+        part = scored[lo:hi] or [(0, False)]
+        rates.append(sum(1 for _, y in part if y) / len(part))
+    top, bot = rates[0], rates[-1]
+    # "Ranks" needs BOTH a real top-vs-bottom gap and a mostly monotone curve.
+    # A big gap with a jagged curve is what an artefact looks like.
+    monotone = sum(1 for i in range(deciles - 1) if rates[i] >= rates[i + 1])
+    out.update({
+        "scored": n, "base_rate": round(base, 4),
+        "decile_rates": [round(r, 4) for r in rates],
+        "top_decile_lift": round(top / base, 2) if base else None,
+        "top_vs_bottom": round(top / bot, 2) if bot else None,
+        "monotone_steps": monotone, "of_steps": deciles - 1,
+        "ranks": bool(top / base >= 1.3 and monotone >= (deciles - 1) * 0.7)
+        if base else False,
+    })
+    return out
 
 
 def latest_profile() -> dict | None:

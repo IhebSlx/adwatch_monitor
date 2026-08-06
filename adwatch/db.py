@@ -7,6 +7,7 @@ single page_id column) so upgrading never requires wiping collected history.
 from __future__ import annotations
 
 import logging
+import threading
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -214,6 +215,126 @@ def _migrate(engine) -> None:
                   ELSE 'never' END
                 WHERE customer_state IS NULL
             """))
+        # companies: Belege (ax_sap_order) revenue + prescriptor influence + the
+        # `monitored` gate. All additive. `monitored` defaults to 1 and is
+        # backfilled to 1 so every company that existed before the bulk CRM
+        # import keeps its ad tracking; only bulk-imported rows arrive as 0.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("beleg_count", "INTEGER DEFAULT 0"), ("beleg_sum", "FLOAT DEFAULT 0"),
+                ("beleg_first", "DATE"), ("beleg_last", "DATE"),
+                ("beleg_by_year", "JSON"), ("avg_discount", "FLOAT"),
+                ("arch_projects", "INTEGER DEFAULT 0"), ("arch_won", "INTEGER DEFAULT 0"),
+                ("arch_won_value", "FLOAT DEFAULT 0"),
+                ("health", "VARCHAR(16)"), ("winback_score", "FLOAT"),
+                ("crm_synced_at", "DATETIME"),
+                ("monitored", "BOOLEAN DEFAULT 1"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            conn.execute(text("UPDATE companies SET monitored = 1 WHERE monitored IS NULL"))
+            for c, zero in (("beleg_count", "0"), ("beleg_sum", "0"),
+                            ("arch_projects", "0"), ("arch_won", "0"),
+                            ("arch_won_value", "0")):
+                conn.execute(text(f"UPDATE companies SET {c} = {zero} WHERE {c} IS NULL"))
+        # companies: enrichment fields that were previously trapped in
+        # CompanyEnrichment.fields JSON, plus the new qualification attributes and
+        # the self-declared facts from site_facts.py. All additive + nullable —
+        # NULL means "not stated", which must stay distinct from False.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("legal_form", "VARCHAR(60)"), ("service_area", "VARCHAR(200)"),
+                ("competitor_brands", "JSON"), ("mentions_solarlux", "BOOLEAN"),
+                ("assessment", "TEXT"), ("certifications", "JSON"),
+                ("own_fabrication", "BOOLEAN"), ("has_showroom", "BOOLEAN"),
+                ("project_focus", "JSON"), ("positioning", "VARCHAR(20)"),
+                ("solarlux_relevance", "VARCHAR(10)"), ("office_type", "VARCHAR(30)"),
+                ("decision_role", "VARCHAR(20)"), ("reference_scale", "VARCHAR(200)"),
+                ("enrich_profile", "VARCHAR(16)"),
+                ("facebook_url", "VARCHAR(300)"), ("instagram_url", "VARCHAR(300)"),
+                ("linkedin_url", "VARCHAR(300)"), ("site_language", "VARCHAR(8)"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+        # companies: non-CRM lead provenance + competitor flag.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [("is_competitor", "BOOLEAN DEFAULT 0"),
+                              ("lead_source", "VARCHAR(60)"),
+                              ("import_type", "VARCHAR(40)")]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            conn.execute(text("UPDATE companies SET is_competitor = 0 "
+                              "WHERE is_competitor IS NULL"))
+        # companies: website provenance + real-world identity verification.
+        # Backfill is deliberate and conservative: every existing domain becomes
+        # 'unverified' unless the enrichment gate actually ran for that company
+        # (a CompanyEnrichment row exists). 22,696 of them were bulk-filled from
+        # CRM with no check, and treating those as verified is precisely the bug
+        # these columns exist to prevent.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("website_source", "VARCHAR(20)"),
+                ("identity_status", "VARCHAR(16)"),
+                ("identity_matched_by", "VARCHAR(24)"),
+                ("identity_evidence", "JSON"),
+                ("identity_checked_at", "DATETIME"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            if _existing_columns(conn, "company_enrichment"):
+                conn.execute(text("""
+                    UPDATE companies SET identity_status = 'unverified'
+                    WHERE website_domain IS NOT NULL AND identity_status IS NULL
+                """))
+                # the gate ran and accepted -> carry that verdict over. ONLY onto
+                # rows that never got a verdict: this UPDATE re-runs on every
+                # startup, and without the NULL guard it silently flipped 188
+                # PROVEN-conflict Spanish domains back to 'verified' — after
+                # which the Google ad step happily attributed ads through
+                # domains the verifier had disproven (e.g. technal.com, a
+                # manufacturer's portal shared by several dealer rows).
+                conn.execute(text("""
+                    UPDATE companies SET identity_status = 'verified'
+                    WHERE website_domain IS NOT NULL
+                      AND identity_status IS NULL
+                      AND enrichment_status = 'enriched'
+                      AND EXISTS (SELECT 1 FROM company_enrichment e
+                                  WHERE e.company_id = companies.id)
+                """))
+        # companies: Angebote (ax_sap_quote) + conversion. Additive.
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [("quote_count", "INTEGER DEFAULT 0"),
+                              ("quote_sum", "FLOAT DEFAULT 0"),
+                              ("conversion_rate", "FLOAT")]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
+            for c in ("quote_count", "quote_sum"):
+                conn.execute(text(f"UPDATE companies SET {c} = 0 WHERE {c} IS NULL"))
+        # crm_opportunities: loss reason + values + project linkage
+        cols = _existing_columns(conn, "crm_opportunities")
+        if cols:
+            for name, ddl in [("lost_reason", "VARCHAR(80)"),
+                              ("estimated_value", "FLOAT"),
+                              ("end_customer_budget", "FLOAT"),
+                              ("project_id", "VARCHAR(40)"),
+                              ("opportunity_guid", "VARCHAR(40)"),
+                              ("project_name", "VARCHAR(200)"),
+                              ("type_of_use", "VARCHAR(60)"), ("vc_type", "VARCHAR(30)"),
+                              ("dealer_status", "VARCHAR(40)"), ("origin", "VARCHAR(60)"),
+                              ("rating", "VARCHAR(30)"), ("priority", "VARCHAR(30)"),
+                              ("sales_stage", "VARCHAR(40)"), ("vr_presented", "BOOLEAN"),
+                              ("business_unit", "VARCHAR(40)"), ("total_amount", "FLOAT"),
+                              ("estimated_close", "DATE"),
+                              ("invoiced_value", "FLOAT"), ("invoiced_count", "INTEGER DEFAULT 0"),
+                              ("quoted_value", "FLOAT"), ("quoted_count", "INTEGER DEFAULT 0"),
+                              ("sap_order_numbers", "JSON")]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE crm_opportunities ADD COLUMN {name} {ddl}"))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
         cols = _existing_columns(conn, "fetch_jobs")
         if cols and "plan" not in cols:
@@ -262,10 +383,26 @@ def _migrate(engine) -> None:
                 ), {"name": None, "email": config.REPORT_EMAIL_DEFAULT_RECIPIENT})
 
 
+# init_db() is called defensively from several entry points (web startup, CLI,
+# both fetch pipelines). Once per PROCESS is enough — and more than enough is
+# harmful: with 6 parallel ad workers each entering a fetch pipeline, every
+# worker re-ran the whole migration block, the UPDATEs fought over SQLite's
+# write lock, and real ad fetches failed with 'database is locked' (job 47).
+_init_done = False
+_init_lock = threading.Lock()
+
+
 def init_db() -> None:
-    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    integrity_ok()                     # loud warning if the DB file is corrupt
-    from .backup import backup_now
-    backup_now(tag="startup")          # snapshot before any migration runs
-    Base.metadata.create_all(_engine)
-    _migrate(_engine)
+    global _init_done
+    if _init_done:
+        return
+    with _init_lock:
+        if _init_done:
+            return
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        integrity_ok()                 # loud warning if the DB file is corrupt
+        from .backup import backup_now
+        backup_now(tag="startup")      # snapshot before any migration runs
+        Base.metadata.create_all(_engine)
+        _migrate(_engine)
+        _init_done = True

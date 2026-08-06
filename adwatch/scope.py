@@ -34,9 +34,18 @@ def in_scope_clause():
     A NULL segment is KEPT: unknown is not the same as consumer, and silently
     dropping unclassified rows would hide a data-quality problem instead of
     showing it.
+
+    Competitors' own locations are excluded too. They are imported deliberately
+    (see Company.is_competitor) because the competitive footprint is useful, but a
+    Schüco showroom must never surface in a count, a ranking or a call list. A
+    NULL is treated as False so rows predating the column stay in scope.
     """
-    return or_(Company.segment.is_(None),
-               Company.segment.not_in(EXCLUDED_SEGMENTS))
+    from sqlalchemy import and_
+    return and_(
+        or_(Company.segment.is_(None),
+            Company.segment.not_in(EXCLUDED_SEGMENTS)),
+        or_(Company.is_competitor.is_(None), Company.is_competitor.is_(False)),
+    )
 
 
 def apply(stmt):
@@ -44,8 +53,10 @@ def apply(stmt):
     return stmt.where(in_scope_clause())
 
 
-def is_in_scope(segment: str | None) -> bool:
+def is_in_scope(segment: str | None, is_competitor: bool | None = False) -> bool:
     """Same rule for rows already loaded in Python."""
+    if is_competitor:
+        return False
     return segment is None or segment not in EXCLUDED_SEGMENTS
 
 
