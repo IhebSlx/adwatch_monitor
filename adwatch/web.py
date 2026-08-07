@@ -786,6 +786,9 @@ def list_customers_route(
     ad_activity: str | None = None, ad_source: str | None = None,
     no_website: bool = False, enrichment_status: list[str] = Query(default=[]),
     customer_state: list[str] = Query(default=[]), fit_min: float | None = None,
+    lead_source: list[str] = Query(default=[]),
+    solarlux_relevance: list[str] = Query(default=[]),
+    office_type: list[str] = Query(default=[]), decision_role: list[str] = Query(default=[]),
     sort: str | None = None, direction: str = "asc", page: int = 1, page_size: int = 50,
 ):
     filters = {"q": q, "kv": kv, "segment": segment, "sub_segment": sub_segment,
@@ -798,7 +801,12 @@ def list_customers_route(
                "page_id_state": page_id_state, "ad_activity": ad_activity,
                "ad_source": ad_source, "no_website": no_website,
                "enrichment_status": enrichment_status,
-               "customer_state": customer_state, "fit_min": fit_min}
+               "customer_state": customer_state, "fit_min": fit_min,
+               # Herkunft + Architekten-Merkmale: the Spain market list is
+               # filtered by lead_source, and the architect grades are what make
+               # that list rankable ("Relevanz hoch, vergibt Aufträge" first).
+               "lead_source": lead_source, "solarlux_relevance": solarlux_relevance,
+               "office_type": office_type, "decision_role": decision_role}
     return customers.query_companies(filters, sort, direction, page, page_size)
 
 

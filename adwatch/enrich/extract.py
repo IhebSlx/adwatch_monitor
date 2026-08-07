@@ -129,6 +129,17 @@ Website-Text:
 # Market note (Iheb): in SPAIN architects hold real decision power and can
 # effectively award the Auftrag, so they are treated as targets; in GERMANY they
 # consult. The prompt therefore asks about decision role explicitly.
+#
+# solarlux_relevance lives in the EINSCHÄTZUNG half, not in the facts half. The
+# first version asked for it under "Nur was im Text steht, nichts schätzen" and
+# defined "hoch" as "the text mentions large glazing / facades / folding walls".
+# No architect writes that about their own work, so the grade was unreachable:
+# the first 72 Spanish offices came back 0x hoch, and Costa-del-Sol villa studios
+# — the exact target — landed on "gering", a bucket whose own definition
+# (interiors, infrastructure, urban planning) did not even cover them. Relevance
+# is a JUDGEMENT, so it belongs where judging is allowed, the rubric keys off the
+# PROJECT TYPE (observable) rather than glazing vocabulary (never written), and
+# it is emitted AFTER project_focus so the grade is conditioned on the facts.
 _PROMPT_ARCHITEKT = """Du analysierst den Website-Text eines ARCHITEKTUR- oder PLANUNGSBÜROS.
 Die Antwort hat ZWEI streng getrennte Teile: belegte FAKTEN und eine als solche
 gekennzeichnete EINSCHÄTZUNG. Vermische die beiden niemals.
@@ -152,16 +163,14 @@ TEIL 1 — FAKTEN:
   GENANNT werden (aus: __COMPETITORS__). Nur wenn wirklich genannt.
 - "elements": welche Bauelement-Typen in den Projekten vorkommen
   (aus: __PRODUCTS__) — also was GEPLANT wird, nicht was verkauft wird.
-- "solarlux_relevance": "hoch" wenn die Projekte erkennbar große Verglasungen,
-  Fassaden, Schiebe-/Faltanlagen, Wintergärten, Terrassenüberdachungen oder
-  Glasdächer beinhalten; "mittel" bei allgemeinem Hochbau ohne klaren
-  Glas-Schwerpunkt; "gering" bei Innenarchitektur, Infrastruktur, Stadtplanung
-  oder reiner Bauleitung ohne Gebäudehülle; null wenn nicht erkennbar.
 - "office_type": "Generalplaner" | "Architekturbüro" | "Fachplaner" |
   "Innenarchitektur" | "Landschaftsplanung" | null — wörtlich am Text belegt.
-- "decision_role": "vergibt Aufträge" wenn der Text zeigt, dass das Büro
-  Bauleitung/Ausschreibung/Vergabe übernimmt; "empfiehlt" wenn es nur plant;
-  null wenn unklar.
+- "decision_role": "vergibt Aufträge" wenn das Büro die Ausführung steuert —
+  Bauleitung, Ausschreibung, Vergabe, Projektsteuerung, schlüsselfertige
+  Abwicklung ("dirección de obra", "dirección facultativa", "project
+  management", "llave en mano", "obra completa", "chiavi in mano",
+  "clé en main"); "empfiehlt" wenn das Büro ausschließlich entwirft und plant;
+  null wenn der Text die Leistungsphasen nicht erkennen lässt.
 - "reference_scale": kurzer deutscher Hinweis auf Umfang/Größe der Referenzen,
   falls genannt ("über 200 Projekte", "Hotels ab 100 Zimmern") — sonst null.
 - "memberships": Kammern, Auszeichnungen, Verbände, Publikationen (max 6).
@@ -169,17 +178,32 @@ TEIL 1 — FAKTEN:
 - "legal_form": WÖRTLICH wie im Text (S.L.P., S.L., GmbH, Partnerschaft …), sonst null.
 - "evidence": kurzes wörtliches Zitat je gefülltem Faktenfeld (max. 120 Zeichen).
 
-TEIL 2 — EINSCHÄTZUNG (assessment_de), 2-3 Sätze: Bürogröße, Projekttypen,
-Anspruch/Preisklasse der Projekte, regionale Reichweite und — am wichtigsten —
-wie relevant das Portfolio für Solarlux-Systeme ist und ob das Büro Einfluss auf
-die Produktwahl hat. Keine erfundenen Zahlen.
+TEIL 2 — EINSCHÄTZUNG. Hier DARFST und SOLLST du aus den Projekttypen schließen.
+
+- "solarlux_relevance": Wie gut passt das Portfolio zu Solarlux (große
+  Glas-Schiebe- und Faltanlagen, Glasdächer, Wintergärten, Terrassendächer)?
+  Urteile nach der ART DER PROJEKTE — kein Büro schreibt seine Fensterflächen
+  auf die Website, das Fehlen solcher Wörter ist also KEIN Gegenbeleg:
+    "hoch"   = Gebäudehülle mit großen Öffnungen ist plausibel: Villen und
+               Einfamilienhäuser im gehobenen Segment, Hotels, Gastronomie,
+               Wohnprojekte mit Terrassen/Loggien/Blick, Neubau mit
+               offener oder auf die Landschaft ausgerichteter Architektur.
+    "mittel" = Hochbau ohne erkennbaren Schwerpunkt auf der Hülle:
+               Standard-Wohnungsbau, öffentliche Bauten, Gewerbe, Sanierung.
+    "gering" = das Büro plant keine Gebäudehülle: reine Innenarchitektur,
+               Möbel, Infrastruktur, Stadt-/Landschaftsplanung, Gutachten,
+               reine Bauleitung ohne Entwurf.
+  null NUR wenn der Text die Projekttypen gar nicht erkennen lässt. "gering"
+  ist KEIN Auffangwert für fehlende Information — dafür ist null da.
+- "assessment_de", 2-3 Sätze: Bürogröße, Projekttypen, Anspruch/Preisklasse,
+  regionale Reichweite und die BEGRÜNDUNG der solarlux_relevance. Keine
+  erfundenen Zahlen.
 
 Antworte AUSSCHLIESSLICH mit diesem JSON (keine Erklärung, kein Markdown):
 {
   "description_de": "<1-2 Sätze: was plant das Büro? oder null>",
   "elements": [<0-6 Werte aus: __PRODUCTS__>],
   "specified_systems": [<genannte Marken aus: __COMPETITORS__>],
-  "solarlux_relevance": "<hoch | mittel | gering | null>",
   "office_type": "<siehe oben oder null>",
   "decision_role": "<vergibt Aufträge | empfiehlt | null>",
   "project_focus": [<0-4 aus: "Wohnbau", "Objektbau", "Hotel/Gastro", "Sanierung", "Gewerbe", "Öffentlich">],
@@ -191,6 +215,7 @@ Antworte AUSSCHLIESSLICH mit diesem JSON (keine Erklärung, kein Markdown):
   "service_area": "<Region auf Deutsch oder null>",
   "mentions_solarlux": <true|false>,
   "evidence": {"<feldname>": "<Zitat>", ...},
+  "solarlux_relevance": "<hoch | mittel | gering | null>",
   "assessment_de": "<2-3 Sätze Einschätzung wie oben, oder null>"
 }
 

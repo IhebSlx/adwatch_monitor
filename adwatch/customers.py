@@ -19,7 +19,7 @@ import datetime as dt
 import io
 import re
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from . import config, markets, scope
@@ -67,6 +67,7 @@ SORTABLE = {
     "resolution_status": Company.resolution_status,
     "customer_state": Company.customer_state, "fit_score": Company.fit_score,
     "opportunity_score": Company.opportunity_score, "target_score": Company.target_score,
+    "solarlux_relevance": Company.solarlux_relevance,
 }
 
 
@@ -360,7 +361,11 @@ def _apply_filters(stmt, f: dict):
         stmt = stmt.where(or_(Company.name.ilike(like), Company.sap_number.ilike(like)))
     for field, col in (("kv", Company.kv), ("segment", Company.segment),
                        ("sub_segment", Company.sub_segment),
-                       ("sales_channel", Company.sales_channel), ("country", Company.country)):
+                       ("sales_channel", Company.sales_channel), ("country", Company.country),
+                       ("lead_source", Company.lead_source),
+                       ("solarlux_relevance", Company.solarlux_relevance),
+                       ("office_type", Company.office_type),
+                       ("decision_role", Company.decision_role)):
         values = f.get(field)
         if values:
             stmt = stmt.where(col.in_(values) if isinstance(values, list) else col == values)
@@ -460,10 +465,22 @@ def _apply_filters(stmt, f: dict):
 
 _REVENUE_SORT_KEYS = {"revenue_y0", "revenue_y1", "revenue_y2", "revenue_y3", "revenue_y4"}
 
+# Ordinal text columns. Sorting these as text is not just ugly, it is WRONG:
+# alphabetically "gering" beats "hoch" beats "mittel", so a "best first" sort on
+# Solarlux-Relevanz would put the worst-fitting architects on top. Ranked here so
+# desc = best first, and NULL keeps sorting last via the existing is_(None) rule.
+_ORDINAL_SORTS = {
+    "solarlux_relevance": {"hoch": 3, "mittel": 2, "gering": 1},
+}
+
 
 def _apply_sort(stmt, sort: str | None, direction: str):
     key = sort or "name"
     col = SORTABLE.get(key, Company.name)
+    if key in _ORDINAL_SORTS:
+        stmt = stmt.order_by(col.is_(None))
+        rank = case(_ORDINAL_SORTS[key], value=col, else_=0)
+        return stmt.order_by(rank.desc() if direction == "desc" else rank.asc())
     if key in _REVENUE_SORT_KEYS:
         # Missing revenue counts as €0 here too, so it sorts in place rather
         # than always trailing behind real numbers.

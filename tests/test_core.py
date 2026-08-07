@@ -1289,6 +1289,33 @@ def test_thinly_known_features_do_not_score(temp_db):
     assert fit_c is not None
 
 
+def test_relevance_sorts_by_rank_not_alphabet(temp_db):
+    """Solarlux-Relevanz is ordinal, and its labels sort alphabetically in exactly
+    the wrong order — g(ering) < h(och) < m(ittel). A plain text sort would head
+    the "best architects first" list with the worst-fitting offices, so the sort
+    ranks the labels and leaves ungraded rows at the bottom either way."""
+    from sqlalchemy import select
+    from adwatch.customers import _apply_sort
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name="Villa-Buero", segment="Architekten", solarlux_relevance="hoch"),
+        Company(name="Innenausbau", segment="Architekten", solarlux_relevance="gering"),
+        Company(name="Hochbau", segment="Architekten", solarlux_relevance="mittel"),
+        Company(name="Ungeprueft", segment="Architekten", solarlux_relevance=None),
+    ])
+    s.commit(); s.close()
+
+    def order(direction):
+        with temp_db.SessionLocal() as s2:
+            stmt = _apply_sort(select(Company), "solarlux_relevance", direction)
+            return [c.name for c in s2.scalars(stmt)]
+
+    assert order("desc") == ["Villa-Buero", "Hochbau", "Innenausbau", "Ungeprueft"]
+    assert order("asc") == ["Innenausbau", "Hochbau", "Villa-Buero", "Ungeprueft"]
+
+
 def test_consumers_are_excluded_from_every_count(temp_db):
     """Private Endkunden are 36% of the base and none of them will ever run an ad
     campaign, so including them made every ratio wrong ("14 of 4618"). They stay in
@@ -2868,6 +2895,29 @@ def test_architect_prompt_never_asks_a_planner_to_sell():
     assert "solarlux_relevance" in arch and "decision_role" in arch
     # and the dealer prompt is untouched
     assert "own_fabrication" in deal and "Bauelemente-/Handwerksbetrieb" in deal
+
+
+def test_relevance_is_judged_not_quoted():
+    """Regression: the first architect run graded 0 of 72 Spanish offices "hoch"
+    and put Costa-del-Sol villa studios on "gering". Cause: solarlux_relevance was
+    asked for inside TEIL 1 — FAKTEN ("nichts schätzen"), while its "hoch" rubric
+    required the site to MENTION large glazing. No architect writes that about
+    their own work, so the top grade was unreachable and the residual bucket
+    swallowed the best targets. Relevance must stay in the judgement half, key off
+    project type, and never be the fallback for missing information."""
+    from adwatch.enrich.extract import _prompt, PROFILE_ARCHITEKT
+    arch = _prompt(PROFILE_ARCHITEKT)
+    facts, judgement = arch.split("TEIL 2")
+    # the grade is judged, not quoted
+    assert "solarlux_relevance" not in facts
+    assert "solarlux_relevance" in judgement
+    # graded on what they build, and absence of glazing words is not evidence
+    assert "ART DER PROJEKTE" in judgement and "KEIN Gegenbeleg" in judgement
+    assert "Villen" in judgement and "Hotels" in judgement
+    # null, not "gering", is the bucket for "cannot tell"
+    assert "KEIN Auffangwert" in judgement
+    # emitted after project_focus, so the grade is conditioned on the facts
+    assert arch.index('"project_focus"') < arch.rindex('"solarlux_relevance"')
 
 
 def test_architect_answer_maps_onto_shared_storage_keys(monkeypatch):

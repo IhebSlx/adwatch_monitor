@@ -60,6 +60,28 @@ weder angereichert noch werden ihr Anzeigen zugeordnet. Deshalb gibt es den
 Status `conflict`: „Seite gelesen, gehört nachweislich jemand anderem" —
 solche Domains niemals von Hand auf verified setzen.
 
+## Architekten (Spanien-Liste)
+
+Architektur- und Planungsbüros werden mit einem **eigenen Profil** angereichert:
+sie verkaufen nichts, sie planen und schreiben aus. Drei Felder machen die
+Liste sortierbar — im **Firmen**-Tab über das Menü der Spalte *Segment*:
+
+- **Solarlux-Relevanz** — geschätzt aus den **Projekttypen**, nicht aus dem
+  Wortlaut der Seite. Kein Büro schreibt „wir planen große Verglasungen" auf
+  die eigene Website; fehlen solche Wörter, ist das also kein Gegenbeleg.
+  `hoch` = Villen, Hotels, Neubau mit offener Architektur ·
+  `mittel` = Hochbau ohne Schwerpunkt auf der Gebäudehülle ·
+  `gering` = keine Gebäudehülle (Innenarchitektur, Infrastruktur, Stadtplanung) ·
+  leer = Projekttypen auf der Seite nicht erkennbar (**nicht** „gering").
+- **Entscheidungsrolle** — `vergibt Aufträge` (Bauleitung, Ausschreibung,
+  schlüsselfertig) vs. `empfiehlt` (nur Entwurf und Planung). In Spanien ist
+  das der wichtigere Filter als in Deutschland: dort vergeben Büros wirklich.
+- **Bürotyp** — Generalplaner, Architekturbüro, Fachplaner, Innenarchitektur.
+
+Die Relevanz ist eine **begründete Einschätzung**, kein Zitat — sie steht im
+Drawer entsprechend mit niedrigerer Konfidenz und der Begründung daneben.
+Bestes Vorgehen: *Relevanz = hoch* **+** *vergibt Aufträge* zuerst abarbeiten.
+
 ## Wöchentliche Routine (15 Minuten)
 
 1. **Prüfen**-Tab leeren (Ja/Nein-Klicks).

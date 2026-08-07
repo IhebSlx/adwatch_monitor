@@ -1833,6 +1833,8 @@
       no_website: $("#custNoWebsite").checked,
       enrichment_status: $("#custEnrichStatus").value ? [$("#custEnrichStatus").value] : [],
       customer_state: $("#custCustomerState").value ? [$("#custCustomerState").value] : [],
+      solarlux_relevance: $("#custRelevance").value ? [$("#custRelevance").value] : [],
+      decision_role: $("#custDecisionRole").value ? [$("#custDecisionRole").value] : [],
       fit_min: $("#custFitMin").value ? Number($("#custFitMin").value) : null,
       revenue_min: $("#custRevenueMin").value ? Number($("#custRevenueMin").value) : null,
       revenue_max: $("#custRevenueMax").value ? Number($("#custRevenueMax").value) : null,
@@ -1875,6 +1877,8 @@
       parts.push(`enrichment: ${f.enrichment_status.map(s => ENRICH_STATUS_LABEL[s] || s).join(", ")}`);
     if (f.customer_state?.length)
       parts.push(f.customer_state.map(s => CUSTOMER_STATE_LABEL[s] || s).join(", "));
+    if (f.solarlux_relevance?.length) parts.push(`Relevanz: ${f.solarlux_relevance.join(", ")}`);
+    if (f.decision_role?.length) parts.push(f.decision_role.join(", "));
     if (f.fit_min != null) parts.push(`Fit ≥ ${f.fit_min}`);
     if (f.page_id_state === "with") parts.push("with Meta page ID");
     if (f.page_id_state === "without") parts.push("without Meta page ID");
@@ -2252,7 +2256,8 @@
     fb: ["resolution_status", "page_id_state", "tracked"],
     website: ["has_website", "no_website", "enrichment_status"],
     umsatz: ["revenue_min", "revenue_max", "revenue_history"],
-    kv: ["kv", "exclude_kv"], segment: ["segment", "exclude_segment"],
+    kv: ["kv", "exclude_kv"],
+    segment: ["segment", "exclude_segment", "solarlux_relevance", "decision_role"],
     subseg: ["sub_segment", "exclude_sub_segment"], kanal: ["sales_channel"], land: ["country"],
   };
   function _filterActive(f, key) {
@@ -3055,6 +3060,8 @@
     applyOnChange("#custNoWebsite");
     applyOnChange("#custEnrichStatus");
     applyOnChange("#custCustomerState");
+    applyOnChange("#custRelevance");
+    applyOnChange("#custDecisionRole");
     applyOnChange("#custFitMin");
 
     $("#custClearBtn").addEventListener("click", () => {
@@ -3068,6 +3075,7 @@
       $("#custAdActivity").value = "";
       $("#custNoWebsite").checked = false; $("#custEnrichStatus").value = "";
       $("#custCustomerState").value = ""; $("#custFitMin").value = "";
+      $("#custRelevance").value = ""; $("#custDecisionRole").value = "";
       applyDefaultExclusion();   // Zurücksetzen = back to DEFAULT, incl. "ohne Private Endkunden"
       CUST.page = 1; loadCustomers();
     });
@@ -3156,7 +3164,13 @@
       kv: () => _incExcSection("Nur diese KV", () => CUST_DROP.kv, CUST_OPTS.kv, "thm-inc-kv")
         + _incExcSection("Ausschließen", () => CUST_DROP.excludeKv, CUST_OPTS.kv, "thm-exc-kv"),
       segment: () => _incExcSection("Nur diese Segmente", () => CUST_DROP.segment, CUST_OPTS.segment, "thm-inc-seg")
-        + _incExcSection("Ausschließen", () => CUST_DROP.excludeSegment, CUST_OPTS.segment, "thm-exc-seg"),
+        + _incExcSection("Ausschließen", () => CUST_DROP.excludeSegment, CUST_OPTS.segment, "thm-exc-seg")
+        // Only filled for Architekten/Planer, and this is the menu someone is
+        // already in when they narrow to that segment.
+        + `<div class="thm-sec"><div class="thm-sec-title">Solarlux-Relevanz (Architekten)</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custRelevance">${_optionsHtml("#custRelevance")}</select></div>
+        <div class="thm-sec"><div class="thm-sec-title">Entscheidungsrolle</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custDecisionRole">${_optionsHtml("#custDecisionRole")}</select></div>`,
       subseg: () => _incExcSection("Nur diese Untersegmente", () => CUST_DROP.subSegment, CUST_OPTS.sub_segment, "thm-inc-sub")
         + _incExcSection("Ausschließen", () => CUST_DROP.excludeSubSegment, CUST_OPTS.sub_segment, "thm-exc-sub"),
       kanal: () => _incExcSection("Nur diese Vertriebswege", () => CUST_DROP.salesChannel, CUST_OPTS.sales_channel, "thm-inc-chan"),

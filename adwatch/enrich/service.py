@@ -214,10 +214,13 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
                     if value in (None, [], ""):
                         continue
                     fields[key] = value
-                    if key == "assessment_de":
+                    if key in ("assessment_de", "solarlux_relevance"):
                         # an INFERENCE, not an extracted fact: separate source and a
                         # markedly lower confidence, so the report (and any future
-                        # consumer) can present it as an estimate rather than a quote
+                        # consumer) can present it as an estimate rather than a quote.
+                        # solarlux_relevance belongs here too — it is graded from the
+                        # project types, never quoted from the page, because no
+                        # architect describes their own glazing areas in words.
                         provenance[key] = _prov("website+llm-einschaetzung", 0.5,
                                                 "begründete Einschätzung, keine belegte Angabe")
                     else:
