@@ -166,18 +166,53 @@ def _fetch_url(url: str, timeout: int = 15) -> tuple[str, str] | None:
     return None
 
 
-def _page_text(html: str, limit: int = 1200) -> str:
+# Site chrome that carries no facts about the company, only link labels.
+# <footer> is deliberately NOT in here: it is where phone numbers and postal
+# addresses live, which is exactly what the identity check matches on.
+_CHROME_RE = re.compile(r"<(nav|header)\b[^>]*>.*?</\1>", re.S | re.I)
+_MENU_RE = re.compile(
+    r"""<(ul|div)\b[^>]*(?:class|id|role)\s*=\s*["'][^"']*(?:menu|nav|breadcrumb)"""
+    r"""[^"']*["'][^>]*>.*?</\1>""", re.S | re.I)
+# Below this, stripping has clearly eaten the content rather than the chrome
+# (single-page sites whose whole body sits inside <header>), so we keep the
+# original text instead — a flooded extraction still beats an empty one.
+_CHROME_KEEP_RATIO = 0.10
+
+
+def _page_text(html: str, limit: int = 1200, drop_chrome: bool = False) -> str:
     """Title + meta description + the first visible text of the page — a
-    compact self-description of the company for the LLM stages."""
+    compact self-description of the company for the LLM stages.
+
+    `drop_chrome` removes navigation menus first. Big WordPress/Elementor sites
+    open with a mega-menu, and since this keeps text in document order, those
+    link labels ate the whole character budget before any prose was reached:
+    TYPSA handed the extractor 9.000 characters of "Carreteras · Ferrocarriles ·
+    Aeropuertos …" and nothing else, so every field came back null and the
+    company scored no relevance at all. 10 of 72 Spanish architects failed this
+    way — none of them for want of text.
+
+    Off by default because the identity check matches on phone and postcode,
+    which sit in the footer and header of exactly the small sites that have no
+    menu problem. Only the enrichment path asks for it.
+    """
     if not html:
         return ""
     title = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
     desc = re.search(r'<meta[^>]+name=["\']description["\'][^>]*content=["\']([^"\']*)',
                      html, re.I)
-    body = _TAG_RE.sub(" ", _SCRIPT_RE.sub(" ", html))
-    body = re.sub(r"\s+", " ", body).strip()
+    source = html
+    if drop_chrome:
+        stripped = _MENU_RE.sub(" ", _CHROME_RE.sub(" ", html))
+        if len(_squash(stripped)) >= _CHROME_KEEP_RATIO * max(len(_squash(html)), 1):
+            source = stripped
+    body = _squash(source)
     head = " · ".join(x.group(1).strip() for x in (title, desc) if x and x.group(1).strip())
     return unescape(f"{head} — {body}" if head else body)[:limit]
+
+
+def _squash(html: str) -> str:
+    """Visible text of an HTML fragment, whitespace-collapsed."""
+    return re.sub(r"\s+", " ", _TAG_RE.sub(" ", _SCRIPT_RE.sub(" ", html))).strip()
 
 
 def _own_links(base_url: str, html: str) -> list[str]:

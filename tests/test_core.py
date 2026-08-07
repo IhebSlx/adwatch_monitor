@@ -2897,6 +2897,58 @@ def test_architect_prompt_never_asks_a_planner_to_sell():
     assert "own_fabrication" in deal and "Bauelemente-/Handwerksbetrieb" in deal
 
 
+def test_trailing_text_after_the_json_does_not_lose_the_extraction():
+    """The model sometimes appends a sentence or a second object after the
+    closing brace. json.loads() rejects the WHOLE reply as "Extra data", the
+    caller swallows the exception and still stores the row as enriched — so
+    Comervia and MODIKO ended up with every field empty and no visible failure.
+    The object is intact and sits at the start; parse that and drop the rest."""
+    import json as _json
+    from adwatch.enrich.extract import _loads_first_object
+    good = '{"description_de": "Architekturbüro.", "solarlux_relevance": "hoch"}'
+    assert _loads_first_object(good)["solarlux_relevance"] == "hoch"
+    # trailing prose, a second object, and leading chatter all survive
+    assert _loads_first_object(good + "\n\nHinweis: geschätzt.")["description_de"] == "Architekturbüro."
+    assert _loads_first_object(good + "\n" + good)["solarlux_relevance"] == "hoch"
+    assert _loads_first_object("Hier das JSON:\n" + good)["solarlux_relevance"] == "hoch"
+    # genuinely unparseable input must still raise, not return a silent {}
+    import pytest as _pytest
+    with _pytest.raises((ValueError, _json.JSONDecodeError)):
+        _loads_first_object("kein JSON hier")
+
+
+def test_navigation_menus_do_not_eat_the_extraction_budget():
+    """TYPSA handed the extractor 9.000 characters of mega-menu — "Carreteras ·
+    Ferrocarriles · Aeropuertos" — and not one sentence of prose, so every field
+    came back null. Text is kept in document order, so a big menu starves the
+    budget. Enrichment strips the chrome; the identity check must NOT, because it
+    matches on the phone number and postcode that live in the footer."""
+    from adwatch.identity.website_source import _page_text
+    html = ("<html><head><title>Estudio</title></head><body>"
+            "<nav><ul><li>Carreteras</li><li>Ferrocarriles</li><li>Aeropuertos</li></ul></nav>"
+            "<header><ul class='main-menu'><li>Quiénes somos</li></ul></header>"
+            "<main>Wir planen Villen an der Costa del Sol.</main>"
+            "<footer>Tel. 952 123 456 · 29601 Marbella</footer></body></html>")
+    clean = _page_text(html, limit=5000, drop_chrome=True)
+    assert "Villen" in clean and "Carreteras" not in clean and "Quiénes somos" not in clean
+    # the footer survives — it is evidence, not chrome
+    assert "952 123 456" in clean and "29601" in clean
+    # identity path is untouched: it still sees everything
+    raw = _page_text(html, limit=5000)
+    assert "Carreteras" in raw and "952 123 456" in raw
+
+
+def test_stripping_chrome_never_empties_a_page():
+    """Some small sites put their whole body inside <header>. Stripping would
+    leave nothing, and a flooded extraction still beats an empty one, so the
+    strip is abandoned when it removes essentially everything."""
+    from adwatch.identity.website_source import _page_text
+    html = ("<html><body><header>Estudio de arquitectura en Marbella. "
+            "Wir planen Villen und Hotels seit 1998.</header></body></html>")
+    kept = _page_text(html, limit=5000, drop_chrome=True)
+    assert "Villen und Hotels" in kept
+
+
 def test_relevance_is_judged_not_quoted():
     """Regression: the first architect run graded 0 of 72 Spanish offices "hoch"
     and put Costa-del-Sol villa studios on "gering". Cause: solarlux_relevance was

@@ -143,7 +143,9 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
         return None
     html, home_url = got
 
-    chunks = [ws._page_text(html, limit=_HOME_CHARS)]
+    # drop_chrome: the character budget is the scarce resource here, and on
+    # menu-heavy sites the navigation would consume all of it before any prose.
+    chunks = [ws._page_text(html, limit=_HOME_CHARS, drop_chrome=True)]
     pages = [home_url]
     categories = {home_url: "home"}
     # Machine-readable facts, harvested from the SAME html we already hold — no
@@ -156,7 +158,8 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
             time.sleep(_PAGE_PAUSE)
             sub = _fetch(sub_url)
             if sub:
-                chunks.append(ws._page_text(sub[0], limit=_PER_PAGE_CHARS))
+                chunks.append(ws._page_text(sub[0], limit=_PER_PAGE_CHARS,
+                                            drop_chrome=True))
                 pages.append(sub_url)
                 categories[sub_url] = ws._classify_link(sub_url) or "other"
                 try:

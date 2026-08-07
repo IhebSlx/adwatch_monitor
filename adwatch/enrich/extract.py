@@ -332,6 +332,32 @@ def _clean_list(value, vocab: tuple[str, ...], limit: int) -> list[str]:
     return out
 
 
+def _loads_first_object(raw: str) -> dict:
+    """Parse the FIRST complete JSON object in the reply and ignore any trailing
+    content.
+
+    A bare json.loads() raises "Extra data" the moment the model appends
+    anything after the closing brace — a stray sentence, a second object, a
+    repeated answer. That is not a bad extraction, it is a bad parse: the object
+    itself is fine and sits right there at the start. It cost Comervia and MODIKO
+    their entire enrichment, and the failure was quiet because the caller stores
+    the row as "enriched" with the error tucked into a side field.
+
+    raw_decode stops at the end of the first value instead of demanding that the
+    whole string be exactly one object.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        if start < 0:
+            raise
+        obj, _ = json.JSONDecoder().raw_decode(raw[start:])
+        if not isinstance(obj, dict):
+            raise ValueError("model returned a non-object JSON value")
+        return obj
+
+
 def extract_facts(site_text: str, model: str | None = None,
                   profile: str = PROFILE_BETRIEB) -> dict:
     """One LLM call -> validated fact dict. Raises on a missing key/bad response
@@ -360,7 +386,7 @@ def extract_facts(site_text: str, model: str | None = None,
     )
     raw = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
-    data = json.loads(raw)
+    data = _loads_first_object(raw)
 
     desc = (data.get("description_de") or "").strip() or None
     # The assessment is explicitly ALLOWED to infer (size class, target customers,
