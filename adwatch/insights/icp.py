@@ -179,6 +179,10 @@ def _ad_presence_map(ids: list[int] | None = None) -> dict[int, str]:
         return {cid: ("aktiv" if (n or 0) > 0 else "keine") for cid, n in s.execute(q)}
 
 
+_PRODUCT_CACHE: dict[str, object] = {"key": None, "map": None}
+_POPSTAT_CACHE: dict[str, object] = {"key": None, "stats": None}
+
+
 def crm_product_map(as_of: dt.date | None = None) -> dict[int, list[str]]:
     """company_id -> the Solarlux product families that company deals in.
 
@@ -201,8 +205,16 @@ def crm_product_map(as_of: dt.date | None = None) -> dict[int, list[str]]:
     `leaky` check is what enforces that, and _LEAK_RATIO is set to catch it.
     """
     from ..models import CrmCompanyProduct
-    out: dict[int, list[str]] = {}
     with SessionLocal() as s:
+        # diagnose() builds up to seven profiles (one per split group) and each
+        # one asked for this map, so 38.430 rows were read seven times per call.
+        # Product rows only change on a CRM import, and an import moves the
+        # fingerprint — same trick as projekte._CACHE.
+        key = (as_of, s.scalar(select(func.count(CrmCompanyProduct.id))),
+               str(s.scalar(select(func.max(CrmCompanyProduct.synced_at)))))
+        if _PRODUCT_CACHE.get("key") == key:
+            return _PRODUCT_CACHE["map"]
+        out: dict[int, list[str]] = {}
         stmt = select(CrmCompanyProduct.company_id, CrmCompanyProduct.family,
                       CrmCompanyProduct.first_seen)
         for cid, family, first_seen in s.execute(stmt):
@@ -211,7 +223,9 @@ def crm_product_map(as_of: dt.date | None = None) -> dict[int, list[str]]:
             if as_of is not None and (first_seen is None or first_seen > as_of):
                 continue
             out.setdefault(cid, []).append(family)
-    return {k: sorted(set(v)) for k, v in out.items()}
+    result = {k: sorted(set(v)) for k, v in out.items()}
+    _PRODUCT_CACHE.update({"key": key, "map": result})
+    return result
 
 
 def company_features(c: Company, ads: dict[int, str],
@@ -263,7 +277,16 @@ def _population_stats(feats: tuple[str, ...], pop_ids: list[int] | None = None,
     without it the profile can only say "this value is common among customers",
     which is not the same as "this value predicts becoming one".
     """
+    # diagnose() builds one profile for the winners and two per split dimension,
+    # and every one of them recomputed this over all 46.485 in-scope companies —
+    # 4,3 s each, ~40 s for the call. The inputs are identical across those
+    # seven, and companies only change on an import.
     with SessionLocal() as s:
+        key = (feats, tuple(sorted(pop_ids)) if pop_ids is not None else None,
+               as_of, s.scalar(select(func.count(Company.id))),
+               str(s.scalar(select(func.max(Company.crm_synced_at)))))
+        if _POPSTAT_CACHE.get("key") == key:
+            return _POPSTAT_CACHE["stats"]
         stmt = scope.apply(select(Company))
         if pop_ids is not None:
             stmt = stmt.where(Company.id.in_(pop_ids))
@@ -286,6 +309,7 @@ def _population_stats(feats: tuple[str, ...], pop_ids: list[int] | None = None,
                 counts[v] = counts.get(v, 0) + 1
         out[f] = {"coverage": (known / len(pop)) if pop else 0.0,
                   "counts": counts, "known": known}
+    _POPSTAT_CACHE.update({"key": key, "stats": out})
     return out
 
 
