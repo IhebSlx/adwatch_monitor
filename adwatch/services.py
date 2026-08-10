@@ -208,6 +208,23 @@ def _merged_weekly_series(s, company_id: int) -> list[dict]:
     return out
 
 
+def tracked_company_ids() -> list[int]:
+    """Companies that have ANY ad footprint — a weekly metric or an active page.
+
+    The dashboard is about advertising activity, so a company that has never been
+    fetched contributes nothing to it: every KPI, flag and table already filters
+    on `has_data`. It was still being loaded, though, and after the CRM import put
+    46k accounts in the database that meant /api/state built 46.506 metric rows —
+    two queries each — and shipped 33 MB of JSON on every page load, 18 s of it
+    inside latest_metrics(). 731 companies actually qualify.
+    """
+    with SessionLocal() as s:
+        ids = set(s.scalars(select(WeeklyCompanyMetric.company_id).distinct()))
+        ids |= set(s.scalars(select(CompanyPage.company_id)
+                             .where(CompanyPage.active).distinct()))
+    return sorted(ids)
+
+
 def latest_metrics(company_ids: list[int] | None = None,
                    include_consumers: bool = False) -> list[dict]:
     """Latest weekly metric per company (merged across sources) + previous-week

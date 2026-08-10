@@ -505,9 +505,13 @@
     const RENDER_CAP = 300;
     const total = rows.length;
     const shown = rows.slice(0, RENDER_CAP);
+    // This table only ever shows companies with an ad footprint, so it counts
+    // against those — not against the whole book, which is 48k rows and would
+    // make every number here look broken.
+    const tracked = STATE.metrics.length;
     $("#compFilterCount").textContent = total > RENDER_CAP
-      ? `${shown.length} von ${total} angezeigt (${STATE.metrics.length} gesamt) — Filter verfeinern`
-      : `${total}/${STATE.metrics.length} companies`;
+      ? `${shown.length} von ${total} angezeigt (${tracked} mit Anzeigen-Daten) — Filter verfeinern`
+      : `${total} von ${tracked} mit Anzeigen-Daten`;
     $$("#companyTable th[data-sort]").forEach(th => {
       th.classList.toggle("sorted-asc", th.dataset.sort === COMP.sort && COMP.direction === "asc");
       th.classList.toggle("sorted-desc", th.dataset.sort === COMP.sort && COMP.direction === "desc");
@@ -1590,6 +1594,10 @@
         <div class="kpi-value">${o.project_win_rate != null ? (o.project_win_rate * 100).toFixed(1) + " %" : "—"}</div></div>
       <div class="kpi"><div class="kpi-label">Gewonnener Wert</div>
         <div class="kpi-value" title="${eur(o.won_value)}">${eurShort(o.won_value)}</div></div>`;
+    fillPruefenFacets(data.facets || {});
+    const cnt = $("#pruefenCount");
+    if (cnt) cnt.textContent = data.total != null
+      ? `${data.shown} von ${data.total} offen` : "";
     const rows = data.rows || [];
     if (!rows.length) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Keine Projekte für diesen Filter.</p>`;
@@ -1633,15 +1641,26 @@
 
   async function loadPruefen() {
     const wrap = $("#pruefenWrap");
-    const ls = $("#pruefenEsOnly").checked ? "&lead_source=marktanalyse_es_2026_08" : "";
+    // Every filter is a plain multi-value param; empty means "all". The old
+    // screen had one hard-coded "Nur Spanien" checkbox, so every other market
+    // became unreachable the moment one existed.
+    const qs = ["country", "lead_source", "segment"]
+      .map(k => {
+        const v = $(`#pruefen${{country: "Land", lead_source: "Quelle", segment: "Segment"}[k]}`).value;
+        return v ? `&${k}=${encodeURIComponent(v)}` : "";
+      }).join("");
     wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
     let data;
     try {
-      data = await api(`/api/identity/review?limit=200${ls}`);
+      data = await api(`/api/identity/review?limit=200${qs}`);
     } catch (e) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Fehler: ${esc(e.message)}</p>`;
       return;
     }
+    fillPruefenFacets(data.facets || {});
+    const cnt = $("#pruefenCount");
+    if (cnt) cnt.textContent = data.total != null
+      ? `${data.shown} von ${data.total} offen` : "";
     const rows = data.rows || [];
     if (!rows.length) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Nichts zu prüfen — alles entschieden. 🎉</p>`;
@@ -1686,6 +1705,26 @@
     }));
   }
 
+  // Options come from what is ACTUALLY in the queue, so the screen adapts to
+  // whichever markets are loaded instead of naming one in the HTML. The current
+  // selection is preserved across reloads.
+  const PRUEFEN_FACETS = {country: "#pruefenLand", lead_source: "#pruefenQuelle",
+                          segment: "#pruefenSegment"};
+  const LEAD_SOURCE_LABEL = (v) => v === null || v === "" ? "Alle Quellen" : v;
+
+  function fillPruefenFacets(facets) {
+    for (const [key, sel] of Object.entries(PRUEFEN_FACETS)) {
+      const el = $(sel);
+      if (!el) continue;
+      const keep = el.value;
+      const all = el.options[0] ? el.options[0].textContent : "Alle";
+      const vals = facets[key] || [];
+      el.innerHTML = `<option value="">${esc(all)}</option>` +
+        vals.map(v => `<option value="${esc(v)}"${v === keep ? " selected" : ""}>${esc(LEAD_SOURCE_LABEL(v))}</option>`).join("");
+      el.value = vals.includes(keep) ? keep : "";
+    }
+  }
+
   function ensurePruefenLoaded() {
     if (pruefenLoaded) return;
     pruefenLoaded = true;
@@ -1696,7 +1735,8 @@
     const btn = $("#pruefenReload");
     if (!btn) return;
     btn.addEventListener("click", loadPruefen);
-    $("#pruefenEsOnly").addEventListener("change", loadPruefen);
+    ["#pruefenLand", "#pruefenQuelle", "#pruefenSegment"]
+      .forEach(sel => $(sel)?.addEventListener("change", loadPruefen));
   }
 
   // ---------------- Profil tab (Ideal Customer Profile) ----------------

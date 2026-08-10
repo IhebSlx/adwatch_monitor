@@ -24,7 +24,8 @@ from pydantic import BaseModel
 from . import appsettings, config, customers, jobs, services
 from .collect.meta_source import search_term
 from .collect.pipeline import run_once, run_once_google, seed_companies_if_empty
-from .db import init_db
+from .db import SessionLocal, init_db
+from .models import Company
 from .identity import resolver
 from .insights.flags import compute_flags
 
@@ -203,9 +204,15 @@ def index():
 
 @app.get("/api/state")
 def state():
-    metrics = services.latest_metrics()
+    # Only companies with an ad footprint. The dashboard filters everything on
+    # has_data anyway, so the rest were pure payload: 46.506 rows and 33 MB of
+    # JSON per load after the CRM import, against 731 that actually qualify.
+    metrics = services.latest_metrics(services.tracked_company_ids())
     companies = services.list_companies()
     return {
+        # The real total, so the table footer can still say "x von y" honestly
+        # rather than quietly redefining y as "companies we happened to send".
+        "companies_total": len(companies),
         "backend": config.LIVE_SOURCE,
         "country": config.DEFAULT_COUNTRY,
         "classifier": "llm" if config.ANTHROPIC_API_KEY else "keywords",
@@ -963,17 +970,33 @@ def projekte_route(status: str | None = None, min_members: int = 1,
 
 
 @app.get("/api/identity/review")
-def identity_review_queue_route(lead_source: str | None = None, limit: int = 200):
+def identity_review_queue_route(country: list[str] = Query(default=[]),
+                                lead_source: list[str] = Query(default=[]),
+                                segment: list[str] = Query(default=[]),
+                                limit: int = 200):
     """Everything waiting for a human yes/no on a website identity, with the
     evidence that got it there — the triage clue when Haiku judged it, the
-    candidate domain when the finder found-but-could-not-prove one."""
+    candidate domain when the finder found-but-could-not-prove one.
+
+    Filters are plain multi-value lists and `facets` reports what is actually IN
+    the queue, so the screen adapts to whatever markets are loaded. It used to
+    offer a single hard-coded "Nur Spanien-Marktanalyse" checkbox, which made
+    every other market unreachable the moment one existed."""
     from sqlalchemy import select as _select
     from . import scope as _scope
     with SessionLocal() as s:
-        stmt = _scope.apply(_select(Company)).where(
+        base = _scope.apply(_select(Company)).where(
             Company.identity_status == "needs_review")
+        # Facets come from the UNFILTERED queue, so choosing one market never
+        # hides the others from the dropdown.
+        everything = list(s.scalars(base))
+        stmt = base
+        if country:
+            stmt = stmt.where(Company.country.in_(country))
         if lead_source:
-            stmt = stmt.where(Company.lead_source == lead_source)
+            stmt = stmt.where(Company.lead_source.in_(lead_source))
+        if segment:
+            stmt = stmt.where(Company.segment.in_(segment))
         rows = list(s.scalars(stmt.order_by(Company.beleg_sum.desc()).limit(limit)))
         out = []
         for c in rows:
@@ -981,6 +1004,7 @@ def identity_review_queue_route(lead_source: str | None = None, limit: int = 200
             out.append({
                 "company_id": c.id, "name": c.name, "city": c.city,
                 "postal_code": c.postal_code, "segment": c.segment,
+                "country": c.country, "lead_source": c.lead_source,
                 "import_type": c.import_type, "notes": (c.notes or "")[:200],
                 # domain set -> triage said likely_right about the CURRENT domain;
                 # domain empty -> the finder proposes ev['review_candidate']
@@ -988,7 +1012,15 @@ def identity_review_queue_route(lead_source: str | None = None, limit: int = 200
                 "clue": (ev.get("triage") or {}).get("clue"),
                 "what": (ev.get("triage") or {}).get("what"),
             })
-    return {"rows": out}
+
+        def _facet(attr):
+            vals = {getattr(c, attr) for c in everything if getattr(c, attr)}
+            return sorted(vals)
+
+    return {"rows": out, "total": len(everything), "shown": len(out),
+            "facets": {"country": _facet("country"),
+                       "lead_source": _facet("lead_source"),
+                       "segment": _facet("segment")}}
 
 
 @app.post("/api/companies/{company_id}/identity/reject")

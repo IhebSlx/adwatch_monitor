@@ -622,10 +622,16 @@
       </header>
       <div class="card">
         <div class="toolbar" style="margin-bottom:12px">
-          <label class="checkline" style="margin:0">
-            <input type="checkbox" id="pruefenEsOnly" checked>
-            <span>Nur Spanien-Marktanalyse</span>
-          </label>
+          <select id="pruefenLand" title="Markt — die Auswahl kommt aus den Firmen, die gerade zur Prüfung anstehen">
+            <option value="">Alle Länder</option>
+          </select>
+          <select id="pruefenQuelle" title="Herkunft der Firma: CRM oder eine importierte Marktliste">
+            <option value="">Alle Quellen</option>
+          </select>
+          <select id="pruefenSegment" title="Kundensegment">
+            <option value="">Alle Segmente</option>
+          </select>
+          <span id="pruefenCount" class="muted"></span>
           <button class="btn" id="pruefenReload" style="margin-left:auto">Aktualisieren</button>
         </div>
         <div id="pruefenWrap" class="table-wrap">

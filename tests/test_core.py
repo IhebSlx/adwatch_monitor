@@ -2897,6 +2897,75 @@ def test_architect_prompt_never_asks_a_planner_to_sell():
     assert "own_fabrication" in deal and "Bauelemente-/Handwerksbetrieb" in deal
 
 
+def test_dashboard_only_loads_companies_with_an_ad_footprint(temp_db):
+    """After the CRM import put 46k accounts in the database, /api/state built a
+    metric row for every one of them — two queries each — and shipped 33 MB of
+    JSON on every page load, 18 seconds of it inside latest_metrics(). Only 731
+    companies had any ad data, and the dashboard filters on has_data everywhere
+    anyway, so the rest were pure payload."""
+    import datetime as dt
+    from adwatch import services
+    from adwatch.models import Company, CompanyPage, WeeklyCompanyMetric
+
+    s = temp_db.SessionLocal()
+    tracked = Company(name="Hat Metrik", segment="Handel")
+    paged = Company(name="Hat Seite", segment="Handel")
+    quiet = Company(name="Nie geholt", segment="Handel")
+    s.add_all([tracked, paged, quiet]); s.commit()
+    s.add(WeeklyCompanyMetric(company_id=tracked.id, week_start=dt.date(2026, 8, 3),
+                              source="meta", total_active_ads=3))
+    s.add(CompanyPage(company_id=paged.id, page_id="p1", active=True))
+    # an INACTIVE page is not a footprint — it is a page we stopped following
+    s.add(CompanyPage(company_id=quiet.id, page_id="p2", active=False))
+    s.commit(); s.close()
+
+    ids = services.tracked_company_ids()
+    assert set(ids) == {tracked.id, paged.id}
+    assert quiet.id not in ids
+
+
+def test_review_queue_filters_by_any_market(temp_db, monkeypatch):
+    """Two bugs in one screen. The route used SessionLocal without importing it,
+    so BOTH the queue and the reject button raised NameError — the Prüfen tab
+    was dead for every user, and no test touched the endpoint. And the only
+    filter was a hard-coded "Nur Spanien-Marktanalyse" checkbox, which makes
+    every other market unreachable the moment one exists."""
+    from fastapi.testclient import TestClient
+    from adwatch import web
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name="ES Eins", country="ES", segment="Verarbeiter",
+                lead_source="marktanalyse_es_2026_08", identity_status="needs_review"),
+        Company(name="DE Eins", country="DE", segment="Handel",
+                lead_source=None, identity_status="needs_review"),
+        Company(name="FR Eins", country="FR", segment="Verarbeiter",
+                lead_source="marktanalyse_fr_2026", identity_status="needs_review"),
+        Company(name="Entschieden", country="ES", segment="Verarbeiter",
+                identity_status="verified"),
+    ])
+    s.commit(); s.close()
+    monkeypatch.setattr(web, "SessionLocal", temp_db.SessionLocal)
+
+    c = TestClient(web.app)
+    r = c.get("/api/identity/review")
+    assert r.status_code == 200, r.text          # the NameError regression
+    body = r.json()
+    assert {x["name"] for x in body["rows"]} == {"ES Eins", "DE Eins", "FR Eins"}
+    # facets describe what is really in the queue, so the UI needs no hard-coded market
+    assert body["facets"]["country"] == ["DE", "ES", "FR"]
+    assert "marktanalyse_fr_2026" in body["facets"]["lead_source"]
+
+    # any market is selectable, not just Spain
+    assert {x["name"] for x in c.get("/api/identity/review?country=FR").json()["rows"]} == {"FR Eins"}
+    assert {x["name"] for x in c.get("/api/identity/review?country=DE&country=ES").json()["rows"]} \
+        == {"ES Eins", "DE Eins"}
+    assert {x["name"] for x in c.get("/api/identity/review?segment=Handel").json()["rows"]} == {"DE Eins"}
+    # narrowing the list must not shrink the choices still on offer
+    assert c.get("/api/identity/review?country=FR").json()["facets"]["country"] == ["DE", "ES", "FR"]
+
+
 def test_spa_shell_is_rendered_and_relinked(monkeypatch, temp_db):
     """A single-page app answers 200 with an empty shell, so the fetch "succeeds"
     and yields nothing — the company enriches to nothing and drops out of every
