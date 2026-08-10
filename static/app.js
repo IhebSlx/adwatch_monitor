@@ -1993,9 +1993,9 @@
     // inside the same population and always yields zero
     const einzel = (o.all_projects || 0) - (o.multi_vc_projects || 0);
     $("#objekteKpis").innerHTML = `
-      <div class="kpi"><div class="kpi-label">Sammelprojekte (2+ VCs)</div>
+      <div class="kpi"><div class="kpi-label">Objekte mit mehreren VCs</div>
         <div class="kpi-value">${(o.multi_vc_projects || 0).toLocaleString("de-DE")}</div>
-        <div class="sub">+ ${einzel.toLocaleString("de-DE")} Einzel-VCs</div></div>
+        <div class="sub">+ ${einzel.toLocaleString("de-DE")} mit nur einer VC</div></div>
       <div class="kpi"><div class="kpi-label">Gewonnen</div>
         <div class="kpi-value">${(o.gewonnen || 0).toLocaleString("de-DE")}</div></div>
       <div class="kpi"><div class="kpi-label">Projekt-Gewinnrate</div>
