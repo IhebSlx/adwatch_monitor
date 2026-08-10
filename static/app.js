@@ -157,6 +157,15 @@
 
   const eur = (v) => v == null ? "—" : "€" + Math.round(v).toLocaleString("de-DE");
 
+  // The API sends dates as ISO ("2023-05-14") because that is what sorts and
+  // travels correctly; a German screen has to show 14.05.2023. Parsed by hand
+  // rather than via new Date(), which shifts the day across time zones for a
+  // bare date string.
+  const deDate = (iso) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : (iso || "—");
+  };
+
   // facebook.com/<page_id> is a stable permalink for any real Facebook page —
   // no need to store a separate profile URL per page.
   const fbPageUrl = (pageId) => `https://www.facebook.com/${encodeURIComponent(pageId)}`;
@@ -2031,11 +2040,14 @@
     }
     wrap.innerHTML = `
       <table class="data-table">
-        <thead><tr><th>Objekt</th><th>Status</th><th class="num">VCs</th>
+        <thead><tr><th>Objekt</th>
+          <th title="Wann die erste Verkaufschance an diesem Objekt im CRM angelegt wurde — das älteste created_on aller zugehörigen VCs. Nicht das Bau-, Angebots- oder Abschlussdatum.">Angelegt</th>
+          <th>Status</th><th class="num">VCs</th>
           <th class="num">Wert</th><th>Firmen</th><th>Architekten</th><th>Verlustgründe</th></tr></thead>
         <tbody>${rows.map(p => `
           <tr data-projekt="${esc(p.project_id)}" style="cursor:pointer">
-            <td style="max-width:280px">${esc(p.name)}${p.created ? `<div class="sub">${esc(p.created)}</div>` : ""}</td>
+            <td style="max-width:280px">${esc(p.name)}</td>
+            <td style="white-space:nowrap">${p.created ? esc(deDate(p.created)) : "—"}</td>
             <td><span class="state-chip">${esc(p.status)}</span></td>
             <td class="num">${p.members}${p.won_members ? ` <span class="sub">(${p.won_members} gew.)</span>` : ""}</td>
             <td class="num">${eur(p.order_value ?? p.estimated_value)}</td>
@@ -2078,7 +2090,7 @@
           ${kv("Herkunft / Vertriebsweg", [d.origin, d.channel].filter(Boolean).map(esc).join(" · ") || null)}
           ${kv("Verkaufschancen", `${d.members}${d.won_members ? ` · ${d.won_members} gewonnen` : ""}`)}
           ${kv("Auftragswert", d.won_value ? eur(d.won_value) : (d.order_value ? eur(d.order_value) : null))}
-          ${kv("Zeitraum", d.first ? `${esc(d.first)} → ${esc(d.last || "")}` : null)}
+          ${kv("Zeitraum", d.first ? `${esc(deDate(d.first))} → ${d.last ? esc(deDate(d.last)) : ""}` : null)}
           ${kv("SAP-Aufträge", (d.sap_orders || []).length ? esc(d.sap_orders.join(", ")) : null)}
           ${kv("Verlustgründe", (d.lost_reasons || []).length ? esc(d.lost_reasons.join(" · ")) : null)}
         </div>
@@ -2113,10 +2125,13 @@
       <div class="drawer-section">
         <h3>Verlauf (${(d.timeline || []).length} Verkaufschancen)</h3>
         <table class="data-table" style="font-size:12.5px">
-          <thead><tr><th>Datum</th><th>Nr.</th><th>Firma</th><th>Status</th><th class="num">Wert</th></tr></thead>
+          <thead><tr><th title="Wann diese Verkaufschance im CRM angelegt wurde">Angelegt</th>
+            <th title="Wann sie geschlossen wurde — gewonnen oder verloren. Leer heißt: noch offen.">Geschlossen</th>
+            <th>Nr.</th><th>Firma</th><th>Status</th><th class="num">Wert</th></tr></thead>
           <tbody>${(d.timeline || []).map(t => `
             <tr>
-              <td class="sub">${esc(t.date || "—")}${t.closed ? `<div class="sub">zu: ${esc(t.closed)}</div>` : ""}</td>
+              <td class="sub" style="white-space:nowrap">${t.date ? esc(deDate(t.date)) : "—"}</td>
+              <td class="sub" style="white-space:nowrap">${t.closed ? esc(deDate(t.closed)) : "—"}</td>
               <td class="sub">${esc(t.number || "—")}</td>
               <td>${esc(t.firm || "—")}</td>
               <td><span class="state-chip">${esc(t.state || "—")}</span>${t.lost_reason ? `<div class="sub">${esc(t.lost_reason)}</div>` : ""}</td>

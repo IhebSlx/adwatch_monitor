@@ -265,6 +265,13 @@ def list_projects(status: str | None = None, min_members: int = 1,
             "won_members": sum(1 for m in members if m.state == "gewonnen"),
             "order_value": value, "estimated_value": est,
             "channel": primary.sales_channel,
+            # When the FIRST Verkaufschance on this building was created in the
+            # CRM — the oldest created_on among the members. It is the start of
+            # the pipeline for this Objekt, and the only date available before
+            # anything is decided. Explicitly NOT: the building's construction
+            # date, the quote date, or the closing date (closed_on, per member,
+            # is in `timeline`). Shown as its own column because putting it under
+            # the name made it read as part of the name.
             "created": min((m.created_on for m in members if m.created_on),
                            default=None),
             "firms": firms[:6], "architects": archs[:4],
