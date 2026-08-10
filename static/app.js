@@ -316,6 +316,12 @@
   const TABLE_STATE = new Map();   // wrapId -> {sort:{col,dir}, filters:{col:Set}}
   // wrapId -> how many rows matched on the SERVER (may exceed what was sent)
   const TABLE_TOTALS = {};
+  // Monotonic per-table request token. Without it a slow earlier fetch resolves
+  // after a newer one and silently repaints the older result — a filter that
+  // "did not work" although the request went out correctly.
+  const LOAD_SEQ = {};
+  const nextSeq = (k) => (LOAD_SEQ[k] = (LOAD_SEQ[k] || 0) + 1);
+  const isCurrent = (k, n) => LOAD_SEQ[k] === n;
 
   const _stateFor = (wrapId) => {
     if (!TABLE_STATE.has(wrapId)) TABLE_STATE.set(wrapId, { sort: null, filters: {} });
@@ -388,7 +394,9 @@
       th.classList.toggle("sorted-asc", !!st.sort && st.sort.col === i && st.sort.dir === "asc");
       th.classList.toggle("sorted-desc", !!st.sort && st.sort.col === i && st.sort.dir === "desc");
       const srv = (SERVER_COLUMNS[wrapId] || {})[i];
-      const srvActive = srv ? !!$(srv.select)?.value : false;
+      const srvActive = !srv ? false
+        : srv.select ? !!$(srv.select)?.value
+        : !!(SERVER_PARAMS[wrapId] || {})[srv.param];
       th.classList.toggle("th-filtered", srvActive || !!(st.filters[i] && st.filters[i].size));
     });
 
@@ -414,14 +422,41 @@
   // Columns that map onto a SERVER filter. Filtering these in the browser would
   // search the loaded slice (Objekte: 300 of 52.796) and quietly report a
   // fraction of the truth, so the menu drives the server control instead.
+  // A column filter either filters EVERYTHING or it is not offered. These
+  // columns map onto a server parameter; the rest get sort only when the table
+  // holds a capped slice, because filtering 300 of 52.796 and calling it a
+  // filter is how the screen ended up claiming 34 won projects out of 8.189.
   const SERVER_COLUMNS = {
-    objekteWrap: {1: {select: "#objekteStatus", label: "Status"}},
+    objekteWrap: {
+      0: {kind: "text",   param: "q",           label: "Objekt, Firma oder Architekt"},
+      1: {kind: "select", select: "#objekteStatus", label: "Status"},
+      3: {kind: "number", param: "min_value",   label: "Wert mindestens (€)"},
+      4: {kind: "text",   param: "q",           label: "Firma enthält"},
+      5: {kind: "text",   param: "q",           label: "Architekt enthält"},
+      6: {kind: "text",   param: "lost_reason", label: "Verlustgrund (exakt)"},
+    },
+    chancenTableWrap: {
+      1: {kind: "text",   param: "segment",     label: "Segment (exakt)"},
+      2: {kind: "text",   param: "country",     label: "Land (z. B. DE)"},
+      3: {kind: "number", param: "min_value",   label: "Umsatz mindestens (€)"},
+      8: {kind: "text",   param: "health",      label: "Status (exakt)"},
+    },
   };
+  // Extra server params per table, set from the column menus and merged into
+  // the request by the tab's own loader.
+  const SERVER_PARAMS = {objekteWrap: {}, chancenTableWrap: {}};
 
   function _openColMenu(table, wrapId, th, colIdx) {
     const st = _stateFor(wrapId);
     const server = (SERVER_COLUMNS[wrapId] || {})[colIdx];
     if (server) return _openServerColMenu(table, wrapId, th, colIdx, server);
+    // The table holds only a slice: a browser-side filter here would search the
+    // loaded rows and report a fraction as if it were the answer. Offer sort,
+    // say why there is no filter, and point at the columns that do filter.
+    const total = TABLE_TOTALS[wrapId];
+    if (total != null && total > (table.tBodies[0]?.rows.length || 0)) {
+      return _openSortOnlyMenu(table, wrapId, th, colIdx, total);
+    }
     const body = table.tBodies[0];
     const values = [...new Set([...(body ? body.rows : [])]
       .map(tr => (tr.cells[colIdx]?.textContent || "").trim()))]
@@ -486,8 +521,16 @@
 
   function _openServerColMenu(table, wrapId, th, colIdx, server) {
     const st = _stateFor(wrapId);
-    const sel = $(server.select);
+    const sel = server.select ? $(server.select) : null;
+    const cur = sel ? sel.value : (SERVER_PARAMS[wrapId]?.[server.param] ?? "");
     const menu = _menuEl();
+    const control = server.kind === "select"
+      ? `<select class="thm-input" id="thmServerSel">${
+          [...sel.options].map(o => `<option value="${esc(o.value)}"${sel.value === o.value ? " selected" : ""}>${esc(o.textContent)}</option>`).join("")
+        }</select>`
+      : `<input class="thm-input" id="thmServerInput" type="${server.kind === "number" ? "number" : "text"}"
+                value="${esc(String(cur))}" placeholder="${esc(server.label)}">
+         <div class="sub" style="margin-top:4px">Enter zum Anwenden · leer = kein Filter</div>`;
     menu.innerHTML = `
       <div class="thm-head">${esc(th.textContent.replace("▾", "").trim())}</div>
       <div class="thm-sec thm-sort">
@@ -495,10 +538,8 @@
         <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "desc" ? " btn-primary" : ""}" data-dir="desc">↓ Absteigend</button>
       </div>
       <div class="thm-sec"><div class="thm-sec-title">${esc(server.label)}</div>
-        <select class="thm-input" id="thmServerSel">${
-          [...sel.options].map(o => `<option value="${esc(o.value)}"${sel.value === o.value ? " selected" : ""}>${esc(o.textContent)}</option>`).join("")
-        }</select>
-        <div class="sub" style="margin-top:5px">Filtert alle Zeilen, nicht nur die geladenen.</div>
+        ${control}
+        <div class="sub" style="margin-top:5px">Filtert <b>alle</b> Zeilen, nicht nur die geladenen.</div>
       </div>`;
     const r = th.getBoundingClientRect();
     menu.classList.remove("hidden");
@@ -515,6 +556,56 @@
       sel.value = e.target.value;
       sel.dispatchEvent(new Event("change", { bubbles: true }));   // reloads from the server
     });
+    const input = $("#thmServerInput", menu);
+    let applied = false;                 // Enter AND blur both fire; load once
+    const applyInput = () => {
+      if (applied) return;
+      applied = true;
+      const v = input.value.trim();
+      SERVER_PARAMS[wrapId] = SERVER_PARAMS[wrapId] || {};
+      if (v) SERVER_PARAMS[wrapId][server.param] = v;
+      else delete SERVER_PARAMS[wrapId][server.param];
+      menu.classList.add("hidden");
+      (wrapId === "objekteWrap" ? loadObjekte : loadChancen)();
+    };
+    input?.addEventListener("keydown", (e) => { if (e.key === "Enter") applyInput(); });
+    input?.addEventListener("blur", applyInput);
+  }
+
+  // Turn the collected server params into a query string for the tab's loader.
+  function serverParamQuery(wrapId) {
+    return Object.entries(SERVER_PARAMS[wrapId] || {})
+      .map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join("");
+  }
+
+  function _openSortOnlyMenu(table, wrapId, th, colIdx, total) {
+    const st = _stateFor(wrapId);
+    const loaded = table.tBodies[0]?.rows.length || 0;
+    const menu = _menuEl();
+    const filterable = Object.values(SERVER_COLUMNS[wrapId] || {})
+      .map(c => c.label).filter(Boolean);
+    menu.innerHTML = `
+      <div class="thm-head">${esc(th.textContent.replace("▾", "").trim())}</div>
+      <div class="thm-sec thm-sort">
+        <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "asc" ? " btn-primary" : ""}" data-dir="asc">↑ Aufsteigend</button>
+        <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "desc" ? " btn-primary" : ""}" data-dir="desc">↓ Absteigend</button>
+      </div>
+      <div class="thm-sec">
+        <div class="sub">Sortiert die <b>${loaded}</b> geladenen Zeilen von
+          ${total.toLocaleString("de-DE")}. Für diese Spalte gibt es keinen
+          Filter über den ganzen Bestand — filtern lässt sich nach:
+          ${esc(filterable.join(" · "))}.</div>
+      </div>`;
+    const r = th.getBoundingClientRect();
+    menu.classList.remove("hidden");
+    const w = Math.min(320, window.innerWidth - 24);
+    menu.style.width = w + "px";
+    menu.style.top = Math.round(r.bottom + 4) + "px";
+    menu.style.left = Math.round(Math.min(r.left, window.innerWidth - w - 12)) + "px";
+    $$(".thm-sort-btn", menu).forEach(b => b.addEventListener("click", () => {
+      st.sort = { col: colIdx, dir: b.dataset.dir };
+      menu.classList.add("hidden"); _applyTableState(table, wrapId);
+    }));
   }
 
   function makeTableInteractive(table) {
@@ -1685,14 +1776,17 @@
     const adsOnly = $("#chancenAdsOnly").checked;
     const minValue = Number($("#chancenMinValue").value || 0);
     wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
+    const chSeq = nextSeq("chancenTableWrap");
     let data;
     try {
       data = await api(`/api/chancen?limit=500&min_value=${minValue}`
-        + `&advertising_only=${adsOnly ? "true" : "false"}`);
+        + `&advertising_only=${adsOnly ? "true" : "false"}`
+        + serverParamQuery("chancenTableWrap"));
     } catch (e) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Konnte nicht geladen werden: ${esc(e.message)}</p>`;
       return;
     }
+    if (!isCurrent("chancenTableWrap", chSeq)) return;
     TABLE_TOTALS["chancenTableWrap"] = data.total;
     const rows = data.rows || [];
     const s = data.summary || {};
@@ -1879,9 +1973,12 @@
     const st = $("#objekteStatus").value;
     const mm = $("#objekteMulti").checked ? 2 : 1;
     wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
+    const seq = nextSeq("objekteWrap");
     let data;
     try {
-      data = await api(`/api/projekte?limit=300&min_members=${mm}${st ? `&status=${st}` : ""}`);
+      data = await api(`/api/projekte?limit=300&min_members=${mm}`
+        + (st ? `&status=${st}` : "") + serverParamQuery("objekteWrap"));
+      if (!isCurrent("objekteWrap", seq)) return;    // a newer load already ran
       TABLE_TOTALS["objekteWrap"] = data.total;
     } catch (e) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Fehler: ${esc(e.message)}</p>`;

@@ -120,7 +120,8 @@ def overview() -> dict:
 
 
 def list_projects(status: str | None = None, min_members: int = 1,
-                  limit: int = 200, q: str | None = None) -> dict:
+                  limit: int = 200, q: str | None = None,
+                  min_value: float = 0.0, lost_reason: str | None = None) -> dict:
     """Projects, most valuable first, with their members and roles resolved.
 
     Returns {"rows": [...], "total": n, "returned": len(rows)} — the total is the
@@ -147,6 +148,11 @@ def list_projects(status: str | None = None, min_members: int = 1,
             continue
         rank = (sum(float(m.order_value or 0) for m in members)
                 or sum(float(m.estimated_value or 0) for m in members) or 0)
+        if min_value and rank < min_value:
+            continue
+        if lost_reason and not any((m.lost_reason or "") == lost_reason
+                                   for m in members):
+            continue
         candidates.append((rank, key, members, outcome))
 
     if q:

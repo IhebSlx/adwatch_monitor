@@ -753,7 +753,9 @@ def icp_backtest_route(cut: str | None = None, dealers_only: bool = False):
 
 @app.get("/api/chancen")
 def chancen_route(limit: int = 200, min_value: float = 0.0,
-                  advertising_only: bool = False):
+                  advertising_only: bool = False,
+                  segment: str | None = None, country: str | None = None,
+                  health: str | None = None):
     """Customers who have gone quiet against their OWN order rhythm, worst first.
 
     The list this app exists for: 32% of all lost opportunities are lost to
@@ -763,11 +765,21 @@ def chancen_route(limit: int = 200, min_value: float = 0.0,
     combination is not visible anywhere else in the Solarlux stack.
     """
     from .insights import rfm
-    page = rfm.overdue_customers(limit=max(1, min(limit, 1000)),
-                                 min_value=max(min_value, 0.0), with_total=True)
-    rows, total = page["rows"], page["total"]
+    # Ask for everything that matches, filter here, THEN cap — filtering after
+    # the cap would search the first 500 and report a fraction as the total.
+    page = rfm.overdue_customers(limit=100000, min_value=max(min_value, 0.0),
+                                 with_total=True)
+    rows = page["rows"]
+    if segment:
+        rows = [r for r in rows if (r.get("segment") or "") == segment]
+    if country:
+        rows = [r for r in rows if (r.get("country") or "") == country]
+    if health:
+        rows = [r for r in rows if (r.get("health") or "") == health]
     if advertising_only:
         rows = [r for r in rows if r["advertising"]]
+    total = len(rows)
+    rows = rows[:max(1, min(limit, 1000))]
     # `total` counts every company that matched, not the slice we send. Without
     # it the screen can only say "x von 500" and 500 reads as the whole world.
     return {"rows": rows, "total": total, "returned": len(rows),
@@ -961,7 +973,8 @@ def reject_website_route(company_id: int):
 
 @app.get("/api/projekte")
 def projekte_route(status: str | None = None, min_members: int = 1,
-                   limit: int = 200, q: str | None = None):
+                   limit: int = 200, q: str | None = None,
+                   min_value: float = 0.0, lost_reason: str | None = None):
     """Objekte statt einzelner Verkaufschancen. Besonderheit Objektvertrieb:
     mehrere VCs teilen sich ein Projekt (sl_primary_opportunityid); EIN Gewinn
     macht das Projekt gewonnen — Geschwister-VCs mit 'Zugehörige VC gewonnen'
@@ -969,7 +982,9 @@ def projekte_route(status: str | None = None, min_members: int = 1,
     from .insights import projekte
     page = projekte.list_projects(status=status,
                                   min_members=max(1, min_members),
-                                  limit=max(1, min(limit, 1000)), q=q)
+                                  limit=max(1, min(limit, 1000)), q=q,
+                                  min_value=max(min_value, 0.0),
+                                  lost_reason=lost_reason)
     # `total` is what MATCHED the filters across all 52.796 projects; `rows` is
     # only the slice that fits in the browser. Reporting just the slice let the
     # screen say "34 von 300" and imply 300 was everything.
