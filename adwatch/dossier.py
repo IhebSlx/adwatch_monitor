@@ -105,8 +105,58 @@ def _role_block(rows: list[CrmOpportunity]) -> dict:
         "lost_reasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])[:5]),
         "building_types": dict(sorted(uses.items(), key=lambda kv: -kv[1])[:5]),
         "origins": dict(sorted(origins.items(), key=lambda kv: -kv[1])[:5]),
+        # The ten newest, for the drawer's summary. `vcs` above is the true
+        # count and the UI has to show both — one company carries 1.266
+        # Verkaufschancen, and a list of ten that does not say so reads as the
+        # whole history. verkaufschancen() below serves the rest, paged.
         "recent": [_vc_row(o) for o in recent],
     }
+
+
+def verkaufschancen(company_id: int, role: str | None = None,
+                    limit: int = 100, offset: int = 0) -> dict:
+    """Every Verkaufschance this company appears on, newest first, paged.
+
+    `_role_block.recent` caps at ten because it feeds a summary. This is the
+    full history behind it: "everything that has to do with this firm" is not a
+    sample, and the distribution is skewed enough that the difference matters —
+    58% of companies have exactly one Verkaufschance and 159 have fifty or more.
+
+    Roles are kept apart for the same reason the dossier keeps them apart: the
+    same company can be Käufer, Architekt and Endkunde (1.850 firms are all
+    three), and a lost Verkaufschance means something different in each. `role`
+    filters to one; without it every role is returned and each row says which.
+    """
+    with SessionLocal() as s:
+        c = s.get(Company, company_id)
+        gid = (c.crm_id or "").strip().lower() if c else ""
+        if not gid:
+            return {"rows": [], "total": 0, "by_role": {}, "returned": 0}
+
+        by_role: dict[str, int] = {}
+        seen: dict[str, dict] = {}          # opportunity guid -> row
+        for r, col in _ROLE_COLS:
+            if role and r != role:
+                continue
+            rows = list(s.scalars(select(CrmOpportunity).where(
+                getattr(CrmOpportunity, col) == gid)))
+            by_role[r] = len(rows)
+            for o in rows:
+                key = o.opportunity_guid or o.crm_id
+                # One Verkaufschance, not one row per role: a firm that is
+                # Käufer AND Endkunde on the same deal is on ONE deal. Same rule
+                # the Objekt drawer already applies to its firm list.
+                entry = seen.get(key)
+                if entry is None:
+                    entry = _vc_row(o)
+                    entry["roles"] = []
+                    seen[key] = entry
+                entry["roles"].append(r)
+
+    out = sorted(seen.values(), key=lambda v: (v["created"] or "0000"), reverse=True)
+    return {"rows": out[offset:offset + limit], "total": len(out),
+            "returned": len(out[offset:offset + limit]),
+            "by_role": {k: v for k, v in by_role.items() if v}}
 
 
 def _kurzprofil(c: Company, beleg: dict, roles: dict) -> str:
@@ -184,6 +234,7 @@ def build(company_id: int) -> dict | None:
         produkte = _product_block(s, company_id)
 
         roles: dict[str, dict] = {}
+        all_pids: set[str] = set()
         gid = (c.crm_id or "").strip().lower()
         if gid:
             for role, col in _ROLE_COLS:
@@ -191,13 +242,17 @@ def build(company_id: int) -> dict | None:
                     getattr(CrmOpportunity, col) == gid)))
                 if rows:
                     roles[role] = _role_block(rows)
+                    all_pids.update(o.project_id for o in rows if o.project_id)
 
         # the Objekte this company touches, resolved with names and outcomes so
         # the drawer can show "arbeitet an: <Adresse> (offen, 3 VCs)" directly
         projects: list[dict] = []
         if gid:
-            pids = sorted({vc["project_id"] for blk in roles.values()
-                           for vc in blk["recent"] if vc.get("project_id")})[:20]
+            # From ALL Verkaufschancen, not from the ten in `recent`. Deriving
+            # the project ids from the truncated list meant a company with 1.266
+            # Verkaufschancen showed only the Objekte touched by its ten newest,
+            # with nothing saying so.
+            pids = sorted(all_pids)[:20]
             if pids:
                 members = list(s.scalars(select(CrmOpportunity).where(
                     CrmOpportunity.project_id.in_(pids))))
@@ -222,5 +277,8 @@ def build(company_id: int) -> dict | None:
         "produkte": produkte,
         "rollen": roles,
         "projekte": projects,
+        # how many Objekte exist behind the (capped) list above, so the drawer
+        # can say "20 von 137" instead of implying it shows everything
+        "projekte_total": len(all_pids),
         "kurzprofil": _kurzprofil(c, beleg, roles),
     }

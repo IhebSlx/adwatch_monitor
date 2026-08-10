@@ -382,6 +382,19 @@ def company_detail(cid: int):
     }
 
 
+@app.get("/api/companies/{cid}/verkaufschancen")
+def company_verkaufschancen_route(cid: int, role: str | None = None,
+                                  limit: int = 100, offset: int = 0):
+    """The company's full Verkaufschancen history, paged.
+
+    The dossier carries only the ten newest per role because it feeds a summary.
+    This is what the drawer's "alle N anzeigen" loads: one company holds 1.266
+    Verkaufschancen, so the list has to be pageable rather than capped."""
+    from . import dossier
+    return dossier.verkaufschancen(cid, role=role, limit=min(limit, 500),
+                                   offset=max(offset, 0))
+
+
 @app.get("/api/logs")
 def list_logs_route(status: str | None = None, source: str | None = None, q: str | None = None,
                     page: int = 1, page_size: int = 50):

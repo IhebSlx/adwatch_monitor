@@ -3707,3 +3707,84 @@ def test_list_features_cover_both_product_columns():
     for f in icp._LIST_FEATURES:
         assert f in icp.DEFAULT_WEIGHTS
         assert f in icp._FEATURE_LABEL_DE
+
+
+def test_company_verkaufschancen_are_complete_and_deduped(temp_db):
+    """"Everything that has to do with this firm" cannot be a sample. The dossier
+    ships the ten newest per role for its summary; this endpoint is the rest.
+
+    Two rules it has to keep. A Verkaufschance counted once even when the company
+    plays several roles on it (1.850 firms are Käufer AND Architekt AND Endkunde),
+    and a `total` that is the real count — one company carries 1.266."""
+    import datetime as dt
+    from adwatch import dossier
+    from adwatch.models import Company, CrmOpportunity
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    s.add(Company(name="Haendler", crm_id="GUID-A"))
+    s.add(Company(name="Andere", crm_id="GUID-B"))
+    s.commit()
+    cid = s.scalar(select(Company.id).where(Company.name == "Haendler"))
+    for i in range(25):
+        s.add(CrmOpportunity(crm_id=f"o{i}", opportunity_guid=f"g{i}",
+                             number=f"NR{i:03d}", parent_account_crm_id="guid-a",
+                             state="gewonnen" if i < 5 else "verloren",
+                             created_on=dt.datetime(2024, 1, 1) + dt.timedelta(days=i)))
+    # same deal, three roles at once -> ONE Verkaufschance, not three
+    s.add(CrmOpportunity(crm_id="multi", opportunity_guid="gmulti", number="NR999",
+                         parent_account_crm_id="guid-a", architect_crm_id="guid-a",
+                         end_customer_crm_id="guid-a", state="offen",
+                         created_on=dt.datetime(2026, 1, 1)))
+    # a deal that belongs to somebody else
+    s.add(CrmOpportunity(crm_id="fremd", opportunity_guid="gfremd",
+                         parent_account_crm_id="guid-b", state="offen",
+                         created_on=dt.datetime(2026, 2, 1)))
+    s.commit()
+    s.close()
+
+    r = dossier.verkaufschancen(cid, limit=10)
+    assert r["total"] == 26, "25 plus die Mehrrollen-VC, die Fremde nicht"
+    assert r["returned"] == 10
+    assert r["by_role"] == {"kaeufer": 26, "architekt": 1, "endkunde": 1}
+    assert r["rows"][0]["number"] == "NR999", "neueste zuerst"
+    assert sorted(r["rows"][0]["roles"]) == ["architekt", "endkunde", "kaeufer"]
+
+    # paging reaches the end and never repeats a row
+    seen = []
+    for off in (0, 10, 20):
+        seen += [v["number"] for v in dossier.verkaufschancen(cid, limit=10, offset=off)["rows"]]
+    assert len(seen) == 26 and len(set(seen)) == 26
+
+    # role filter narrows both the rows and the counts
+    only = dossier.verkaufschancen(cid, role="architekt")
+    assert only["total"] == 1 and only["by_role"] == {"architekt": 1}
+
+
+def test_dossier_objekte_come_from_all_vcs_not_the_last_ten(temp_db):
+    """The Objekte list was derived from `blk["recent"]`, which is capped at ten.
+    A company on 1.250 buildings therefore showed only those touched by its ten
+    newest Verkaufschancen, and nothing said so."""
+    import datetime as dt
+    from adwatch import dossier
+    from adwatch.models import Company, CrmOpportunity
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    s.add(Company(name="Haendler", crm_id="GUID-A"))
+    s.commit()
+    cid = s.scalar(select(Company.id))
+    for i in range(30):
+        s.add(CrmOpportunity(crm_id=f"o{i}", opportunity_guid=f"g{i}",
+                             project_id=f"p{i}", project_name=f"Bauvorhaben {i}",
+                             parent_account_crm_id="guid-a", state="verloren",
+                             lost_reason="Zu teuer",
+                             created_on=dt.datetime(2024, 1, 1) + dt.timedelta(days=i)))
+    s.commit()
+    s.close()
+
+    d = dossier.build(cid)
+    assert d["projekte_total"] == 30, "alle Objekte zaehlen, nicht nur die der letzten 10 VCs"
+    assert len(d["projekte"]) <= 20            # die Liste selbst bleibt gedeckelt
+    assert d["rollen"]["kaeufer"]["vcs"] == 30
+    assert len(d["rollen"]["kaeufer"]["recent"]) == 10

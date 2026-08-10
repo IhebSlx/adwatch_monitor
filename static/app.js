@@ -1904,16 +1904,107 @@
         ${Object.keys(blk.building_types || {}).length ? `<div class="sub">Gebäude: ${kv(blk.building_types)}</div>` : ""}
         ${Object.keys(blk.origins || {}).length ? `<div class="sub">Herkunft: ${kv(blk.origins)}</div>` : ""}
         ${Object.keys(blk.lost_reasons || {}).length ? `<div class="sub">Verluste: ${kv(blk.lost_reasons)}</div>` : ""}
+        ${vcTable(blk.recent, blk.vcs, role)}
       </div>`;
     }
     const pj = d.projekte || [];
     if (pj.length) {
-      html += `<div style="margin-top:10px;font-size:12.5px"><b>Objekte (${pj.length}):</b>
-        ${pj.slice(0, 6).map(p => `<div class="sub">• ${esc((p.name || "").slice(0, 60))} —
+      // "Objekte (6)" used to be the length of a list that was itself capped —
+      // and derived from the ten newest VCs, so a company on 1.250 buildings
+      // showed six and implied that was all of them.
+      const total = d.projekte_total ?? pj.length;
+      html += `<div style="margin-top:10px;font-size:12.5px"><b>Objekte:</b>
+        <span class="sub">${pj.length < total ? `${pj.length} von ${total.toLocaleString("de-DE")}` : total.toLocaleString("de-DE")}</span>
+        ${pj.slice(0, 6).map(p => `<div class="sub objekt-link" data-projekt="${esc(p.project_id)}"
+            style="cursor:pointer">• ${esc((p.name || "").slice(0, 60))} —
           ${esc(p.status)}, ${p.members} VC${p.members > 1 ? "s" : ""}${p.type_of_use ? `, ${esc(p.type_of_use)}` : ""}${p.value ? `, ${eurShort(p.value)}` : ""}</div>`).join("")}
       </div>`;
     }
     return html + `</div>`;
+  }
+
+  // Every Verkaufschance of one company, in one role. The dossier ships the ten
+  // newest; the rest load on demand from /api/companies/<id>/verkaufschancen,
+  // because one firm carries 1.266 of them and sending all of that into a drawer
+  // by default would be slow for the 58% of companies that have exactly one.
+  function vcTable(rows, total, role) {
+    if (!rows || !rows.length) return "";
+    const shown = rows.length;
+    return `
+      <div class="vc-block" data-role="${esc(role)}" style="margin-top:6px">
+        <table class="data-table" style="font-size:12px">
+          <thead><tr><th>Angelegt</th><th>Nr.</th><th>Objekt</th><th>Ort</th>
+            <th>Status</th><th class="num">Wert</th></tr></thead>
+          <tbody>${rows.map(vcRow).join("")}</tbody>
+        </table>
+        ${shown < total ? `<button class="btn btn-sm vc-more" data-role="${esc(role)}"
+            data-offset="${shown}" style="margin-top:5px">
+            ${shown} von ${total.toLocaleString("de-DE")} — weitere laden</button>`
+          : `<div class="sub" style="margin-top:4px">alle ${total.toLocaleString("de-DE")} angezeigt</div>`}
+      </div>`;
+  }
+
+  // Clicking a Verkaufschance opens the Objekt it belongs to — that is where the
+  // sibling bids, the roles and the timeline live, and it is the same drawer the
+  // Objekte tab uses. Re-wired after every "weitere laden", since those rows are
+  // new nodes.
+  function wireVcLinks(root, companyId) {
+    $$(".vc-link, .objekt-link", root).forEach(el => {
+      if (el.dataset.wired) return;
+      el.dataset.wired = "1";
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        openProjektDrawer(el.dataset.projekt);
+      });
+    });
+    $$(".vc-more", root).forEach(btn => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = "1";
+      btn.addEventListener("click", async () => {
+        const role = btn.dataset.role, offset = Number(btn.dataset.offset || 0);
+        btn.disabled = true;
+        btn.textContent = "lädt …";
+        try {
+          const d = await api(`/api/companies/${companyId}/verkaufschancen`
+            + `?role=${encodeURIComponent(role)}&limit=100&offset=${offset}`);
+          const tbody = $("tbody", btn.closest(".vc-block"));
+          tbody.insertAdjacentHTML("beforeend", (d.rows || []).map(vcRow).join(""));
+          const shown = tbody.rows.length;
+          if (shown >= d.total) {
+            btn.replaceWith(Object.assign(document.createElement("div"),
+              {className: "sub", textContent: `alle ${d.total.toLocaleString("de-DE")} angezeigt`}));
+          } else {
+            btn.dataset.offset = String(shown);
+            btn.disabled = false;
+            btn.textContent = `${shown} von ${d.total.toLocaleString("de-DE")} — weitere laden`;
+          }
+          wireVcLinks(btn.closest(".vc-block") || root, companyId);
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = "Fehler — nochmal";
+          toast(e.message, "error");
+        }
+      });
+    });
+  }
+
+  function vcRow(v) {
+    // The address on a Verkaufschance is the BUILDING, not the customer's seat —
+    // worth showing, because it is the only geography that says where demand is.
+    const ort = [v.postal_code, v.city].filter(Boolean).join(" ");
+    return `<tr${v.project_id ? ` class="vc-link" data-projekt="${esc(v.project_id)}" style="cursor:pointer"` : ""}>
+      <td class="sub" style="white-space:nowrap">${v.created ? esc(deDate(v.created)) : "—"}</td>
+      <td class="sub">${esc(v.number || "—")}</td>
+      <td style="max-width:210px">${esc(v.name || "(ohne Namen)")}
+        ${v.lost_reason && v.lost_reason !== "Zugehörige VC gewonnen"
+          ? `<div class="sub">${esc(v.lost_reason)}</div>` : ""}
+        ${v.roles && v.roles.length > 1
+          ? `<div class="sub">Rollen: ${v.roles.map(r => esc(ROLE_LABEL[r] || r)).join(", ")}</div>` : ""}</td>
+      <td class="sub">${esc(ort || "—")}</td>
+      <td><span class="state-chip">${esc(v.state || "—")}</span></td>
+      <td class="num">${v.order_value ? eur(v.order_value)
+        : (v.estimated_value ? `<span class="sub">${eur(v.estimated_value)}</span>` : "—")}</td>
+    </tr>`;
   }
 
   // CRM / Belege / Anreicherung im Drawer — every column the DB holds, visible.
@@ -3461,6 +3552,7 @@
       </div>`;
 
     $(".drawer-close", drawer).addEventListener("click", closeCompanyDrawer);
+    wireVcLinks(drawer, id);
     const refresh = async () => { await loadCustomers(); closeCompanyDrawer();
       openCompanyDrawer(id); };   // drawer no longer depends on the Explorer's page
 
