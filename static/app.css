@@ -887,6 +887,17 @@ body.col-resizing { cursor: col-resize; user-select: none; }
    colspan cells (e.g. the expandable pages row) keep their natural behaviour */
 table.col-resized td:not([colspan]) { overflow: hidden; text-overflow: ellipsis; }
 
+/* Client-side column filter on the tables that arrive complete (Chancen,
+   Objekte, Prüfen). Hidden, not removed, so sorting and the row count still see
+   every row and clearing the filter needs no reload. */
+tr.row-filtered { display: none; }
+.table-count {
+  font-size: 12px; padding: 4px 2px 8px; color: var(--muted);
+}
+/* sort direction, for the headers that sort in the browser */
+th.sorted-asc .th-caret::after { content: " ↑"; color: var(--accent); }
+th.sorted-desc .th-caret::after { content: " ↓"; color: var(--accent); }
+
 /* ---- column-header menus (sort + per-column filter) ---- */
 .th-has-menu { cursor: pointer; user-select: none; }
 .th-has-menu:hover { color: var(--accent-ink); }

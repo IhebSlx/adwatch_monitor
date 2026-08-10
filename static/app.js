@@ -304,8 +304,207 @@
       });
     });
   }
+  // ------------------------------------------------------------ sort + filter, any table
+  // The Firmen table gets its column menus from the server (it is paginated, so
+  // sorting and filtering have to happen in SQL). Chancen, Objekte and Prüfen
+  // arrive complete in one response, so they get the same affordances computed
+  // in the browser: click a header to sort, tick values to filter.
+  //
+  // State lives OUTSIDE the table, keyed by the wrapper id, because every reload
+  // replaces the whole <table> — without this, hitting Aktualisieren silently
+  // dropped whatever you had filtered to.
+  const TABLE_STATE = new Map();   // wrapId -> {sort:{col,dir}, filters:{col:Set}}
+
+  const _stateFor = (wrapId) => {
+    if (!TABLE_STATE.has(wrapId)) TABLE_STATE.set(wrapId, { sort: null, filters: {} });
+    return TABLE_STATE.get(wrapId);
+  };
+
+  // One popover, shared with the Firmen column menus. Created on demand rather
+  // than assumed: the Firmen wiring builds it too, but far later in this file,
+  // and depending on that order would break the moment either side moved.
+  function _menuEl() {
+    let el = $("#thMenu");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "thMenu";
+      el.className = "th-menu hidden";
+      el.addEventListener("click", (e) => e.stopPropagation());
+      document.body.appendChild(el);
+      document.addEventListener("click", () => el.classList.add("hidden"));
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") el.classList.add("hidden");
+      });
+    }
+    return el;
+  }
+
+  // Sort key for a cell: a number when the column reads as numeric (German
+  // formatting, currency and % included), a date for dd.mm.yyyy / ISO, else
+  // lowercased text. Empty always sorts last, whichever direction.
+  function _cellKey(td) {
+    const raw = (td?.textContent || "").trim();
+    if (!raw || raw === "—") return { empty: true, v: "" };
+    const iso = raw.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return { v: `${iso[1]}${iso[2]}${iso[3]}` };
+    const de = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+    if (de) return { v: `${de[3]}${de[2]}${de[1]}` };
+    const num = raw.replace(/[^\d,.\-]/g, "");
+    if (num && /\d/.test(num)) {
+      const n = Number(num.replace(/\./g, "").replace(",", "."));
+      if (Number.isFinite(n) && /^[\s€%\d.,\-+]*$/.test(raw)) return { v: n, num: true };
+    }
+    return { v: raw.toLowerCase() };
+  }
+
+  function _applyTableState(table, wrapId) {
+    const st = _stateFor(wrapId);
+    const body = table.tBodies[0];
+    if (!body) return;
+    const rows = [...body.rows];
+
+    // filters: a row survives only if every active column filter accepts it
+    const active = Object.entries(st.filters).filter(([, s]) => s && s.size);
+    rows.forEach(tr => {
+      const ok = active.every(([col, set]) =>
+        set.has((tr.cells[col]?.textContent || "").trim()));
+      tr.classList.toggle("row-filtered", !ok);
+    });
+
+    if (st.sort) {
+      const { col, dir } = st.sort;
+      const sorted = rows.slice().sort((a, b) => {
+        const ka = _cellKey(a.cells[col]), kb = _cellKey(b.cells[col]);
+        if (ka.empty !== kb.empty) return ka.empty ? 1 : -1;   // blanks last, always
+        if (ka.v === kb.v) return 0;
+        return (ka.v > kb.v ? 1 : -1) * (dir === "desc" ? -1 : 1);
+      });
+      sorted.forEach(tr => body.appendChild(tr));
+    }
+
+    $$("thead th", table).forEach((th, i) => {
+      th.classList.toggle("sorted-asc", !!st.sort && st.sort.col === i && st.sort.dir === "asc");
+      th.classList.toggle("sorted-desc", !!st.sort && st.sort.col === i && st.sort.dir === "desc");
+      th.classList.toggle("th-filtered", !!(st.filters[i] && st.filters[i].size));
+    });
+
+    const shown = rows.filter(r => !r.classList.contains("row-filtered")).length;
+    let tag = table.parentElement.querySelector(".table-count");
+    if (!tag) {
+      tag = document.createElement("div");
+      tag.className = "table-count muted";
+      table.parentElement.insertBefore(tag, table);
+    }
+    tag.textContent = shown === rows.length
+      ? `${rows.length} Zeilen`
+      : `${shown} von ${rows.length} Zeilen — Filter aktiv`;
+  }
+
+  function _openColMenu(table, wrapId, th, colIdx) {
+    const st = _stateFor(wrapId);
+    const body = table.tBodies[0];
+    const values = [...new Set([...(body ? body.rows : [])]
+      .map(tr => (tr.cells[colIdx]?.textContent || "").trim()))]
+      .filter(v => v !== "").sort((a, b) => a.localeCompare(b, "de"));
+    const chosen = st.filters[colIdx] || new Set();
+    // A column of 300 distinct free-text values is a search box, not a checklist.
+    const listable = values.length <= 60;
+
+    const menu = _menuEl();
+    menu.innerHTML = `
+      <div class="thm-head">${esc(th.textContent.replace("▾", "").trim())}</div>
+      <div class="thm-sec thm-sort">
+        <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "asc" ? " btn-primary" : ""}" data-dir="asc">↑ Aufsteigend</button>
+        <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "desc" ? " btn-primary" : ""}" data-dir="desc">↓ Absteigend</button>
+      </div>
+      ${listable ? `
+      <div class="thm-sec"><div class="thm-sec-title">Werte (${values.length})</div>
+        <input type="text" class="thm-input" id="thmValSearch" placeholder="suchen…">
+        <div class="thm-list">${values.map(v => `
+          <label class="thm-item"><input type="checkbox" class="thm-val" value="${esc(v)}"${chosen.has(v) ? " checked" : ""}>
+            <span>${esc(v.length > 42 ? v.slice(0, 42) + "…" : v)}</span></label>`).join("")}</div>
+      </div>` : `
+      <div class="thm-sec"><div class="thm-sec-title">Enthält</div>
+        <input type="text" class="thm-input" id="thmContains" placeholder="Text…">
+      </div>`}
+      <div class="thm-sec"><button class="btn btn-sm" id="thmClearCol">Spaltenfilter löschen</button></div>`;
+
+    const r = th.getBoundingClientRect();
+    menu.classList.remove("hidden");
+    const w = Math.min(300, window.innerWidth - 24);
+    menu.style.width = w + "px";
+    menu.style.top = Math.round(r.bottom + 4) + "px";
+    menu.style.left = Math.round(Math.min(r.left, window.innerWidth - w - 12)) + "px";
+
+    const close = () => menu.classList.add("hidden");
+    $$(".thm-sort-btn", menu).forEach(b => b.addEventListener("click", () => {
+      st.sort = { col: colIdx, dir: b.dataset.dir };
+      close(); _applyTableState(table, wrapId);
+    }));
+    $("#thmValSearch", menu)?.addEventListener("input", (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      $$(".thm-item", menu).forEach(l =>
+        l.classList.toggle("hidden", !l.textContent.toLowerCase().includes(q)));
+    });
+    $$(".thm-val", menu).forEach(cb => cb.addEventListener("change", () => {
+      const picked = $$(".thm-val:checked", menu).map(x => x.value);
+      st.filters[colIdx] = new Set(picked);
+      _applyTableState(table, wrapId);
+    }));
+    $("#thmContains", menu)?.addEventListener("input", (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      st.filters[colIdx] = q
+        ? new Set(values.filter(v => v.toLowerCase().includes(q)))
+        : new Set();
+      _applyTableState(table, wrapId);
+    });
+    $("#thmClearCol", menu)?.addEventListener("click", () => {
+      delete st.filters[colIdx];
+      close(); _applyTableState(table, wrapId);
+    });
+  }
+
+  function makeTableInteractive(table) {
+    const wrap = table.closest(".table-wrap");
+    // The Firmen table drives its menus from the server; leave it alone.
+    if (!wrap || !wrap.id || table.id === "customersTable" || table.dataset.interactive) return;
+    table.dataset.interactive = "1";
+    $$("thead th", table).forEach((th, i) => {
+      th.classList.add("th-has-menu");
+      th.insertAdjacentHTML("beforeend", ` <span class="th-caret">▾</span>`);
+      th.addEventListener("click", (e) => {
+        if (e.target.classList.contains("col-grip")) return;
+        e.stopPropagation();
+        const menu = $("#thMenu");
+        const same = !menu.classList.contains("hidden") && menu.dataset.owner === `${wrap.id}:${i}`;
+        menu.classList.add("hidden");
+        if (!same) { menu.dataset.owner = `${wrap.id}:${i}`; _openColMenu(table, wrap.id, th, i); }
+      });
+    });
+    _applyTableState(table, wrap.id);
+  }
+
+  function enhanceTable(table) {
+    makeColumnsResizable(table);
+    makeTableInteractive(table);
+  }
+
   // all data tables (each sits in a .table-wrap); decorative info tables are skipped
-  $$(".table-wrap table").forEach(makeColumnsResizable);
+  $$(".table-wrap table").forEach(enhanceTable);
+
+  // Chancen, Objekte and Prüfen build their tables AFTER this runs, so a one-time
+  // pass reached only the tables present in the HTML — which is why resizing
+  // worked on Firmen and nowhere else. Watching the wrappers covers every table
+  // the app will ever render, without a call to remember at each render site.
+  new MutationObserver((muts) => {
+    for (const m of muts) {
+      for (const node of m.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        if (node.tagName === "TABLE") enhanceTable(node);
+        else $$("table", node).forEach(enhanceTable);
+      }
+    }
+  }).observe(document.body, { childList: true, subtree: true });
 
   // ------------------------------------------------------------------ load + render
   async function loadState() {
