@@ -777,6 +777,8 @@ def import_opportunity_addresses(path: str | Path) -> dict:
                     filled[col] += 1
         s.commit()
 
+    from .insights import projekte as _pj
+    _pj.invalidate_cache()      # addresses changed -> the cached grouping is stale
     return {"in_file": len(rows), "matched": seen, "filled": filled}
 
 

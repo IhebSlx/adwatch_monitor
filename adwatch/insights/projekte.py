@@ -39,14 +39,47 @@ WON, OPEN, LOST = "gewonnen", "offen", "verloren"
 _WON_ELSEWHERE = "Zugehörige VC gewonnen"
 
 
+# Grouping 57.776 opportunities takes ~1,3 s and resolving 48k company names
+# another ~1 s, and BOTH ran twice per request (overview + list). Opportunities
+# only change on a CRM import, so the result is cached against a cheap
+# fingerprint — a row count and the newest sync stamp. A stale cache is
+# impossible without an import, and an import moves the fingerprint.
+_CACHE: dict[str, object] = {"key": None, "groups": None, "names": None}
+
+
+def _fingerprint(s) -> tuple:
+    from sqlalchemy import func as _f
+    return (s.scalar(select(_f.count(CrmOpportunity.id))),
+            str(s.scalar(select(_f.max(CrmOpportunity.synced_at)))),
+            s.scalar(select(_f.count(Company.id))))
+
+
 def _project_rows() -> dict[str, list[CrmOpportunity]]:
     with SessionLocal() as s:
+        key = _fingerprint(s)
+        if _CACHE["key"] == key and _CACHE["groups"] is not None:
+            return _CACHE["groups"]
         rows = list(s.scalars(select(CrmOpportunity)))
+        names = {(c.crm_id or "").lower(): c.name
+                 for c in s.execute(select(Company.crm_id, Company.name))
+                 if c.crm_id}
     groups: dict[str, list[CrmOpportunity]] = defaultdict(list)
     for o in rows:
-        key = o.project_id or o.opportunity_guid or o.crm_id
-        groups[key].append(o)
+        gkey = o.project_id or o.opportunity_guid or o.crm_id
+        groups[gkey].append(o)
+    _CACHE.update({"key": key, "groups": groups, "names": names})
     return groups
+
+
+def _company_names() -> dict[str, str]:
+    """crm_id -> name, from the same cached pass as the grouping."""
+    _project_rows()
+    return _CACHE["names"] or {}
+
+
+def invalidate_cache() -> None:
+    """Call after any import that touches opportunities or companies."""
+    _CACHE.update({"key": None, "groups": None, "names": None})
 
 
 def _outcome(members: list[CrmOpportunity]) -> str:
@@ -96,21 +129,44 @@ def list_projects(status: str | None = None, min_members: int = 1,
     are 52.796 projects and 8.189 won ones. Filtering happens here, over all of
     them; only the slice sent to the browser is capped.""" 
     groups = _project_rows()
-    with SessionLocal() as s:
-        by_crm = {(c.crm_id or "").lower(): c for c in
-                  s.scalars(select(Company).where(Company.crm_id.is_not(None)))}
+    names = _company_names()
 
     def name_of(gid):
-        c = by_crm.get((gid or "").lower())
-        return c.name if c else None
+        return names.get((gid or "").lower())
 
-    out = []
+    # Two passes. The first is cheap and runs over all 52.796 projects to decide
+    # what MATCHES and how it ranks; the second builds the display dict only for
+    # the page. Building all 52.796 dicts — resolving firms and architects for
+    # each — to then return 300 cost 4,4 s per request on its own.
+    candidates = []
     for key, members in groups.items():
         if len(members) < min_members:
             continue
         outcome = _outcome(members)
         if status and outcome != status:
             continue
+        rank = (sum(float(m.order_value or 0) for m in members)
+                or sum(float(m.estimated_value or 0) for m in members) or 0)
+        candidates.append((rank, key, members, outcome))
+
+    if q:
+        needle = q.strip().lower()
+
+        def hit(key, members):
+            primary = next((m for m in members
+                            if (m.opportunity_guid or "") == key), members[0])
+            if needle in ((primary.project_name or primary.name or "").lower()):
+                return True
+            return any(needle in (name_of(g) or "").lower()
+                       for m in members
+                       for g in (m.parent_account_crm_id, m.architect_crm_id))
+        candidates = [c for c in candidates if hit(c[1], c[2])]
+
+    total = len(candidates)
+    candidates.sort(key=lambda c: -c[0])
+
+    out = []
+    for _rank, key, members, outcome in candidates[:limit]:
         primary = next((m for m in members if (m.opportunity_guid or "") == key),
                        members[0])
         value = sum(float(m.order_value or 0) for m in members) or None
@@ -134,15 +190,6 @@ def list_projects(status: str | None = None, min_members: int = 1,
                                     if m.lost_reason
                                     and m.lost_reason != _WON_ELSEWHERE}),
         })
-    if q:
-        needle = q.strip().lower()
-        out = [p for p in out
-               if needle in (p["name"] or "").lower()
-               or any(needle in (f or "").lower() for f in p["firms"])
-               or any(needle in (a or "").lower() for a in p["architects"])]
-    out.sort(key=lambda p: -(p["order_value"] or p["estimated_value"] or 0))
-    total = len(out)
-    out = out[:limit]
     for p in out:
         if p["created"]:
             p["created"] = p["created"].date().isoformat()
