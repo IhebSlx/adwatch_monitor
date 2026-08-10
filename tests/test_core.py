@@ -3026,6 +3026,43 @@ def test_render_never_raises_into_the_pipeline(monkeypatch):
     assert rd.render_html("https://example.com") is None
 
 
+def test_dossier_carries_the_product_profile(temp_db, monkeypatch):
+    """Everything pulled today landed in the database and none of it reached the
+    drawer. The product profile is the whole answer to "which product for whom",
+    so it has to travel with the dossier, and its euros must stay labelled as
+    QUOTED — they span won and lost deals and are not revenue."""
+    from adwatch import dossier
+    from adwatch.models import Company, CrmCompanyProduct
+    import datetime as _dt
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Testbau", segment="Handel")
+    s.add(c); s.commit()
+    s.add_all([
+        CrmCompanyProduct(company_id=c.id, family="cero", positions=9,
+                          value=161845.0, first_seen=_dt.date(2021, 4, 4),
+                          last_seen=_dt.date(2026, 3, 2)),
+        # euros without positions: the value comes through the opportunity link,
+        # the positions through the account link — they do not have to agree
+        CrmCompanyProduct(company_id=c.id, family="Horizontale-Schiebewand",
+                          positions=0, value=41000.0),
+    ])
+    s.commit(); cid = c.id; s.close()
+    monkeypatch.setattr(dossier, "SessionLocal", temp_db.SessionLocal)
+
+    d = dossier.build(cid)
+    p = d["produkte"]
+    assert [f["family"] for f in p["families"]] == ["cero", "Horizontale-Schiebewand"]
+    assert p["value_quoted"] == 202845.0
+    assert p["positions"] == 9
+    assert p["first"] == "2021-04-04" and p["last"] == "2026-03-02"
+    # a company with no product rows must not grow an empty block
+    s2 = temp_db.SessionLocal()
+    other = Company(name="Ohne Produkte", segment="Handel")
+    s2.add(other); s2.commit(); oid = other.id; s2.close()
+    assert dossier.build(oid)["produkte"] is None
+
+
 def test_unproven_website_keeps_no_facts(temp_db, monkeypatch):
     """Facts and the identity verdict are written in one run, so they agree —
     until a verdict is REVISED. D3 Outdoor Girona kept a full profile (products,

@@ -546,6 +546,18 @@ def _to_dict(c: Company) -> dict:
         "enrich_profile": c.enrich_profile,
         "solarlux_fit": c.solarlux_fit, "partner_of": c.partner_of,
         "installs": c.installs,
+        # The remaining columns the drawer had no way to reach. Deliberately
+        # NOT everything: `candidates`, `page_verified` and the raw score
+        # timestamps are plumbing. These four are things a person acts on —
+        # why the ICP scored it, what a colleague wrote, what proved the
+        # website, and how stale the row is.
+        "fit_breakdown": c.fit_breakdown, "notes": c.notes,
+        "identity_evidence": c.identity_evidence,
+        "is_intercompany": c.is_intercompany,
+        "imported_at": c.imported_at.isoformat() if c.imported_at else None,
+        "crm_synced_at": c.crm_synced_at.isoformat() if c.crm_synced_at else None,
+        "identity_checked_at": (c.identity_checked_at.isoformat()
+                                if c.identity_checked_at else None),
         "facebook_url": c.facebook_url, "instagram_url": c.instagram_url,
         "linkedin_url": c.linkedin_url, "site_language": c.site_language,
     }

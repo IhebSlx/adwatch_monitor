@@ -1714,6 +1714,31 @@
         <b>Belege:</b> ${b.events} Bestellungen · ${eurShort(b.total)} · ${esc(b.first)} → ${esc(b.last)}
         <div class="sub">${esc(years)}</div></div>`;
     }
+    // What this company asks Solarlux for. The euros are QUOTED across won AND
+    // lost deals, so the label says "angefragt" — a dealer who asks for €2 Mio
+    // and buys €200k is a different conversation from one who asks for €200k.
+    const pr = d.produkte;
+    if (pr && pr.families?.length) {
+      const max = Math.max(...pr.families.map(f => f.value || 0), 1);
+      html += `<div style="margin-top:12px;font-size:12.5px">
+        <b>Produkte</b> — ${pr.positions} Positionen${pr.value_quoted ? ` · ${eurShort(pr.value_quoted)} angefragt` : ""}
+        ${pr.first ? `<span class="sub"> · ${esc(pr.first)} → ${esc(pr.last)}</span>` : ""}
+        <div style="display:flex;flex-direction:column;gap:3px;margin-top:6px">
+          ${pr.families.map(f => `
+            <div style="display:grid;grid-template-columns:1fr 62px 74px;gap:8px;align-items:center">
+              <div style="min-width:0">
+                <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.family)}</div>
+                <div style="height:3px;border-radius:2px;background:var(--accent);opacity:.55;
+                            width:${Math.max(2, Math.round(100 * (f.value || 0) / max))}%"></div>
+              </div>
+              <span class="sub" style="text-align:right">${f.positions ? f.positions + " Pos." : "—"}</span>
+              <span class="sub" style="text-align:right">${f.value ? eurShort(f.value) : "—"}</span>
+            </div>`).join("")}
+        </div>
+        <div class="sub" style="margin-top:4px">Werte sind <b>angefragt</b> (gewonnene und verlorene
+          Verkaufschancen), nicht fakturierter Umsatz.</div>
+      </div>`;
+    }
     for (const [role, blk] of Object.entries(d.rollen || {})) {
       html += `<div style="margin-top:10px;font-size:12.5px">
         <b>${ROLE_LABEL[role] || role}:</b> ${blk.vcs} Verkaufschancen —
@@ -1763,6 +1788,16 @@
       ["Projektfokus", j(c.project_focus)], ["Zertifikate", j(c.certifications)],
       ["Fremdmarken", j(c.competitor_brands)], ["Erwähnt Solarlux", yn(c.mentions_solarlux)],
       ["Einsatzgebiet", c.service_area], ["Seitensprache", c.site_language],
+      ["Notiz", c.notes],
+      ["Konzerngesellschaft", yn(c.is_intercompany)],
+      ["Fit-Begründung", c.fit_breakdown && typeof c.fit_breakdown === "object"
+        ? Object.entries(c.fit_breakdown).map(([k, v]) => `${k}: ${v}`).join(" · ")
+        : c.fit_breakdown],
+      ["Identitäts-Beleg", c.identity_evidence?.signals
+        ? Object.entries(c.identity_evidence.signals).filter(([, v]) => v).map(([k]) => k).join(", ") || "kein Signal"
+        : null],
+      ["Importiert / CRM-Sync", [dt2(c.imported_at), dt2(c.crm_synced_at)].filter(Boolean).join(" · ") || null],
+      ["Identität geprüft", dt2(c.identity_checked_at)],
       ["Facebook", c.facebook_url ? `<a class="link" target="_blank" href="${esc(c.facebook_url)}">Profil ↗</a>` : null],
       ["Instagram", c.instagram_url ? `<a class="link" target="_blank" href="${esc(c.instagram_url)}">Profil ↗</a>` : null],
       ["LinkedIn", c.linkedin_url ? `<a class="link" target="_blank" href="${esc(c.linkedin_url)}">Profil ↗</a>` : null],

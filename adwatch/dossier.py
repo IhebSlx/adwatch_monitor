@@ -71,6 +71,9 @@ def _vc_row(o: CrmOpportunity) -> dict:
             "order_value": o.order_value, "estimated_value": o.estimated_value,
             "invoiced_value": o.invoiced_value, "quoted_value": o.quoted_value,
             "sap_orders": o.sap_order_numbers,
+            # The BUILDING SITE, not the customer's registered address. Imported
+            # separately because no Excel export ever carried it.
+            "city": o.city, "postal_code": o.postal_code, "street": o.street,
             "project_id": o.project_id}
 
 
@@ -143,6 +146,34 @@ def _kurzprofil(c: Company, beleg: dict, roles: dict) -> str:
     return " ".join(bits)
 
 
+def _product_block(s, company_id: int) -> dict | None:
+    """What this company actually asks Solarlux for, by product family.
+
+    From slx_product (see crm_import.import_products). The euros are QUOTED
+    across won and lost deals alike, never invoiced revenue, so the drawer must
+    label them as such — a dealer who asks for EUR 2 Mio and buys EUR 200k is a
+    completely different conversation from one who asks for EUR 200k and buys it.
+    """
+    from .models import CrmCompanyProduct
+    rows = list(s.scalars(select(CrmCompanyProduct)
+                          .where(CrmCompanyProduct.company_id == company_id)))
+    if not rows:
+        return None
+    rows.sort(key=lambda r: (-(r.value or 0), -r.positions))
+    dates = [d for r in rows for d in (r.first_seen, r.last_seen) if d]
+    return {
+        "families": [{"family": r.family, "positions": r.positions,
+                      "value": r.value,
+                      "first": r.first_seen.isoformat() if r.first_seen else None,
+                      "last": r.last_seen.isoformat() if r.last_seen else None}
+                     for r in rows],
+        "positions": sum(r.positions for r in rows),
+        "value_quoted": round(sum(r.value or 0 for r in rows), 2) or None,
+        "first": min(dates).isoformat() if dates else None,
+        "last": max(dates).isoformat() if dates else None,
+    }
+
+
 def build(company_id: int) -> dict | None:
     """Everything linked to one company. Pure read, no network."""
     with SessionLocal() as s:
@@ -150,6 +181,7 @@ def build(company_id: int) -> dict | None:
         if c is None:
             return None
         beleg = _beleg_block(s, company_id)
+        produkte = _product_block(s, company_id)
 
         roles: dict[str, dict] = {}
         gid = (c.crm_id or "").strip().lower()
@@ -187,6 +219,7 @@ def build(company_id: int) -> dict | None:
 
     return {
         "belege": beleg,
+        "produkte": produkte,
         "rollen": roles,
         "projekte": projects,
         "kurzprofil": _kurzprofil(c, beleg, roles),
