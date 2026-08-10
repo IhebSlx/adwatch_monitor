@@ -2349,13 +2349,38 @@
       if (table) _applyTableState(table, "pruefenWrap");
     };
 
-    // The row goes the moment you click. It used to wait for the request, and
-    // `accept` ends in enrich_company() — a full website crawl plus an LLM call,
+    // The animation, not a timeout: fade+slide the row out, then collapse the
+    // space it held. A <tr> will not transition from height:auto, so the cells
+    // are pinned to their measured pixel height first, and the reflow between
+    // pinning and clearing is what gives the transition a start value.
+    const ROW_OUT_MS = 260;
+    const fadeRowOut = (tr) => {
+      const h = tr.offsetHeight;
+      [...tr.cells].forEach(td => {
+        td.style.height = `${h}px`;
+        td.style.overflow = "hidden";
+      });
+      void tr.offsetHeight;                       // force reflow
+      tr.classList.add("row-out");
+      [...tr.cells].forEach(td => { td.style.height = "0px"; });
+      return new Promise(done => setTimeout(done, ROW_OUT_MS));
+    };
+    const undoFade = (tr) => {
+      tr.classList.remove("row-out");
+      [...tr.cells].forEach(td => {
+        td.style.removeProperty("height");
+        td.style.removeProperty("overflow");
+      });
+    };
+
+    // The decision lands the moment you click; the row animates out while the
+    // request is still in flight. It used to WAIT for the request, and `accept`
+    // ends in enrich_company() — a full website crawl plus an LLM call,
     // synchronously, before the response returns. So a decision took ten seconds
     // or more to visibly land, for work the human is not waiting on: the verdict
     // is written before the enrichment starts.
     //
-    // Requests are SERIALISED behind one promise chain. Optimistic removal makes
+    // Requests are SERIALISED behind one promise chain. Removing on click makes
     // it easy to click ten rows in two seconds, and ten parallel crawl+LLM calls
     // are how "database is locked" happens.
     let chain = Promise.resolve();
@@ -2365,27 +2390,40 @@
       const tbody = tr.parentElement;
       const anchor = tr.nextElementSibling;
       $$("button", tr).forEach(x => x.disabled = true);
-      tr.remove();
+      // counters move with the animation, not after it — the row is already
+      // visibly leaving, so a number that waits 260 ms reads as lag
       TABLE_TOTALS["pruefenWrap"] = Math.max((TABLE_TOTALS["pruefenWrap"] || 1) - 1, 0);
+      const gone = fadeRowOut(tr).then(() => { tr.remove(); repaintPruefen(tbody); });
       repaintPruefen(tbody);
       toast(msg);
 
-      chain = chain.then(() => call(cid)).then(() => {
+      chain = chain.then(() => call(cid)).then(() => gone).then(() => {
         if (!tbody.rows.length) {
           const left = TABLE_TOTALS["pruefenWrap"] || 0;
           $("#pruefenWrap").innerHTML = left
             ? `<p class="muted" style="padding:12px">Diese Seite ist abgearbeitet — ${left} weitere warten. <b>Aktualisieren</b> lädt sie.</p>`
             : `<p class="muted" style="padding:12px">Nichts zu prüfen — alles entschieden. 🎉</p>`;
         }
-      }, (e) => {
-        // put it back exactly where it was — a decision that did not save must
-        // not look decided
-        tbody.insertBefore(tr, anchor);
+      }, (e) => gone.then(() => {
+        // Put it back — a decision that did not save must not look decided. Wait
+        // for the animation first, then strip its inline heights, or the row
+        // returns collapsed and invisible. The anchor may itself have been
+        // decided in the meantime, so only use it while it is still attached.
+        undoFade(tr);
+        if (!tbody.isConnected) {
+          // the table was replaced by the empty-state note while this was in
+          // flight — reloading is the only honest way back
+          toast(`Nicht gespeichert: ${e.message}`, "error");
+          loadPruefen();
+          return;
+        }
+        if (anchor && anchor.parentElement === tbody) tbody.insertBefore(tr, anchor);
+        else tbody.appendChild(tr);
         TABLE_TOTALS["pruefenWrap"] = (TABLE_TOTALS["pruefenWrap"] || 0) + 1;
         $$("button", tr).forEach(x => x.disabled = false);
         repaintPruefen(tbody);
         toast(`Nicht gespeichert: ${e.message}`, "error");
-      });
+      }));
     };
 
     $$("#pruefenWrap .pruefen-ok").forEach(b => b.addEventListener("click", (ev) =>

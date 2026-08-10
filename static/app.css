@@ -753,6 +753,46 @@ a.link:hover { text-decoration: underline; }
 }
 .enrich-review .page-item { padding: 7px 0; }
 
+/* A decided row leaving a queue. Two movements, deliberately staggered: the row
+   fades and slides out first (160 ms), then the space it occupied collapses
+   (200 ms, 40 ms late) so the list closes up instead of snapping shut. Cell
+   heights are set from measured pixels in JS — a <tr> will not animate from
+   `auto`. */
+/* The transition lives on the BASE state, not inside .row-out. Declaring it only
+   in the target rule left transition-duration at 0s — the class arrives in the
+   same style recalculation as the inline cell heights, and the browser had no
+   before-change transition to run. Scoped to the queue tables so sorting and
+   column filtering elsewhere stay instant. */
+#pruefenWrap tbody tr,
+#pruefenWrap tbody tr > td {
+  transition: opacity .16s ease, transform .16s ease,
+              height .2s ease .04s, padding .2s ease .04s, border-color .2s ease;
+}
+tbody tr.row-out { opacity: 0; transform: translateX(10px); }
+tbody tr.row-out > td {
+  padding-top: 0 !important; padding-bottom: 0 !important;
+  border-bottom-color: transparent !important;
+}
+/* Reduced motion means no MOVEMENT, not no feedback. Windows has animation
+   effects off by default on plenty of machines — including this one — and
+   killing the transition outright made a decided row blink out of existence with
+   nothing to follow. So the slide goes and the cross-fade stays, a little
+   quicker: an opacity change is not a vestibular trigger, a 10 px slide is. */
+/* The one exception to the global reduced-motion reset at the top of this file
+   (`*  { transition: none !important }`), which is why !important is needed here
+   to win it back. Reduced motion means no MOVEMENT: the 10 px slide goes, the
+   cross-fade and the collapse stay. Without an exception a decided row blinks
+   out of existence with nothing for the eye to follow, and Windows ships with
+   animation effects off on plenty of machines, so this is the common case rather
+   than an edge one. An opacity change is not a vestibular trigger. */
+@media (prefers-reduced-motion: reduce) {
+  tbody tr.row-out { transform: none; }
+  #pruefenWrap tbody tr,
+  #pruefenWrap tbody tr > td {
+    transition: opacity .12s ease, height .14s ease, padding .14s ease !important;
+  }
+}
+
 /* ---- customer state + fit score (Explorer, drawer, Profil tab) ---- */
 .state-chip {
   display: inline-block; font-size: 10.5px; font-weight: 650; padding: 1.5px 8px;
