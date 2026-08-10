@@ -630,3 +630,111 @@ def backfill_websites(path: str | Path) -> dict:
         s.commit()
     log.info("crm_import.backfill_websites: filled %s, stamped %s", filled, stamped)
     return {"filled": filled, "stamped_provenance": stamped}
+
+
+# ---------------------------------------------------------------------------
+# slx_product — the quote/order LINE ITEMS, pulled from Dataverse rather than an
+# export. This is the "which product for whom" data that looked non-existent
+# from the spreadsheets: opportunityproducts is empty in this org and the
+# standard quotedetail/salesorderdetail tables answer 403, so the only place the
+# product actually lives is a custom table hanging off the account.
+#
+# The browser pulls it (auth lives in the Dynamics session) and writes the
+# aggregated JSON; this reads that file. Shape:
+#   {"families": [...], "accounts": {guid: {n, v, f: {famIdx: n}, d0, d1}},
+#    "opportunities": {guid: {n, v, f: {...}}}}
+# ---------------------------------------------------------------------------
+
+def import_products(path: str | Path) -> dict:
+    """Load per-company product families from the slx_product pull.
+
+    Two links carry two DIFFERENT things, and conflating them is what made the
+    first attempt read EUR 430 per company:
+      * the account link (199.541 rows) says WHICH families a company deals in,
+        but carries a value on 23 rows out of 199.541 — it is a catalogue
+        relationship, not a transaction
+      * the opportunity link (156.401 rows) carries the euros — EUR 411,7 Mio
+        over 30.114 valued rows — and reaches a company through the deal's Käufer
+
+    So positions come from the first and euros from the second. Values are
+    QUOTED, spanning won and lost deals alike, which is the point: it separates
+    what a company ASKS for from what it BUYS. Never present them as revenue.
+
+    Private Endkunden are dropped — they are out of scope everywhere else, and a
+    product profile for them would leak into the ICP features.
+    """
+    import json as _json
+    from . import scope
+    from .models import CrmCompanyProduct, CrmOpportunity
+
+    data = _json.loads(Path(path).read_text(encoding="utf-8"))
+    families = data.get("families") or []
+    now = dt.datetime.utcnow()
+
+    with SessionLocal() as s:
+        companies = {c.crm_id.lower(): c for c in s.scalars(select(Company)) if c.crm_id}
+        keep = {c.id for c in companies.values() if scope.is_in_scope(c.segment)}
+        opp_to_company: dict[str, int] = {}
+        for o in s.scalars(select(CrmOpportunity)):
+            if o.opportunity_guid and o.parent_account_crm_id:
+                c = companies.get(o.parent_account_crm_id.lower())
+                if c:
+                    opp_to_company[o.opportunity_guid.lower()] = c.id
+
+        # company -> family -> [positions, value, first, last]
+        agg: dict[int, dict[str, list]] = {}
+
+        def slot(cid: int, fam_idx) -> list | None:
+            try:
+                fam = families[int(fam_idx)]
+            except (ValueError, IndexError, TypeError):
+                return None
+            return agg.setdefault(cid, {}).setdefault(fam, [0, 0.0, None, None])
+
+        direct = 0
+        for guid, blk in (data.get("accounts") or {}).items():
+            c = companies.get(guid.lower())
+            if not c or c.id not in keep:
+                continue
+            direct += 1
+            for fi, n in (blk.get("f") or {}).items():
+                sl = slot(c.id, fi)
+                if sl is None:
+                    continue
+                sl[0] += n
+                for d, i in ((blk.get("d0"), 2), (blk.get("d1"), 3)):
+                    if d and (sl[i] is None or (d < sl[i] if i == 2 else d > sl[i])):
+                        sl[i] = d
+
+        via = 0
+        for guid, blk in (data.get("opportunities") or {}).items():
+            cid = opp_to_company.get(guid.lower())
+            if cid is None or cid not in keep:
+                continue
+            via += 1
+            for fi, n in (blk.get("f") or {}).items():
+                sl = slot(cid, fi)
+                if sl is not None and not (data.get("accounts") or {}):
+                    sl[0] += n
+            for fi, v in (blk.get("v") or {}).items():
+                sl = slot(cid, fi)
+                if sl is not None:
+                    sl[1] += float(v or 0)
+
+        s.query(CrmCompanyProduct).delete()
+        rows = 0
+        for cid, per_fam in agg.items():
+            for fam, (n, value, d0, d1) in per_fam.items():
+                if not n and not value:
+                    continue
+                s.add(CrmCompanyProduct(
+                    company_id=cid, family=fam[:120], positions=n,
+                    value=round(value, 2) or None,
+                    first_seen=dt.date.fromisoformat(d0) if d0 else None,
+                    last_seen=dt.date.fromisoformat(d1) if d1 else None,
+                    synced_at=now))
+                rows += 1
+        s.commit()
+
+    return {"families": len(families), "companies": len(agg), "rows": rows,
+            "from_account_link": direct, "from_opportunity_link": via}

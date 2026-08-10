@@ -719,3 +719,35 @@ class ReportEvent(Base):
     source: Mapped[str | None] = mapped_column(String(30), nullable=True)  # manual|pipeline|schedule|definition
     detail: Mapped[str | None] = mapped_column(String(600), nullable=True)      # error text on failure
     at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)
+
+
+class CrmCompanyProduct(Base):
+    """What a company actually asks Solarlux for, by product family.
+
+    Source is the custom `slx_product` table in Dataverse — the quote/order LINE
+    ITEMS, 697.943 of them. This is the answer to "which product for whom", and
+    it was missing from every export we had: `opportunityproducts` is empty in
+    this org and the standard quotedetail/salesorderdetail tables return 403, so
+    from the exports it looked as though product data did not exist at all.
+
+    The value is QUOTED, not invoiced: the line items span won and lost
+    opportunities alike (EUR 3,39 Mrd against EUR 391,8 Mio of actual revenue).
+    That is deliberate and more useful than filtering to wins — it separates what
+    a company ASKS for from what it BUYS, which is exactly the gap a BD person
+    wants to see. Never present these euros as revenue.
+
+    One row per company and family, so a dealer that quotes both Glas-Faltwand
+    and cero has two rows and can be filtered on either.
+    """
+    __tablename__ = "crm_company_products"
+    __table_args__ = (UniqueConstraint("company_id", "family",
+                                       name="uq_company_product_family"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    family: Mapped[str] = mapped_column(String(120), index=True)
+    positions: Mapped[int] = mapped_column(Integer, default=0)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    first_seen: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    last_seen: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
