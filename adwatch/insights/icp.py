@@ -42,10 +42,16 @@ DEFAULT_WEIGHTS = {
     "sales_channel": 1.0,
     "plz_zone": 1.0,
     "products": 2.0,
+    "crm_products": 2.0,
     "size_bucket": 1.0,
     "age_bucket": 0.5,
     "ad_presence": 1.0,
 }
+
+# Features whose value is a LIST, not a single value: a company can deal in
+# several product families at once, so they are counted per element and scored
+# as the mean lift over the elements we have a trusted lift for.
+_LIST_FEATURES = ("products", "crm_products")
 
 # Segments that must NEVER define the profile: they are not the kind of company
 # the partner program acquires. "Private Endkunden" are consumers — 332 of them
@@ -57,7 +63,8 @@ WINNER_EXCLUDED_SEGMENTS = ("Private Endkunden",)
 _FEATURE_LABEL_DE = {
     "segment": "Kundensegment", "sub_segment": "Untersegment",
     "sales_channel": "Vertriebsweg", "plz_zone": "PLZ-Zone",
-    "products": "Produkte", "size_bucket": "Betriebsgröße",
+    "products": "Produkte (Website)", "crm_products": "Produktfamilien (CRM)",
+    "size_bucket": "Betriebsgröße",
     "age_bucket": "Firmenalter", "ad_presence": "Anzeigen-Aktivität",
 }
 
@@ -81,7 +88,17 @@ _FEATURE_LABEL_DE = {
 # A feature is dropped from SCORING when it is known for winners far more often
 # than for the population being scored. Reporting it in diagnose() is still
 # useful — knowing the leak exists is what stops someone re-adding the feature.
-_LEAK_RATIO = 2.5      # winners' coverage this many times the population's
+# 2.5 was too loose, and `crm_products` proved it. Its family list is known for
+# 92.4% of buyers and 50.4% of the whole base — ratio 1.83, so it passed the
+# guard, and the whole-base backtest promptly jumped to lift 2.71 with
+# ranks=True while Handel+Verarbeiter ALONE fell to 0.75, i.e. worse than
+# random. The feature was re-learning "this account has been worked", which
+# separates architects from dealers and nothing else — precisely the artefact
+# backtest() was written to catch. At 1.5 it is dropped on the raw base and kept
+# inside an engaged population, where its availability ratio is 1.04.
+# Nothing else in the current feature set is affected: the next highest ratio is
+# PLZ-Zone at 1.14.
+_LEAK_RATIO = 1.5      # winners' coverage this many times the population's
 _LEAK_POP_FLOOR = 0.6  # ...and the population is not broadly covered anyway
 
 # ---------------------------------------------------------------------------
@@ -162,7 +179,43 @@ def _ad_presence_map(ids: list[int] | None = None) -> dict[int, str]:
         return {cid: ("aktiv" if (n or 0) > 0 else "keine") for cid, n in s.execute(q)}
 
 
-def company_features(c: Company, ads: dict[int, str]) -> dict:
+def crm_product_map(as_of: dt.date | None = None) -> dict[int, list[str]]:
+    """company_id -> the Solarlux product families that company deals in.
+
+    From `crm_company_products` (the slx_product ACCOUNT link — a catalogue
+    relationship, so it says which families a firm deals in, never how much it
+    bought; the euros live on the opportunity link). 23.431 companies against
+    1.207 for the website-derived `companies.products`, which is why this exists.
+
+    `as_of` restricts to families whose `first_seen` is on or before that date —
+    the "knowable in time" gate. Rows with no `first_seen` (2.920 of 38.430) are
+    EXCLUDED when a cut is given: we cannot show they were known then, and
+    assuming they were is how a backtest flatters itself.
+
+    Availability warning, measured 2026-08-10 and the reason this is not a
+    free win: across the whole base the family list is known for 92,4% of buyers
+    and 46,7% of everyone else (1,98x) — it is populated by working the account.
+    Restricted to firms that HAVE a Verkaufschance the ratio falls to 1,04
+    (98,5% vs 94,9%), i.e. the leak is engagement, not fit. So this feature is
+    sound inside an engaged population and leaky on the raw base; the existing
+    `leaky` check is what enforces that, and _LEAK_RATIO is set to catch it.
+    """
+    from ..models import CrmCompanyProduct
+    out: dict[int, list[str]] = {}
+    with SessionLocal() as s:
+        stmt = select(CrmCompanyProduct.company_id, CrmCompanyProduct.family,
+                      CrmCompanyProduct.first_seen)
+        for cid, family, first_seen in s.execute(stmt):
+            if not family:
+                continue
+            if as_of is not None and (first_seen is None or first_seen > as_of):
+                continue
+            out.setdefault(cid, []).append(family)
+    return {k: sorted(set(v)) for k, v in out.items()}
+
+
+def company_features(c: Company, ads: dict[int, str],
+                     crm_products: dict[int, list[str]] | None = None) -> dict:
     """The feature values of one company; None/[] = unknown -> feature skipped."""
     return {
         "segment": c.segment or None,
@@ -170,6 +223,7 @@ def company_features(c: Company, ads: dict[int, str]) -> dict:
         "sales_channel": c.sales_channel or None,
         "plz_zone": plz_zone(c.postal_code),
         "products": list(c.products) if c.products else [],
+        "crm_products": list((crm_products or {}).get(c.id) or []),
         "size_bucket": size_bucket(c.employee_hint),
         "age_bucket": age_bucket(c.founded_year),
         "ad_presence": ads.get(c.id),
@@ -199,7 +253,8 @@ def material_buyer_ids(min_eur: float | None = None) -> list[int]:
         return [cid for (cid,) in s.execute(q)]
 
 
-def _population_stats(feats: tuple[str, ...], pop_ids: list[int] | None = None) -> dict:
+def _population_stats(feats: tuple[str, ...], pop_ids: list[int] | None = None,
+                      as_of: dt.date | None = None) -> dict:
     """Per feature: how often it is known in the SCORED population, and how the
     population distributes across its values.
 
@@ -214,13 +269,14 @@ def _population_stats(feats: tuple[str, ...], pop_ids: list[int] | None = None) 
             stmt = stmt.where(Company.id.in_(pop_ids))
         pop = list(s.scalars(stmt))
     ads = _ad_presence_map()
+    crm_prod = crm_product_map(as_of)
     out: dict[str, dict] = {}
     for f in feats:
         counts: dict[str, int] = {}
         known = 0
         for c in pop:
-            v = company_features(c, ads)[f]
-            if f == "products":
+            v = company_features(c, ads, crm_prod)[f]
+            if f in _LIST_FEATURES:
                 if v:
                     known += 1
                     for p in v:
@@ -248,7 +304,9 @@ _MIN_VALUE_SUPPORT = 15
 _LIFT_CLAMP = (0.2, 5.0)
 
 
-def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
+def build_profile(filters: dict | None = None, name: str = "ICP",
+                  as_of: dt.date | None = None,
+                  pop_ids: list[int] | None = None) -> dict:
     """Compute the winners' feature distributions for a chosen filter (default:
     everyone who ever bought — customer_state active/new/lapsed). Returns the
     profile as a dict WITHOUT saving it; apply_profile() persists + scores."""
@@ -300,14 +358,15 @@ def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
             Company.is_intercompany.is_(False))
         winners = list(s.scalars(stmt))
     ads = _ad_presence_map([c.id for c in winners]) if winners else {}
+    crm_prod = crm_product_map(as_of)
 
     dists: dict[str, dict] = {}
     for feat in DEFAULT_WEIGHTS:
         counts: dict[str, int] = {}
         known = 0
         for c in winners:
-            value = company_features(c, ads)[feat]
-            if feat == "products":
+            value = company_features(c, ads, crm_prod)[feat]
+            if feat in _LIST_FEATURES:
                 if value:
                     known += 1
                     for p in value:
@@ -324,7 +383,13 @@ def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
         }
 
     # ---- population comparison: leakage check + LIFT per value ----
-    pstats = _population_stats(tuple(DEFAULT_WEIGHTS))
+    # The reference population for the leakage check and for every lift is the
+    # population this profile will SCORE. Defaulting it to the whole base is
+    # right for apply_profile, and wrong for a profile built to rank inside a
+    # restricted set: crm_products is 50% covered across all 46k companies but
+    # 96% covered among firms we have actually engaged, so judged against the
+    # wrong reference it is dropped as leaky exactly where it is sound.
+    pstats = _population_stats(tuple(DEFAULT_WEIGHTS), pop_ids=pop_ids, as_of=as_of)
     for feat, dist in dists.items():
         ps = pstats.get(feat) or {"coverage": 0.0, "counts": {}, "known": 0}
         pc, wc = ps["coverage"], dist["coverage"]
@@ -414,13 +479,13 @@ def fit_for(features: dict, profile: dict) -> tuple[float | None, list[dict]]:
             # than silently fall back to the share method this replaced
             continue
         max_share = max(shares.values())
-        if max_share >= 0.9 and feat != "products":
+        if max_share >= 0.9 and feat not in _LIST_FEATURES:
             # non-discriminating: ~every winner has the same value (live case:
             # Vertriebsweg is 99% 'Fachhandelsvertrieb'). Matching it says
             # nothing about fit, so it must not inflate anyone's score.
             continue
         value = features.get(feat)
-        if feat == "products":
+        if feat in _LIST_FEATURES:
             if not value:
                 continue
             known = [lifts[p] for p in value if p in lifts]
@@ -478,11 +543,12 @@ def apply_profile(filters: dict | None = None, name: str = "ICP") -> dict:
         profile_id = row.id
 
         ads = _ad_presence_map()
+        crm_prod = crm_product_map()
         # Consumers are out of scope entirely (adwatch/scope.py) — they are not
         # companies that can be acquired, so they get no scores at all rather
         # than a score that would then have to be filtered out of every view.
         for c in s.scalars(scope.apply(select(Company))):
-            fit, breakdown = fit_for(company_features(c, ads), profile)
+            fit, breakdown = fit_for(company_features(c, ads, crm_prod), profile)
             c.fit_score = fit
             c.fit_breakdown = {"profile_id": profile_id, "features": breakdown} if breakdown else None
             c.opportunity_score = opp.get(c.id)
@@ -526,12 +592,13 @@ _TVD_NO_SIGNAL = 0.05        # winners vs population distance below this = noise
 _SPLIT_GAP = 25              # self-score minus cross-score above this = mixed set
 
 
-def _distribution(companies: list[Company], feat: str, ads: dict) -> dict[str, float]:
+def _distribution(companies: list[Company], feat: str, ads: dict,
+                  crm_prod: dict | None = None) -> dict[str, float]:
     counts: dict[str, int] = {}
     known = 0
     for c in companies:
-        value = company_features(c, ads)[feat]
-        if feat == "products":
+        value = company_features(c, ads, crm_prod)[feat]
+        if feat in _LIST_FEATURES:
             if value:
                 known += 1
                 for p in value:
@@ -552,27 +619,70 @@ def _tvd(a: dict[str, float], b: dict[str, float]) -> float:
 def diagnose(filters: dict | None = None) -> dict:
     """Judge whether a winners filter yields a profile worth trusting.
     Returns {verdict, winners, population, reasons[], features[], splits[]}
-    where verdict is 'ok' | 'weak' | 'unusable'. Pure computation, no writes."""
+    where verdict is 'ok' | 'weak' | 'unusable'. Pure computation, no writes.
+
+    The baseline used to be built by stripping `customer_state` from the winners
+    filter. That was right while the default winners set WAS
+    {"customer_state": [...]}. When the default moved to the Belege —
+    {"ids": material_buyer_ids(), ...} — the strip stopped matching anything, so
+    population == winners and every feature reported separation 0.000 with the
+    verdict "Kein Merkmal trennt die Gewinner von der Grundgesamtheit". Measured
+    2026-08-10: diagnose(None) returned 3.781 winners against 3.781 population.
+    The panel had been saying "this cannot rank" for a structural reason, for
+    any input whatsoever.
+
+    The buying condition is now named explicitly rather than guessed at, and the
+    two sets are built the way filter_trust already builds them:
+
+      caller passed a market slice (country/segment/...) -> population is that
+        slice, winners are the material buyers inside it. This is what someone
+        asking "can I build an ICP for German dealers?" means.
+      caller passed `ids` -> they named the winners themselves, so the baseline
+        is the whole in-scope business.
+      no filter -> winners are the material buyers, population is everything in
+        scope.
+    """
     from ..customers import _apply_filters
 
-    profile = build_profile(filters)
-    win_filter = profile["winners_filter"]
-    # The honest baseline: the same population the winners were drawn from,
-    # i.e. the identical filter WITHOUT the buying condition.
-    pop_filter = {k: v for k, v in win_filter.items() if k != "customer_state"}
+    # Keys that SELECT ON THE OUTCOME rather than describe a market. They say who
+    # won; they must not also decide who could have.
+    _OUTCOME_KEYS = ("ids", "customer_state")
+    given = dict(filters or {})
+    # If the caller expressed a buying condition themselves — an explicit id list
+    # or customer_state — that IS the winners definition and is honoured. Only
+    # when they described a pure market slice (or nothing) do we supply the
+    # condition, and then it is the same one filter_trust uses: a material order.
+    caller_named_winners = any(given.get(k) for k in _OUTCOME_KEYS)
+    pop_filter = {k: v for k, v in given.items() if k not in _OUTCOME_KEYS}
 
     with SessionLocal() as s:
-        winners = list(s.scalars(_apply_filters(select(Company), win_filter)
-                                 .where(Company.is_intercompany.is_(False))))
-        population = list(s.scalars(_apply_filters(select(Company), pop_filter)
-                                    .where(Company.is_intercompany.is_(False))))
+        population = list(s.scalars(
+            scope.apply(_apply_filters(select(Company), pop_filter))
+            .where(Company.is_intercompany.is_(False))))
+        if caller_named_winners:
+            winners = list(s.scalars(_apply_filters(select(Company), given)
+                                     .where(Company.is_intercompany.is_(False))))
+        else:
+            buyers = set(material_buyer_ids())
+            winners = [c for c in population if c.id in buyers]
+
+    # The profile has to come from the WINNERS, not from the caller's filter —
+    # for a market slice those are different sets, and building from the slice is
+    # what made the comparison self-referential.
+    win_ids = [c.id for c in winners]
+    profile = (build_profile(given) if caller_named_winners
+               else build_profile({"ids": win_ids,
+                                   "exclude_segment": list(WINNER_EXCLUDED_SEGMENTS)})
+               if len(win_ids) >= MIN_WINNERS_USABLE else build_profile(given or None))
+    win_filter = profile["winners_filter"]
     ads = _ad_presence_map()
+    crm_prod = crm_product_map()
 
     # --- per-feature: does it separate winners from the population? ---
     features = []
     for feat, weight in (profile.get("weights") or DEFAULT_WEIGHTS).items():
-        w_dist = _distribution(winners, feat, ads)
-        p_dist = _distribution(population, feat, ads)
+        w_dist = _distribution(winners, feat, ads, crm_prod)
+        p_dist = _distribution(population, feat, ads, crm_prod)
         cov = profile["features"][feat]["coverage"]
         tvd = _tvd(w_dist, p_dist)
         top = sorted(w_dist.items(), key=lambda kv: -kv[1])[:1]
@@ -601,7 +711,7 @@ def diagnose(filters: dict | None = None) -> dict:
         pa = build_profile({"ids": [c.id for c in ga]})
         pb = build_profile({"ids": [c.id for c in gb]})
         def med(pool, prof):
-            vals = [fit_for(company_features(c, ads), prof)[0] for c in pool]
+            vals = [fit_for(company_features(c, ads, crm_prod), prof)[0] for c in pool]
             vals = [v for v in vals if v is not None]
             return round(sorted(vals)[len(vals) // 2], 1) if vals else 0.0
         gap = max(med(ga, pa) - med(ga, pb), med(gb, pb) - med(gb, pa))
@@ -733,12 +843,13 @@ def filter_trust(filters: dict | None = None, cut: dt.date | None = None) -> dic
     collapsed: list[str] = []
     if n_pop >= 30:
         ads = _ad_presence_map([c.id for c in pop])
+        crm_prod = crm_product_map()
         for feat in DEFAULT_WEIGHTS:
             vals = {}
             known = 0
             for c in pop:
-                v = company_features(c, ads)[feat]
-                if feat == "products":
+                v = company_features(c, ads, crm_prod)[feat]
+                if feat in _LIST_FEATURES:
                     continue
                 if v:
                     known += 1
@@ -823,13 +934,16 @@ def backtest(cut: dt.date | None = None, segments: tuple[str, ...] | None = None
 
     profile = build_profile({"ids": train,
                              "exclude_segment": list(WINNER_EXCLUDED_SEGMENTS)},
-                            name="Backtest")
+                            name="Backtest", as_of=cut, pop_ids=ids)
     ads = _ad_presence_map()
+    # As of the CUT, not today: a family first seen after the split is not
+    # something we knew when the prediction would have been made.
+    crm_prod = crm_product_map(as_of=cut)
     with SessionLocal() as s:
         comps = list(s.scalars(select(Company).where(Company.id.in_(test_ids))))
     scored = []
     for c in comps:
-        fit, _ = fit_for(company_features(c, ads), profile)
+        fit, _ = fit_for(company_features(c, ads, crm_prod), profile)
         if fit is not None:
             scored.append((fit, c.id in later))
     if not scored:

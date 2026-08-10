@@ -3611,3 +3611,99 @@ def test_audit_names_the_columns_that_are_really_outcomes(temp_db):
     rep = audit.outcome_leakage()
     assert "order_value" in rep["unusable"]
     assert "estimated_value" not in rep["unusable"], "gleich gefuellt - also brauchbar"
+
+
+def test_diagnose_compares_winners_against_a_real_baseline(temp_db):
+    """diagnose() built its baseline by stripping `customer_state` from the
+    winners filter. That was correct while the default winners set WAS
+    customer_state — but it moved to {"ids": material_buyer_ids()} when the
+    Belege became the source, so nothing got stripped, population == winners,
+    every separation was 0.000 and the verdict was always "Kein Merkmal trennt
+    die Gewinner von der Grundgesamtheit". Measured on the real base:
+    diagnose(None) reported 3.781 winners against 3.781 population.
+
+    A market slice (country/segment) must therefore compare the BUYERS in the
+    slice against the slice, not the slice against itself."""
+    import datetime as dt
+    from adwatch.insights import icp
+    from adwatch.models import Company, CrmOrderEvent
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    for i in range(60):
+        s.add(Company(name=f"Haendler {i}", country="DE", segment="Handel",
+                      sales_channel="Fachhandelsvertrieb",
+                      # the buyers sit in one PLZ zone, the rest in another, so
+                      # there IS something to find if the baseline is right
+                      postal_code="49134" if i < 30 else "80331"))
+    s.commit()
+    for i, c in enumerate(s.scalars(select(Company).order_by(Company.id))):
+        if i < 30:
+            s.add(CrmOrderEvent(company_id=c.id, order_date=dt.date(2024, 3, 1),
+                                amount=50_000.0))
+    s.commit()
+    s.close()
+
+    d = icp.diagnose({"country": ["DE"], "segment": ["Handel"]})
+    assert d["population"] == 60
+    assert d["winners"] == 30, "die Kaeufer im Filter, nicht der ganze Filter"
+    assert d["population"] > d["winners"], "Grundgesamtheit darf nicht die Gewinnermenge sein"
+    plz = next(f for f in d["features"] if f["feature"] == "plz_zone")
+    assert plz["separation"] > 0.4, f"PLZ trennt hier perfekt, gemessen {plz['separation']}"
+
+
+def test_crm_product_families_are_time_gated(temp_db):
+    """`crm_company_products` is the best-covered feature available (23.431
+    companies against 1.207 for the website-derived list) — and it is written
+    BY buying. Measured on the real base: between a cut two years back and today
+    the family list grew by +0,74 entries for buyers and +0,22 for non-buyers.
+
+    Scored without a cut it looks like a strong predictor; that is hindsight.
+    crm_product_map(as_of=...) must therefore return only families first seen on
+    or before the cut, and must drop rows with no first_seen at all rather than
+    assume they were known."""
+    import datetime as dt
+    from adwatch.insights import icp
+    from adwatch.models import Company, CrmCompanyProduct
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    s.add(Company(name="Haendler", country="DE", segment="Handel"))
+    s.commit()
+    cid = s.scalar(select(Company.id))
+    s.add(CrmCompanyProduct(company_id=cid, family="Glas-Faltwand",
+                            first_seen=dt.date(2023, 1, 1)))
+    s.add(CrmCompanyProduct(company_id=cid, family="cero",
+                            first_seen=dt.date(2026, 1, 1)))
+    s.add(CrmCompanyProduct(company_id=cid, family="Wintergarten",
+                            first_seen=None))
+    s.commit()
+    s.close()
+
+    assert icp.crm_product_map()[cid] == ["Glas-Faltwand", "Wintergarten", "cero"]
+    assert icp.crm_product_map(as_of=dt.date(2024, 1, 1))[cid] == ["Glas-Faltwand"]
+    assert icp.crm_product_map(as_of=dt.date(2022, 1, 1)) == {}
+
+
+def test_a_feature_known_mostly_for_winners_is_dropped(temp_db):
+    """The availability guard, at the threshold that `crm_products` forced.
+
+    Its family list is known for 92,4% of buyers and 50,4% of the base — ratio
+    1,83. At the old threshold of 2,5 it passed, and the whole-base backtest
+    jumped to lift 2,71 / ranks=True while Handel+Verarbeiter ALONE fell to
+    0,75, i.e. worse than random. The feature was re-learning "this account has
+    been worked", which separates architects from dealers and nothing else."""
+    from adwatch.insights import icp
+    assert icp._LEAK_RATIO <= 1.85, (
+        "der Schwellenwert muss crm_products auf der Rohbasis fangen")
+
+
+def test_list_features_cover_both_product_columns():
+    """Two product columns with different provenance and 20x different coverage.
+    Both are multi-valued, so every place that special-cases a list has to know
+    about both — the count, the distribution, the lift and the score."""
+    from adwatch.insights import icp
+    assert set(icp._LIST_FEATURES) == {"products", "crm_products"}
+    for f in icp._LIST_FEATURES:
+        assert f in icp.DEFAULT_WEIGHTS
+        assert f in icp._FEATURE_LABEL_DE
