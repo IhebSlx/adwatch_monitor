@@ -87,8 +87,14 @@ def overview() -> dict:
 
 
 def list_projects(status: str | None = None, min_members: int = 1,
-                  limit: int = 200) -> list[dict]:
-    """Projects, most valuable first, with their members and roles resolved."""
+                  limit: int = 200, q: str | None = None) -> dict:
+    """Projects, most valuable first, with their members and roles resolved.
+
+    Returns {"rows": [...], "total": n, "returned": len(rows)} — the total is the
+    count that MATCHED, before the limit. Without it the UI can only report "34 of
+    300 rows" and a reader reasonably concludes 300 is the whole set, when there
+    are 52.796 projects and 8.189 won ones. Filtering happens here, over all of
+    them; only the slice sent to the browser is capped.""" 
     groups = _project_rows()
     with SessionLocal() as s:
         by_crm = {(c.crm_id or "").lower(): c for c in
@@ -128,8 +134,16 @@ def list_projects(status: str | None = None, min_members: int = 1,
                                     if m.lost_reason
                                     and m.lost_reason != _WON_ELSEWHERE}),
         })
+    if q:
+        needle = q.strip().lower()
+        out = [p for p in out
+               if needle in (p["name"] or "").lower()
+               or any(needle in (f or "").lower() for f in p["firms"])
+               or any(needle in (a or "").lower() for a in p["architects"])]
     out.sort(key=lambda p: -(p["order_value"] or p["estimated_value"] or 0))
+    total = len(out)
+    out = out[:limit]
     for p in out:
         if p["created"]:
             p["created"] = p["created"].date().isoformat()
-    return out[:limit]
+    return {"rows": out, "total": total, "returned": len(out)}

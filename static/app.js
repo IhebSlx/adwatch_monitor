@@ -314,6 +314,8 @@
   // replaces the whole <table> — without this, hitting Aktualisieren silently
   // dropped whatever you had filtered to.
   const TABLE_STATE = new Map();   // wrapId -> {sort:{col,dir}, filters:{col:Set}}
+  // wrapId -> how many rows matched on the SERVER (may exceed what was sent)
+  const TABLE_TOTALS = {};
 
   const _stateFor = (wrapId) => {
     if (!TABLE_STATE.has(wrapId)) TABLE_STATE.set(wrapId, { sort: null, filters: {} });
@@ -385,7 +387,9 @@
     $$("thead th", table).forEach((th, i) => {
       th.classList.toggle("sorted-asc", !!st.sort && st.sort.col === i && st.sort.dir === "asc");
       th.classList.toggle("sorted-desc", !!st.sort && st.sort.col === i && st.sort.dir === "desc");
-      th.classList.toggle("th-filtered", !!(st.filters[i] && st.filters[i].size));
+      const srv = (SERVER_COLUMNS[wrapId] || {})[i];
+      const srvActive = srv ? !!$(srv.select)?.value : false;
+      th.classList.toggle("th-filtered", srvActive || !!(st.filters[i] && st.filters[i].size));
     });
 
     const shown = rows.filter(r => !r.classList.contains("row-filtered")).length;
@@ -395,13 +399,29 @@
       tag.className = "table-count muted";
       table.parentElement.insertBefore(tag, table);
     }
-    tag.textContent = shown === rows.length
-      ? `${rows.length} Zeilen`
-      : `${shown} von ${rows.length} Zeilen — Filter aktiv`;
+    // TABLE_TOTALS[wrapId] = how many rows MATCHED on the server. The table only
+    // ever holds a capped slice (Objekte 300 of 52.796), so saying "34 von 300"
+    // let a reader conclude 300 was everything. Name the cap and the real total.
+    const total = TABLE_TOTALS[wrapId];
+    const loaded = rows.length;
+    const capped = total != null && total > loaded;
+    let txt = shown === loaded ? `${loaded} Zeilen` : `${shown} von ${loaded} geladenen Zeilen`;
+    if (capped) txt += ` · ${total.toLocaleString("de-DE")} insgesamt (nur die ersten ${loaded} geladen)`;
+    if (shown !== loaded && capped) txt += " — Spaltenfilter wirkt nur auf die geladenen Zeilen";
+    tag.textContent = txt;
   }
+
+  // Columns that map onto a SERVER filter. Filtering these in the browser would
+  // search the loaded slice (Objekte: 300 of 52.796) and quietly report a
+  // fraction of the truth, so the menu drives the server control instead.
+  const SERVER_COLUMNS = {
+    objekteWrap: {1: {select: "#objekteStatus", label: "Status"}},
+  };
 
   function _openColMenu(table, wrapId, th, colIdx) {
     const st = _stateFor(wrapId);
+    const server = (SERVER_COLUMNS[wrapId] || {})[colIdx];
+    if (server) return _openServerColMenu(table, wrapId, th, colIdx, server);
     const body = table.tBodies[0];
     const values = [...new Set([...(body ? body.rows : [])]
       .map(tr => (tr.cells[colIdx]?.textContent || "").trim()))]
@@ -461,6 +481,39 @@
     $("#thmClearCol", menu)?.addEventListener("click", () => {
       delete st.filters[colIdx];
       close(); _applyTableState(table, wrapId);
+    });
+  }
+
+  function _openServerColMenu(table, wrapId, th, colIdx, server) {
+    const st = _stateFor(wrapId);
+    const sel = $(server.select);
+    const menu = _menuEl();
+    menu.innerHTML = `
+      <div class="thm-head">${esc(th.textContent.replace("▾", "").trim())}</div>
+      <div class="thm-sec thm-sort">
+        <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "asc" ? " btn-primary" : ""}" data-dir="asc">↑ Aufsteigend</button>
+        <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "desc" ? " btn-primary" : ""}" data-dir="desc">↓ Absteigend</button>
+      </div>
+      <div class="thm-sec"><div class="thm-sec-title">${esc(server.label)}</div>
+        <select class="thm-input" id="thmServerSel">${
+          [...sel.options].map(o => `<option value="${esc(o.value)}"${sel.value === o.value ? " selected" : ""}>${esc(o.textContent)}</option>`).join("")
+        }</select>
+        <div class="sub" style="margin-top:5px">Filtert alle Zeilen, nicht nur die geladenen.</div>
+      </div>`;
+    const r = th.getBoundingClientRect();
+    menu.classList.remove("hidden");
+    const w = Math.min(300, window.innerWidth - 24);
+    menu.style.width = w + "px";
+    menu.style.top = Math.round(r.bottom + 4) + "px";
+    menu.style.left = Math.round(Math.min(r.left, window.innerWidth - w - 12)) + "px";
+    $$(".thm-sort-btn", menu).forEach(b => b.addEventListener("click", () => {
+      st.sort = { col: colIdx, dir: b.dataset.dir };
+      menu.classList.add("hidden"); _applyTableState(table, wrapId);
+    }));
+    $("#thmServerSel", menu)?.addEventListener("change", (e) => {
+      menu.classList.add("hidden");
+      sel.value = e.target.value;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));   // reloads from the server
     });
   }
 
@@ -1640,6 +1693,7 @@
       wrap.innerHTML = `<p class="muted" style="padding:12px">Konnte nicht geladen werden: ${esc(e.message)}</p>`;
       return;
     }
+    TABLE_TOTALS["chancenTableWrap"] = data.total;
     const rows = data.rows || [];
     const s = data.summary || {};
     const risk = (s["gefährdet"]?.companies || 0) + (s.verloren?.companies || 0);
@@ -1828,6 +1882,7 @@
     let data;
     try {
       data = await api(`/api/projekte?limit=300&min_members=${mm}${st ? `&status=${st}` : ""}`);
+      TABLE_TOTALS["objekteWrap"] = data.total;
     } catch (e) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Fehler: ${esc(e.message)}</p>`;
       return;
@@ -1897,6 +1952,7 @@
     let data;
     try {
       data = await api(`/api/identity/review?limit=200${qs}`);
+      TABLE_TOTALS["pruefenWrap"] = data.total;
     } catch (e) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Fehler: ${esc(e.message)}</p>`;
       return;

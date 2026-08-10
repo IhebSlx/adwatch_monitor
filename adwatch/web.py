@@ -763,11 +763,15 @@ def chancen_route(limit: int = 200, min_value: float = 0.0,
     combination is not visible anywhere else in the Solarlux stack.
     """
     from .insights import rfm
-    rows = rfm.overdue_customers(limit=max(1, min(limit, 1000)),
-                                 min_value=max(min_value, 0.0))
+    page = rfm.overdue_customers(limit=max(1, min(limit, 1000)),
+                                 min_value=max(min_value, 0.0), with_total=True)
+    rows, total = page["rows"], page["total"]
     if advertising_only:
         rows = [r for r in rows if r["advertising"]]
-    return {"rows": rows, "summary": rfm.summary(),
+    # `total` counts every company that matched, not the slice we send. Without
+    # it the screen can only say "x von 500" and 500 reads as the whole world.
+    return {"rows": rows, "total": total, "returned": len(rows),
+            "summary": rfm.summary(),
             "advertising": sum(1 for r in rows if r["advertising"]),
             "value_at_risk": round(sum(r["value"] for r in rows), 2)}
 
@@ -957,16 +961,19 @@ def reject_website_route(company_id: int):
 
 @app.get("/api/projekte")
 def projekte_route(status: str | None = None, min_members: int = 1,
-                   limit: int = 200):
+                   limit: int = 200, q: str | None = None):
     """Objekte statt einzelner Verkaufschancen. Besonderheit Objektvertrieb:
     mehrere VCs teilen sich ein Projekt (sl_primary_opportunityid); EIN Gewinn
     macht das Projekt gewonnen — Geschwister-VCs mit 'Zugehörige VC gewonnen'
     sind keine Verluste."""
     from .insights import projekte
-    return {"overview": projekte.overview(),
-            "rows": projekte.list_projects(status=status,
-                                           min_members=max(1, min_members),
-                                           limit=max(1, min(limit, 1000)))}
+    page = projekte.list_projects(status=status,
+                                  min_members=max(1, min_members),
+                                  limit=max(1, min(limit, 1000)), q=q)
+    # `total` is what MATCHED the filters across all 52.796 projects; `rows` is
+    # only the slice that fits in the browser. Reporting just the slice let the
+    # screen say "34 von 300" and imply 300 was everything.
+    return {"overview": projekte.overview(), **page}
 
 
 @app.get("/api/identity/review")

@@ -188,8 +188,12 @@ def recompute(today: dt.date | None = None) -> dict:
 
 
 def overdue_customers(limit: int = 200, min_value: float = 0.0,
-                      today: dt.date | None = None) -> list[dict]:
+                      today: dt.date | None = None,
+                      with_total: bool = False):
     """Companies quiet against their own rhythm, worst first.
+
+    `with_total=True` returns {"rows", "total"} instead of a bare list, so the
+    caller can report how many MATCHED, not just how many it sent.
 
     This is the list that did not exist before: 670 companies carrying EUR 35.5M
     of historic revenue have gone at least 3 of their own intervals silent, and
@@ -218,7 +222,8 @@ def overdue_customers(limit: int = 200, min_value: float = 0.0,
             **cls,
         })
     rows.sort(key=lambda r: (-(r["winback_score"] or 0), -r["value"]))
-    return rows[:limit]
+    return ({"rows": rows[:limit], "total": len(rows)}
+            if with_total else rows[:limit])
 
 
 def summary(today: dt.date | None = None) -> dict:
