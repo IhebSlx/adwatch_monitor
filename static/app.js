@@ -2337,46 +2337,62 @@
             </td>
           </tr>`).join("")}</tbody>
       </table>`;
-    // A decided row LEAVES the queue. The decision already persists — accept
-    // sets identity_status='verified', reject clears it — and the queue selects
-    // on 'needs_review', so neither comes back on the next load. The row used to
-    // stay at opacity 0.45 with the count unchanged, which made a finished
-    // decision look half-done and left no way to see how many were left.
-    const decide = async (btn, call, msg) => {
+    // Both counters that name a number of rows: the queue line (#pruefenCount)
+    // and the shared "N Zeilen" tag that _applyTableState draws above every
+    // table. Updating only the first left "36 Zeilen" frozen while the list
+    // shrank underneath it.
+    const repaintPruefen = (tbody) => {
+      const left = Math.max(TABLE_TOTALS["pruefenWrap"] || 0, 0);
+      const cnt = $("#pruefenCount");
+      if (cnt) cnt.textContent = `${tbody.rows.length} von ${left} offen`;
+      const table = tbody.closest("table");
+      if (table) _applyTableState(table, "pruefenWrap");
+    };
+
+    // The row goes the moment you click. It used to wait for the request, and
+    // `accept` ends in enrich_company() — a full website crawl plus an LLM call,
+    // synchronously, before the response returns. So a decision took ten seconds
+    // or more to visibly land, for work the human is not waiting on: the verdict
+    // is written before the enrichment starts.
+    //
+    // Requests are SERIALISED behind one promise chain. Optimistic removal makes
+    // it easy to click ten rows in two seconds, and ten parallel crawl+LLM calls
+    // are how "database is locked" happens.
+    let chain = Promise.resolve();
+    const decide = (btn, call, msg) => {
       const tr = btn.closest("tr");
       const cid = Number(tr.dataset.company);
+      const tbody = tr.parentElement;
+      const anchor = tr.nextElementSibling;
       $$("button", tr).forEach(x => x.disabled = true);
-      try {
-        await call(cid);
-      } catch (e) {
-        toast(e.message, "error");
-        $$("button", tr).forEach(x => x.disabled = false);
-        return;
-      }
-      tr.style.transition = "opacity .15s ease";
-      tr.style.opacity = "0";
-      setTimeout(() => {
-        const tbody = tr.parentElement;
-        tr.remove();
-        // the count is the whole queue, not this page, so decrement both
-        const left = Math.max((TABLE_TOTALS["pruefenWrap"] || 1) - 1, 0);
-        TABLE_TOTALS["pruefenWrap"] = left;
-        const cnt = $("#pruefenCount");
-        if (cnt) cnt.textContent = `${tbody.rows.length} von ${left} offen`;
+      tr.remove();
+      TABLE_TOTALS["pruefenWrap"] = Math.max((TABLE_TOTALS["pruefenWrap"] || 1) - 1, 0);
+      repaintPruefen(tbody);
+      toast(msg);
+
+      chain = chain.then(() => call(cid)).then(() => {
         if (!tbody.rows.length) {
+          const left = TABLE_TOTALS["pruefenWrap"] || 0;
           $("#pruefenWrap").innerHTML = left
             ? `<p class="muted" style="padding:12px">Diese Seite ist abgearbeitet — ${left} weitere warten. <b>Aktualisieren</b> lädt sie.</p>`
             : `<p class="muted" style="padding:12px">Nichts zu prüfen — alles entschieden. 🎉</p>`;
         }
-      }, 150);
-      toast(msg);
+      }, (e) => {
+        // put it back exactly where it was — a decision that did not save must
+        // not look decided
+        tbody.insertBefore(tr, anchor);
+        TABLE_TOTALS["pruefenWrap"] = (TABLE_TOTALS["pruefenWrap"] || 0) + 1;
+        $$("button", tr).forEach(x => x.disabled = false);
+        repaintPruefen(tbody);
+        toast(`Nicht gespeichert: ${e.message}`, "error");
+      });
     };
 
     $$("#pruefenWrap .pruefen-ok").forEach(b => b.addEventListener("click", (ev) =>
       decide(ev.target,
              (cid) => api(`/api/companies/${cid}/enrichment/accept`, "POST",
                           { page_id: ev.target.dataset.domain }),
-             "Website bestätigt — wird angereichert.")));
+             "Website bestätigt — Anreicherung läuft im Hintergrund.")));
     $$("#pruefenWrap .pruefen-no").forEach(b => b.addEventListener("click", (ev) =>
       decide(ev.target,
              (cid) => api(`/api/companies/${cid}/identity/reject`, "POST", {}),
