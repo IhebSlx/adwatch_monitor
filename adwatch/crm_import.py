@@ -738,3 +738,43 @@ def import_products(path: str | Path) -> dict:
 
     return {"families": len(families), "companies": len(agg), "rows": rows,
             "from_account_link": direct, "from_opportunity_link": via}
+
+
+def import_opportunity_addresses(path: str | Path) -> dict:
+    """Fill the project address on Verkaufschancen from a Dataverse pull.
+
+    A Verkaufschance in Objektvertrieb is a BUILDING SITE, so its address is
+    where the glass actually goes — the only geography in the whole dataset that
+    says where demand is, as opposed to where a dealer happens to be registered.
+
+    It was 0% filled here and 85% filled in the CRM: the Excel exports we were
+    working from simply did not carry sl_city / sl_postalcode / sl_street1. Same
+    for `name`, which is why that column read empty while project_name was full.
+
+    `totalamount` is deliberately NOT imported: it is populated on 17 of 151.862
+    rows in the CRM, so the empty column here was already correct and filling it
+    would only create a number that looks meaningful and is not.
+    """
+    import json as _json
+    from .models import CrmOpportunity
+
+    rows = _json.loads(Path(path).read_text(encoding="utf-8"))
+    by_guid = {r["g"].lower(): r for r in rows if r.get("g")}
+
+    filled = {"name": 0, "city": 0, "postal_code": 0, "street": 0}
+    seen = 0
+    with SessionLocal() as s:
+        for o in s.scalars(select(CrmOpportunity)):
+            src = by_guid.get((o.opportunity_guid or "").lower())
+            if not src:
+                continue
+            seen += 1
+            for col, key in (("name", "n"), ("city", "c"),
+                             ("postal_code", "p"), ("street", "s")):
+                val = (src.get(key) or "").strip() if src.get(key) else None
+                if val and getattr(o, col) != val:
+                    setattr(o, col, val[:200])
+                    filled[col] += 1
+        s.commit()
+
+    return {"in_file": len(rows), "matched": seen, "filled": filled}

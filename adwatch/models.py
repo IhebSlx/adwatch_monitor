@@ -554,6 +554,11 @@ class CrmOpportunity(Base):
     state: Mapped[str | None] = mapped_column(String(20), nullable=True)
     order_value: Mapped[float | None] = mapped_column(Float, nullable=True)  # ax_order_value
     products: Mapped[list | None] = mapped_column(JSON, nullable=True)   # slx_slproductnames, canonicalised
+    # The PROJECT address, not the customer's. A Verkaufschance in Objektvertrieb
+    # is a building site, so this is where the glass actually goes — the only
+    # geography that says anything about where demand is. Missing from every
+    # Excel export we were given (0% filled) while sitting at 85% in the CRM.
+    street: Mapped[str | None] = mapped_column(String(200), nullable=True)
     city: Mapped[str | None] = mapped_column(String(160), nullable=True)
     postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     country: Mapped[str | None] = mapped_column(String(2), nullable=True)

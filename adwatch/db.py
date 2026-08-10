@@ -334,7 +334,8 @@ def _migrate(engine) -> None:
                               ("estimated_close", "DATE"),
                               ("invoiced_value", "FLOAT"), ("invoiced_count", "INTEGER DEFAULT 0"),
                               ("quoted_value", "FLOAT"), ("quoted_count", "INTEGER DEFAULT 0"),
-                              ("sap_order_numbers", "JSON")]:
+                              ("sap_order_numbers", "JSON"),
+                              ("street", "VARCHAR(200)")]:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE crm_opportunities ADD COLUMN {name} {ddl}"))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
