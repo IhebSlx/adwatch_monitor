@@ -2897,6 +2897,24 @@ def test_architect_prompt_never_asks_a_planner_to_sell():
     assert "own_fabrication" in deal and "Bauelemente-/Handwerksbetrieb" in deal
 
 
+def test_brand_evidence_outranks_an_inferred_fit():
+    """Proymetal trades as "SUNFLEX Top-Partner", the scan found Sunflex in its
+    logo strip, and the model still graded it "gering" — the extract it was given
+    stopped before the brand and read like a general metalwork shop. Storing both
+    would put a proven conquest target at the bottom of the ranking. Carrying a
+    direct competitor is a FACT about the company and outranks the inference."""
+    from adwatch.enrich.extract import apply_fit_floor, fit_floor
+    assert apply_fit_floor("gering", ["Sunflex"]) == "hoch"
+    assert apply_fit_floor(None, ["Vitrocsa"]) == "hoch"
+    # terrace brands only lift to mittel — Markilux makes awnings, we do not
+    assert apply_fit_floor("gering", ["Markilux"]) == "mittel"
+    assert apply_fit_floor("hoch", ["Renson"]) == "hoch"       # never lowers
+    # profile suppliers prove nothing about the category, so no floor at all
+    assert apply_fit_floor("mittel", ["Cortizo", "Schüco"]) == "mittel"
+    assert apply_fit_floor(None, ["Cortizo"]) is None
+    assert fit_floor([]) is None
+
+
 def test_brand_scan_survives_the_chrome_strip_and_the_char_budget():
     """The two edits that make the prose extract good — dropping navigation and
     capping characters — are the two that hide brand names, because a "Marcas"

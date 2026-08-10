@@ -332,8 +332,9 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             # Union of both routes: the scan guarantees completeness over the whole
             # page, the model contributes anything phrased so loosely that a literal
             # match missed it. Neither alone was enough.
-            c.competitor_brands = _merge_brands(merged.get("competitor_brands"),
-                                                merged.get("scanned_brands")) or None
+            brands = _merge_brands(merged.get("competitor_brands"),
+                                   merged.get("scanned_brands"))
+            c.competitor_brands = brands or None
             c.mentions_solarlux = merged.get("mentions_solarlux")
             c.assessment = merged.get("assessment_de") or None
             c.certifications = merged.get("certifications") or None
@@ -349,7 +350,10 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             c.reference_scale = merged.get("reference_scale") or None
             # dealer profile only — the mirror question: does this company already
             # SELL what we make, and whose systems does it carry today
-            c.solarlux_fit = merged.get("solarlux_fit") or None
+            # The brands are evidence, the fit is an inference; where they
+            # disagree the evidence wins. Carrying Sunflex proves the company
+            # sells our category, whatever a partial page made the model think.
+            c.solarlux_fit = extract.apply_fit_floor(merged.get("solarlux_fit"), brands)
             c.partner_of = merged.get("partner_of") or None
             c.installs = merged.get("installs")
             c.enrich_profile = merged.get("profile") or c.enrich_profile

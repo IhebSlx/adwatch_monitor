@@ -86,6 +86,39 @@ SCAN_BRANDS = tuple(b for b in COMPETITOR_BRANDS if b not in _AMBIGUOUS_BRANDS)
 _SCAN_RE = {b: re.compile(rf"(?<!\w){re.escape(b)}(?!\w)", re.I) for b in SCAN_BRANDS}
 
 
+def fit_floor(brands) -> str | None:
+    """The lowest solarlux_fit a company's brands allow, or None for no constraint.
+
+    A company that carries Sunflex sells glass folding walls. That is a fact about
+    the company, and it outranks a grade the model inferred from a partial page —
+    which is exactly the conflict this resolves. Proymetal trades as "SUNFLEX
+    Top-Partner", the scan found Sunflex in its logo strip, and the model still
+    said "gering", because the extract it was given stopped before the brand and
+    read like a general metalwork shop. Storing both would have put a proven
+    conquest target at the bottom of the ranking.
+
+    "terrasse" only lifts to "mittel": it spans genuine overlap (Renson, Brustor
+    terrace roofs) and mere adjacency (Markilux awnings, which we do not make), so
+    it is not proof they sell our category.
+    """
+    tiers = brand_tiers(brands)
+    if "direkt" in tiers:
+        return "hoch"
+    return "mittel" if "terrasse" in tiers else None
+
+
+_FIT_RANK = {"gering": 1, "mittel": 2, "hoch": 3}
+
+
+def apply_fit_floor(fit: str | None, brands) -> str | None:
+    """Raise a graded fit to what the brand evidence proves. Never lowers it, and
+    never invents one where the brands say nothing."""
+    floor = fit_floor(brands)
+    if not floor:
+        return fit
+    return floor if _FIT_RANK[floor] > _FIT_RANK.get(fit or "", 0) else fit
+
+
 def scan_brands(text: str) -> list[str]:
     """Brand names present in the page text, found deterministically.
 
