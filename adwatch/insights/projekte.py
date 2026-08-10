@@ -94,13 +94,20 @@ def _outcome(members: list[CrmOpportunity]) -> str:
     return LOST
 
 
-def overview() -> dict:
-    """The corrected Objektvertrieb picture: projects, not Verkaufschancen."""
+def overview(min_members: int = 1) -> dict:
+    """The corrected Objektvertrieb picture: projects, not Verkaufschancen.
+
+    `min_members` must match the list the KPIs sit above, or the header claims
+    8.189 won projects while the table shows only the 3.580 that have more than
+    one Verkaufschance. Counts of two different populations on one screen.
+    """
     groups = _project_rows()
     counts = {WON: 0, OPEN: 0, LOST: 0}
     multi = 0
     won_value = 0.0
     for members in groups.values():
+        if len(members) < min_members:
+            continue
         out = _outcome(members)
         counts[out] += 1
         if len(members) > 1:
@@ -112,6 +119,7 @@ def overview() -> dict:
     return {
         "projects": total,
         "multi_vc_projects": multi,
+        "all_projects": len(groups),
         **counts,
         "won_value": round(won_value, 2),
         # the number the VC-level analysis got wrong: win rate at PROJECT level

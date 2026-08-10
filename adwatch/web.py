@@ -988,7 +988,7 @@ def projekte_route(status: str | None = None, min_members: int = 1,
     # `total` is what MATCHED the filters across all 52.796 projects; `rows` is
     # only the slice that fits in the browser. Reporting just the slice let the
     # screen say "34 von 300" and imply 300 was everything.
-    return {"overview": projekte.overview(), **page}
+    return {"overview": projekte.overview(min_members=max(1, min_members)), **page}
 
 
 @app.get("/api/projekte/{project_id}")

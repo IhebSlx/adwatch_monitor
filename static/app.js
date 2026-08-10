@@ -1985,9 +1985,17 @@
       return;
     }
     const o = data.overview || {};
+    // "Projekte" was 52.796 and read as the population. 49.216 of those hold a
+    // SINGLE Verkaufschance: sl_primary_opportunityid points at the deal itself
+    // when it stands alone, so grouping invents a project per lone deal. The
+    // Objektvertrieb case — several bidders on one building — is 3.580 of them.
+    // against ALL groups, not the filtered ones — otherwise the subtraction runs
+    // inside the same population and always yields zero
+    const einzel = (o.all_projects || 0) - (o.multi_vc_projects || 0);
     $("#objekteKpis").innerHTML = `
-      <div class="kpi"><div class="kpi-label">Projekte</div>
-        <div class="kpi-value">${(o.projects || 0).toLocaleString("de-DE")}</div></div>
+      <div class="kpi"><div class="kpi-label">Sammelprojekte (2+ VCs)</div>
+        <div class="kpi-value">${(o.multi_vc_projects || 0).toLocaleString("de-DE")}</div>
+        <div class="sub">+ ${einzel.toLocaleString("de-DE")} Einzel-VCs</div></div>
       <div class="kpi"><div class="kpi-label">Gewonnen</div>
         <div class="kpi-value">${(o.gewonnen || 0).toLocaleString("de-DE")}</div></div>
       <div class="kpi"><div class="kpi-label">Projekt-Gewinnrate</div>

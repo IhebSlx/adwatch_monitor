@@ -37,7 +37,7 @@
       </button>
       <button class="tab" data-tab="chancen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"/></svg>
-        Chancen
+        Rückgewinnung
       </button>
       <button class="tab" data-tab="objekte">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M6 21V8l6-5 6 5v13"/><path d="M10 21v-6h4v6"/></svg>
@@ -539,7 +539,8 @@
     <!-- ================= TAB: Chancen (Rückgewinnung) ================= -->
     <section id="tab-chancen" class="tab-panel">
       <header class="page-head">
-        <h1>Chancen — stille Kunden zurückgewinnen</h1>
+        <h1>Rückgewinnung — stille Kunden</h1>
+        <p class="muted" style="margin:2px 0 0">Kunden, die gegen ihren <b>eigenen</b> Bestellrhythmus verstummt sind. Das sind <b>keine Verkaufschancen</b> aus dem CRM.</p>
         <p>Kunden, die <b>im Vergleich zu ihrem eigenen Bestellrhythmus</b> auffällig lange
           nichts mehr bestellt haben. Wer davon <b>noch Werbung schaltet</b>, gibt weiterhin
           Geld im Markt aus — nur nicht bei uns.</p>
@@ -584,7 +585,7 @@
     <!-- ================= TAB: Objekte (Projekte statt VCs) ================= -->
     <section id="tab-objekte" class="tab-panel">
       <header class="page-head">
-        <h1>Objekte — Projekte statt einzelner Verkaufschancen</h1>
+        <h1>Objekte — Bauvorhaben mit mehreren Verkaufschancen</h1>
         <p>Mehrere Verkaufschancen gehören oft zu <b>einem</b> Objekt. <b>Ein Gewinn macht das
           Projekt gewonnen</b> — Geschwister-VCs, die als „Zugehörige VC gewonnen“ geschlossen
           wurden, sind keine Verluste.</p>
@@ -601,8 +602,8 @@
             </select>
           </label>
           <label class="checkline" style="margin:0 0 0 16px">
-            <input type="checkbox" id="objekteMulti">
-            <span>Nur Projekte mit mehreren Verkaufschancen</span>
+            <input type="checkbox" id="objekteMulti" checked>
+            <span>Nur echte Sammelprojekte (2+ Verkaufschancen)</span>
           </label>
           <button class="btn" id="objekteReload" style="margin-left:auto">Aktualisieren</button>
         </div>
