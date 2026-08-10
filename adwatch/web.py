@@ -974,21 +974,27 @@ def reject_website_route(company_id: int):
 @app.get("/api/projekte")
 def projekte_route(status: str | None = None, min_members: int = 1,
                    limit: int = 200, q: str | None = None,
-                   min_value: float = 0.0, lost_reason: str | None = None):
+                   min_value: float = 0.0, lost_reason: str | None = None,
+                   max_members: int | None = None):
     """Objekte statt einzelner Verkaufschancen. Besonderheit Objektvertrieb:
     mehrere VCs teilen sich ein Projekt (sl_primary_opportunityid); EIN Gewinn
     macht das Projekt gewonnen — Geschwister-VCs mit 'Zugehörige VC gewonnen'
-    sind keine Verluste."""
+    sind keine Verluste.
+
+    min_members/max_members filtern nach der Anzahl VCs am Objekt — die bisher
+    stärkste projektseitige Kennzahl (Mehrfach-Objekte gewinnen 39,0 % gegen
+    19,3 % gesamt)."""
     from .insights import projekte
-    page = projekte.list_projects(status=status,
-                                  min_members=max(1, min_members),
+    lo = max(1, min_members)
+    hi = max(lo, max_members) if max_members is not None else None
+    page = projekte.list_projects(status=status, min_members=lo, max_members=hi,
                                   limit=max(1, min(limit, 1000)), q=q,
                                   min_value=max(min_value, 0.0),
                                   lost_reason=lost_reason)
     # `total` is what MATCHED the filters across all 52.796 projects; `rows` is
     # only the slice that fits in the browser. Reporting just the slice let the
     # screen say "34 von 300" and imply 300 was everything.
-    return {"overview": projekte.overview(min_members=max(1, min_members)), **page}
+    return {"overview": projekte.overview(min_members=lo, max_members=hi), **page}
 
 
 @app.get("/api/projekte/{project_id}")

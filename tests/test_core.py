@@ -3083,6 +3083,47 @@ def test_objekt_detail_assembles_the_whole_project(temp_db, monkeypatch):
     assert projekte.detail("gibtsnicht") is None
 
 
+def test_objekte_filter_by_number_of_verkaufschancen(temp_db, monkeypatch):
+    """How many VCs hang on an Objekt is the strongest project-level signal we
+    have (39,0 % against 19,3 %), so it has to be filterable in both directions.
+
+    Two things that must not slip: a closed range excludes above as well as
+    below, and the bucket table stays over ALL Objekte no matter what the table
+    is filtered to — otherwise the reference row mirrors the filter and the
+    comparison it exists to make disappears.
+    """
+    from adwatch.insights import projekte
+    from adwatch.models import CrmOpportunity
+
+    s = temp_db.SessionLocal()
+    rows = []
+    # P1: 1 VC, lost. P2: 2 VCs, won. P3: 3 VCs, lost.
+    plan = [("P1", 1, "verloren"), ("P2", 2, "gewonnen"), ("P3", 3, "verloren")]
+    for pid, n, state in plan:
+        for i in range(n):
+            rows.append(CrmOpportunity(
+                crm_id=f"{pid}-{i}", opportunity_guid=f"{pid}-{i}", project_id=pid,
+                project_name=pid, state=(state if i == 0 else "verloren"),
+                order_value=(100.0 if state == "gewonnen" and i == 0 else None)))
+    s.add_all(rows); s.commit(); s.close()
+    monkeypatch.setattr(projekte, "SessionLocal", temp_db.SessionLocal)
+    projekte.invalidate_cache()
+
+    assert {r["name"] for r in projekte.list_projects()["rows"]} == {"P1", "P2", "P3"}
+    assert {r["name"] for r in projekte.list_projects(min_members=2)["rows"]} == {"P2", "P3"}
+    # closed range: excludes the 3-VC project ABOVE it, not just the 1 below
+    exact2 = projekte.list_projects(min_members=2, max_members=2)
+    assert {r["name"] for r in exact2["rows"]} == {"P2"} and exact2["total"] == 1
+    assert {r["name"] for r in projekte.list_projects(max_members=1)["rows"]} == {"P1"}
+
+    o = projekte.overview(min_members=2, max_members=2)
+    assert o["projects"] == 1                      # the filtered population
+    b = {x["label"]: x for x in o["member_buckets"]}
+    assert [b["1 VC"]["projects"], b["2 VCs"]["projects"], b["3–4 VCs"]["projects"]] == [1, 1, 1]
+    assert b["2 VCs"]["win_rate"] == 1.0 and b["1 VC"]["win_rate"] == 0.0
+    assert sum(x["projects"] for x in o["member_buckets"]) == o["all_projects"] == 3
+
+
 def test_dossier_carries_the_product_profile(temp_db, monkeypatch):
     """Everything pulled today landed in the database and none of it reached the
     drawer. The product profile is the whole answer to "which product for whom",

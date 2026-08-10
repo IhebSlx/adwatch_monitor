@@ -94,26 +94,59 @@ def _outcome(members: list[CrmOpportunity]) -> str:
     return LOST
 
 
-def overview(min_members: int = 1) -> dict:
+# How many Verkaufschancen hang on one Objekt is the strongest project-level
+# signal measured so far — projects with more than one win 39,0% against 19,3%
+# overall. It is also readable BEFORE the outcome, which is what makes it usable
+# for an Ideal-Project-Profile: at the moment a second dealer registers the same
+# building, the odds change. So the buckets are always computed over ALL groups,
+# independent of whatever filter the table is showing, and serve as the
+# reference table the filter is chosen from.
+MEMBER_BUCKETS: tuple[tuple[str, int, int | None], ...] = (
+    ("1 VC", 1, 1),
+    ("2 VCs", 2, 2),
+    ("3–4 VCs", 3, 4),
+    ("5–9 VCs", 5, 9),
+    ("10+ VCs", 10, None),
+)
+
+
+def _in_bucket(n: int, lo: int, hi: int | None) -> bool:
+    return n >= lo and (hi is None or n <= hi)
+
+
+def overview(min_members: int = 1, max_members: int | None = None) -> dict:
     """The corrected Objektvertrieb picture: projects, not Verkaufschancen.
 
-    `min_members` must match the list the KPIs sit above, or the header claims
-    8.189 won projects while the table shows only the 3.580 that have more than
-    one Verkaufschance. Counts of two different populations on one screen.
+    `min_members`/`max_members` must match the list the KPIs sit above, or the
+    header claims 8.189 won projects while the table shows only the 3.580 that
+    have more than one Verkaufschance. Counts of two different populations on
+    one screen.
     """
     groups = _project_rows()
     counts = {WON: 0, OPEN: 0, LOST: 0}
     multi = 0
     won_value = 0.0
+    buckets = [{"label": lab, "min": lo, "max": hi,
+                "projects": 0, WON: 0, LOST: 0, OPEN: 0}
+               for lab, lo, hi in MEMBER_BUCKETS]
     for members in groups.values():
-        if len(members) < min_members:
-            continue
+        n = len(members)
         out = _outcome(members)
+        for b in buckets:                       # unfiltered: reference table
+            if _in_bucket(n, b["min"], b["max"]):
+                b["projects"] += 1
+                b[out] += 1
+                break
+        if n < min_members or (max_members is not None and n > max_members):
+            continue
         counts[out] += 1
-        if len(members) > 1:
+        if n > 1:
             multi += 1
         if out == WON:
             won_value += sum(float(m.order_value or 0) for m in members)
+    for b in buckets:
+        dec = b[WON] + b[LOST]
+        b["win_rate"] = round(b[WON] / dec, 4) if dec else None
     total = sum(counts.values())
     decided = counts[WON] + counts[LOST]
     return {
@@ -124,12 +157,14 @@ def overview(min_members: int = 1) -> dict:
         "won_value": round(won_value, 2),
         # the number the VC-level analysis got wrong: win rate at PROJECT level
         "project_win_rate": round(counts[WON] / decided, 4) if decided else None,
+        "member_buckets": buckets,
     }
 
 
 def list_projects(status: str | None = None, min_members: int = 1,
                   limit: int = 200, q: str | None = None,
-                  min_value: float = 0.0, lost_reason: str | None = None) -> dict:
+                  min_value: float = 0.0, lost_reason: str | None = None,
+                  max_members: int | None = None) -> dict:
     """Projects, most valuable first, with their members and roles resolved.
 
     Returns {"rows": [...], "total": n, "returned": len(rows)} — the total is the
@@ -150,6 +185,8 @@ def list_projects(status: str | None = None, min_members: int = 1,
     candidates = []
     for key, members in groups.items():
         if len(members) < min_members:
+            continue
+        if max_members is not None and len(members) > max_members:
             continue
         outcome = _outcome(members)
         if status and outcome != status:

@@ -1971,12 +1971,16 @@
   async function loadObjekte() {
     const wrap = $("#objekteWrap");
     const st = $("#objekteStatus").value;
-    const mm = $("#objekteMulti").checked ? 2 : 1;
+    // "2", "1", or a closed range like "3-4" — how many Verkaufschancen hang on
+    // the Objekt. The measured spread (39,0 % at 2+ against 19,3 % overall) is
+    // why this is a filter and not just a column.
+    const [lo, hi] = String($("#objekteVcs").value).split("-");
     wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
     const seq = nextSeq("objekteWrap");
     let data;
     try {
-      data = await api(`/api/projekte?limit=300&min_members=${mm}`
+      data = await api(`/api/projekte?limit=300&min_members=${lo}`
+        + (hi ? `&max_members=${hi}` : "")
         + (st ? `&status=${st}` : "") + serverParamQuery("objekteWrap"));
       if (!isCurrent("objekteWrap", seq)) return;    // a newer load already ran
       TABLE_TOTALS["objekteWrap"] = data.total;
@@ -1985,23 +1989,41 @@
       return;
     }
     const o = data.overview || {};
-    // "Projekte" was 52.796 and read as the population. 49.216 of those hold a
-    // SINGLE Verkaufschance: sl_primary_opportunityid points at the deal itself
-    // when it stands alone, so grouping invents a project per lone deal. The
-    // Objektvertrieb case — several bidders on one building — is 3.580 of them.
-    // against ALL groups, not the filtered ones — otherwise the subtraction runs
-    // inside the same population and always yields zero
-    const einzel = (o.all_projects || 0) - (o.multi_vc_projects || 0);
+    // Every KPI here counts the FILTERED population, so the first one has to say
+    // which population that is. It used to read "Objekte mit mehreren VCs" with
+    // "+ N mit nur einer VC" underneath — a subtraction against ALL groups that
+    // was only true while the filter was the 2+ checkbox. Filter to 5–9 VCs and
+    // it claimed "145 mit mehreren VCs + 52.651 mit nur einer".
     $("#objekteKpis").innerHTML = `
-      <div class="kpi"><div class="kpi-label">Objekte mit mehreren VCs</div>
-        <div class="kpi-value">${(o.multi_vc_projects || 0).toLocaleString("de-DE")}</div>
-        <div class="sub">+ ${einzel.toLocaleString("de-DE")} mit nur einer VC</div></div>
+      <div class="kpi"><div class="kpi-label">Objekte im Filter</div>
+        <div class="kpi-value">${(o.projects || 0).toLocaleString("de-DE")}</div>
+        <div class="sub">von ${(o.all_projects || 0).toLocaleString("de-DE")} gesamt</div></div>
       <div class="kpi"><div class="kpi-label">Gewonnen</div>
         <div class="kpi-value">${(o.gewonnen || 0).toLocaleString("de-DE")}</div></div>
       <div class="kpi"><div class="kpi-label">Projekt-Gewinnrate</div>
         <div class="kpi-value">${o.project_win_rate != null ? (o.project_win_rate * 100).toFixed(1) + " %" : "—"}</div></div>
       <div class="kpi"><div class="kpi-label">Gewonnener Wert</div>
         <div class="kpi-value" title="${eur(o.won_value)}">${eurShort(o.won_value)}</div></div>`;
+    // Gewinnrate nach Anzahl VCs — über ALLE Objekte, unabhängig vom Filter,
+    // damit die Zeile eine Referenz bleibt und nicht das Gefilterte spiegelt.
+    const buckets = o.member_buckets || [];
+    $("#objekteBuckets").innerHTML = !buckets.length ? "" : buckets.map(b => `
+      <button class="btn" data-vcs="${b.max == null ? b.min : b.min + "-" + b.max}"
+        title="Objekte mit ${esc(b.label)} — auf diesen Bereich filtern"
+        style="flex:1;text-align:left;padding:7px 11px">
+        <div class="sub">${esc(b.label)}</div>
+        <div style="font-size:15px">${b.win_rate != null ? (b.win_rate * 100).toFixed(1) + " %" : "—"}</div>
+        <div class="sub">${(b.projects || 0).toLocaleString("de-DE")} Objekte</div>
+      </button>`).join("");
+    $$("#objekteBuckets button[data-vcs]").forEach(b =>
+      b.addEventListener("click", () => {
+        const sel = $("#objekteVcs");
+        if ([...sel.options].some(op => op.value === b.dataset.vcs)) {
+          sel.value = b.dataset.vcs;
+          loadObjekte();
+        }
+      }));
+
     const rows = data.rows || [];
     if (!rows.length) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Keine Projekte für diesen Filter.</p>`;
@@ -2119,7 +2141,7 @@
     if (!btn) return;
     btn.addEventListener("click", loadObjekte);
     $("#objekteStatus").addEventListener("change", loadObjekte);
-    $("#objekteMulti").addEventListener("change", loadObjekte);
+    $("#objekteVcs").addEventListener("change", loadObjekte);
   }
 
   // ------------------------------------------------------- Prüfen tab

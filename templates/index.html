@@ -601,12 +601,22 @@
               <option value="verloren">verloren</option>
             </select>
           </label>
-          <label class="checkline" style="margin:0 0 0 16px">
-            <input type="checkbox" id="objekteMulti" checked>
-            <span>Nur Objekte mit mehreren Verkaufschancen</span>
+          <label style="margin:0 0 0 16px;font-size:12px;color:var(--muted)">Verkaufschancen je Objekt
+            <select id="objekteVcs" style="margin-left:6px">
+              <option value="2">2 und mehr</option>
+              <option value="1">alle</option>
+              <option value="1-1">genau 1</option>
+              <option value="2-2">genau 2</option>
+              <option value="3-4">3 bis 4</option>
+              <option value="5-9">5 bis 9</option>
+              <option value="10">10 und mehr</option>
+            </select>
           </label>
           <button class="btn" id="objekteReload" style="margin-left:auto">Aktualisieren</button>
         </div>
+        <p class="hint" style="margin:0 0 6px">Gewinnrate nach Anzahl Verkaufschancen am Objekt —
+          über <b>alle</b> Objekte, unabhängig vom Filter. Klick setzt den Filter.</p>
+        <div id="objekteBuckets" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"></div>
         <div id="objekteWrap" class="table-wrap">
           <p class="muted" style="padding:12px">Wird geladen …</p>
         </div>
