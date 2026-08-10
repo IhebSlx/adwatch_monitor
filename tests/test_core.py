@@ -3026,6 +3026,63 @@ def test_render_never_raises_into_the_pipeline(monkeypatch):
     assert rd.render_html("https://example.com") is None
 
 
+def test_objekt_detail_assembles_the_whole_project(temp_db, monkeypatch):
+    """An Objekt has no record of its own — it is a GROUP of Verkaufschancen
+    sharing sl_primary_opportunityid, so the drawer has to assemble it. Two
+    things this must get right, both of which it got wrong first:
+
+    * the group key falls back to the opportunity guid when a VC has no project
+      id, so matching only project_id 404s on every single-VC project;
+    * a firm that is Käufer, Architekt AND Endkunde on one deal is on ONE deal.
+      Counting role occurrences reported 9 VCs on a 4-VC project.
+    """
+    from adwatch.insights import projekte
+    from adwatch.models import Company, CrmOpportunity
+    import datetime as _dt
+
+    s = temp_db.SessionLocal()
+    buyer = Company(name="Metallbau A", segment="Verarbeiter", crm_id="aaa", city="Wien")
+    allrole = Company(name="Generalunternehmer B", segment="Baudienstleister", crm_id="bbb")
+    s.add_all([buyer, allrole]); s.commit()
+    s.add_all([
+        CrmOpportunity(crm_id="v1", opportunity_guid="g1", project_id="P1",
+                       project_name="Muthgasse 109", state="verloren",
+                       lost_reason="Zugehörige VC gewonnen",
+                       parent_account_crm_id="aaa", city="Wien", postal_code="1190",
+                       street="Muthgasse 109", created_on=_dt.datetime(2024, 7, 15)),
+        # one firm in all three roles on a single deal
+        CrmOpportunity(crm_id="v2", opportunity_guid="g2", project_id="P1",
+                       project_name="Muthgasse 109", state="verloren",
+                       lost_reason="Zu teuer", parent_account_crm_id="bbb",
+                       architect_crm_id="bbb", end_customer_crm_id="bbb",
+                       created_on=_dt.datetime(2024, 9, 4)),
+        # a project of ONE with no project_id — keyed by its own guid
+        CrmOpportunity(crm_id="v3", opportunity_guid="g3", project_id=None,
+                       project_name="Einzelobjekt", state="gewonnen",
+                       order_value=1000.0, parent_account_crm_id="aaa"),
+    ])
+    s.commit(); s.close()
+    monkeypatch.setattr(projekte, "SessionLocal", temp_db.SessionLocal)
+
+    d = projekte.detail("P1")
+    assert d["members"] == 2 and d["status"] == "gewonnen"
+    # won through a sibling outside the window: say so, or "gewonnen · 0 gewonnene
+    # VCs · kein Wert" reads like a bug
+    assert d["won_members"] == 0 and d["won_via"]
+    assert d["address"] == "Muthgasse 109 1190 Wien"
+    byname = {f["name"]: f for f in d["firms"]}
+    assert byname["Generalunternehmer B"]["roles"] == ["architekt", "endkunde", "kaeufer"]
+    assert byname["Generalunternehmer B"]["vcs"] == 1          # one deal, not three
+    assert [t["state"] for t in d["timeline"]] == ["verloren", "verloren"]  # oldest first
+    assert "Zu teuer" in d["lost_reasons"]
+    assert "Zugehörige VC gewonnen" not in d["lost_reasons"]
+
+    # a single-VC project is reachable by its guid
+    solo = projekte.detail("g3")
+    assert solo is not None and solo["members"] == 1 and solo["won_members"] == 1
+    assert projekte.detail("gibtsnicht") is None
+
+
 def test_dossier_carries_the_product_profile(temp_db, monkeypatch):
     """Everything pulled today landed in the database and none of it reached the
     drawer. The product profile is the whole answer to "which product for whom",

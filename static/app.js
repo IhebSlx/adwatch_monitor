@@ -1907,7 +1907,7 @@
         <thead><tr><th>Objekt</th><th>Status</th><th class="num">VCs</th>
           <th class="num">Wert</th><th>Firmen</th><th>Architekten</th><th>Verlustgründe</th></tr></thead>
         <tbody>${rows.map(p => `
-          <tr>
+          <tr data-projekt="${esc(p.project_id)}" style="cursor:pointer">
             <td style="max-width:280px">${esc(p.name)}${p.created ? `<div class="sub">${esc(p.created)}</div>` : ""}</td>
             <td><span class="state-chip">${esc(p.status)}</span></td>
             <td class="num">${p.members}${p.won_members ? ` <span class="sub">(${p.won_members} gew.)</span>` : ""}</td>
@@ -1917,6 +1917,90 @@
             <td style="max-width:200px" class="sub">${esc((p.lost_reasons || []).join(", "))}</td>
           </tr>`).join("")}</tbody>
       </table>`;
+    $$("#objekteWrap tr[data-projekt]").forEach(tr =>
+      tr.addEventListener("click", () => openProjektDrawer(tr.dataset.projekt)));
+  }
+
+  // ---- Objekt drawer: everything ever linked to one project ---------------
+  // An Objekt has no record of its own in the CRM — it is a GROUP of
+  // Verkaufschancen sharing sl_primary_opportunityid — so this is assembled
+  // from its members. That assembly IS the point: one win among five losses is
+  // a won project, and only here can you see why the other five were lost.
+  async function openProjektDrawer(pid) {
+    const drawer = $("#companyDrawer");
+    const body = $(".drawer-body", drawer) || drawer;
+    drawer.classList.remove("hidden");
+    body.innerHTML = `<p class="muted" style="padding:14px">Objekt wird geladen …</p>`;
+    let d;
+    try { d = await api(`/api/projekte/${encodeURIComponent(pid)}`); }
+    catch (e) { body.innerHTML = `<p class="muted" style="padding:14px">Fehler: ${esc(e.message)}</p>`; return; }
+
+    const roleName = {kaeufer: "Käufer", architekt: "Architekt", endkunde: "Endkunde"};
+    const kv = (k, v) => v == null || v === "" ? "" : `
+      <div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)">
+        <span class="muted" style="flex:0 0 42%">${k}</span><span style="flex:1">${v}</span></div>`;
+
+    body.innerHTML = `
+      <div class="drawer-section">
+        <h3>${esc(d.name)}</h3>
+        <div style="font-size:12.5px">
+          ${kv("Status", `<span class="state-chip">${esc(d.status)}</span>` +
+              (d.won_via ? ` <span class="sub">— ${esc(d.won_via)}</span>` : ""))}
+          ${kv("Adresse", d.address ? esc(d.address) : null)}
+          ${kv("Nutzung", d.type_of_use ? esc(d.type_of_use) : null)}
+          ${kv("Herkunft / Vertriebsweg", [d.origin, d.channel].filter(Boolean).map(esc).join(" · ") || null)}
+          ${kv("Verkaufschancen", `${d.members}${d.won_members ? ` · ${d.won_members} gewonnen` : ""}`)}
+          ${kv("Auftragswert", d.won_value ? eur(d.won_value) : (d.order_value ? eur(d.order_value) : null))}
+          ${kv("Zeitraum", d.first ? `${esc(d.first)} → ${esc(d.last || "")}` : null)}
+          ${kv("SAP-Aufträge", (d.sap_orders || []).length ? esc(d.sap_orders.join(", ")) : null)}
+          ${kv("Verlustgründe", (d.lost_reasons || []).length ? esc(d.lost_reasons.join(" · ")) : null)}
+        </div>
+      </div>
+
+      ${(d.produkte || []).length ? `<div class="drawer-section">
+        <h3>Produkte im Objekt</h3>
+        <div style="font-size:12.5px;display:flex;flex-direction:column;gap:3px">
+          ${d.produkte.map(p => `<div style="display:grid;grid-template-columns:1fr 62px 78px;gap:8px">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.family)}</span>
+            <span class="sub" style="text-align:right">${p.positions ? p.positions + " Pos." : "—"}</span>
+            <span class="sub" style="text-align:right">${p.value ? eurShort(p.value) : "—"}</span>
+          </div>`).join("")}
+        </div>
+        <div class="sub" style="margin-top:4px">Werte sind <b>angefragt</b>, nicht fakturiert.</div>
+      </div>` : ""}
+
+      <div class="drawer-section">
+        <h3>Beteiligte Firmen (${(d.firms || []).length})</h3>
+        <table class="data-table" style="font-size:12.5px">
+          <thead><tr><th>Firma</th><th>Rolle</th><th class="num">VCs</th><th class="num">Wert</th></tr></thead>
+          <tbody>${(d.firms || []).map(f => `
+            <tr${f.company_id ? ` data-firma="${f.company_id}" style="cursor:pointer"` : ""}>
+              <td>${esc(f.name)}${f.city ? `<div class="sub">${esc(f.city)}${f.segment ? " · " + esc(f.segment) : ""}</div>` : ""}</td>
+              <td class="sub">${esc((f.roles || []).map(r => roleName[r] || r).join(", "))}</td>
+              <td class="num">${f.vcs}${f.won ? ` <span class="sub">(${f.won} gew.)</span>` : ""}</td>
+              <td class="num">${f.value ? eurShort(f.value) : "—"}</td>
+            </tr>`).join("")}</tbody>
+        </table>
+      </div>
+
+      <div class="drawer-section">
+        <h3>Verlauf (${(d.timeline || []).length} Verkaufschancen)</h3>
+        <table class="data-table" style="font-size:12.5px">
+          <thead><tr><th>Datum</th><th>Nr.</th><th>Firma</th><th>Status</th><th class="num">Wert</th></tr></thead>
+          <tbody>${(d.timeline || []).map(t => `
+            <tr>
+              <td class="sub">${esc(t.date || "—")}${t.closed ? `<div class="sub">zu: ${esc(t.closed)}</div>` : ""}</td>
+              <td class="sub">${esc(t.number || "—")}</td>
+              <td>${esc(t.firm || "—")}</td>
+              <td><span class="state-chip">${esc(t.state || "—")}</span>${t.lost_reason ? `<div class="sub">${esc(t.lost_reason)}</div>` : ""}</td>
+              <td class="num">${t.value ? eur(t.value) : "—"}</td>
+            </tr>`).join("")}</tbody>
+        </table>
+      </div>`;
+
+    // a firm in the Objekt jumps straight to its own drawer
+    $$("tr[data-firma]", body).forEach(tr =>
+      tr.addEventListener("click", () => openCompanyDrawer(Number(tr.dataset.firma))));
   }
 
   function ensureObjekteLoaded() {

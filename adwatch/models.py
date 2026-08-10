@@ -756,3 +756,24 @@ class CrmCompanyProduct(Base):
     first_seen: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     last_seen: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CrmOpportunityProduct(Base):
+    """Product families on ONE Verkaufschance.
+
+    The company-level twin (CrmCompanyProduct) answers "what does this dealer
+    deal in". This answers "what was actually in this project", which is the
+    question an Objekt drawer has to answer — a Verkaufschance is a building
+    site, and its product mix is the specification.
+
+    Same caveat as everywhere: `value` is QUOTED, not invoiced.
+    """
+    __tablename__ = "crm_opportunity_products"
+    __table_args__ = (UniqueConstraint("opportunity_guid", "family",
+                                       name="uq_opp_product_family"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    opportunity_guid: Mapped[str] = mapped_column(String(40), index=True)
+    family: Mapped[str] = mapped_column(String(120), index=True)
+    positions: Mapped[int] = mapped_column(Integer, default=0)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)

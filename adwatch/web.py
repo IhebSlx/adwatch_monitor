@@ -976,6 +976,19 @@ def projekte_route(status: str | None = None, min_members: int = 1,
     return {"overview": projekte.overview(), **page}
 
 
+@app.get("/api/projekte/{project_id}")
+def projekt_detail_route(project_id: str):
+    """Everything ever linked to one Objekt: every Verkaufschance, every firm in
+    every role, the product mix specified on the site, the SAP orders and a
+    dated timeline. An Objekt has no record of its own in the CRM — it is a
+    GROUP of VCs sharing sl_primary_opportunityid — so this assembles it."""
+    from .insights import projekte
+    d = projekte.detail(project_id)
+    if d is None:
+        raise HTTPException(404, "Objekt nicht gefunden")
+    return d
+
+
 @app.get("/api/identity/review")
 def identity_review_queue_route(country: list[str] = Query(default=[]),
                                 lead_source: list[str] = Query(default=[]),

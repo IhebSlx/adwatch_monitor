@@ -778,3 +778,48 @@ def import_opportunity_addresses(path: str | Path) -> dict:
         s.commit()
 
     return {"in_file": len(rows), "matched": seen, "filled": filled}
+
+
+def import_opportunity_products(path: str | Path) -> dict:
+    """Product families per Verkaufschance, from the same slx_product pull.
+
+    Kept apart from the company-level aggregate because they answer different
+    questions: the company one says what a dealer deals in, this one says what
+    was specified on a given building site. An Objekt drawer needs the latter.
+
+    Sub-family folding (Highline -> Glas-Faltwand etc.) is applied here too, so
+    both tables speak the same 21 families.
+    """
+    import json as _json
+    from .dataquality import _FAMILY_PARENT
+    from .models import CrmOpportunityProduct
+
+    data = _json.loads(Path(path).read_text(encoding="utf-8"))
+    families = data.get("families") or []
+    rows: dict[tuple[str, str], list] = {}
+    for guid, blk in (data.get("opportunities") or {}).items():
+        g = guid.lower()
+        for fi, n in (blk.get("f") or {}).items():
+            try:
+                fam = families[int(fi)]
+            except (ValueError, IndexError):
+                continue
+            fam = _FAMILY_PARENT.get(fam, fam)
+            slot = rows.setdefault((g, fam), [0, 0.0])
+            slot[0] += n
+        for fi, v in (blk.get("v") or {}).items():
+            try:
+                fam = families[int(fi)]
+            except (ValueError, IndexError):
+                continue
+            fam = _FAMILY_PARENT.get(fam, fam)
+            slot = rows.setdefault((g, fam), [0, 0.0])
+            slot[1] += float(v or 0)
+
+    with SessionLocal() as s:
+        s.query(CrmOpportunityProduct).delete()
+        for (guid, fam), (n, value) in rows.items():
+            s.add(CrmOpportunityProduct(opportunity_guid=guid, family=fam[:120],
+                                        positions=n, value=round(value, 2) or None))
+        s.commit()
+    return {"opportunities": len({g for g, _ in rows}), "rows": len(rows)}
