@@ -2897,6 +2897,66 @@ def test_architect_prompt_never_asks_a_planner_to_sell():
     assert "own_fabrication" in deal and "Bauelemente-/Handwerksbetrieb" in deal
 
 
+def test_spa_shell_is_rendered_and_relinked(monkeypatch, temp_db):
+    """A single-page app answers 200 with an empty shell, so the fetch "succeeds"
+    and yields nothing — the company enriches to nothing and drops out of every
+    list. Rendering also has to restore LINK DISCOVERY: a SPA builds its nav in
+    JavaScript, so the raw HTML has no <a href> and the subpages vanish too."""
+    from adwatch.enrich import fetchpage as fp
+
+    shell = '<html><body><div id="root"></div><script src="/app.js"></script></body></html>'
+    painted = ('<html><body><main>Carpintería de aluminio en Marbella. '
+               'Fabricamos ventanales y cerramientos.</main>'
+               '<a href="https://spa.example/productos">Productos</a>'
+               '<footer>Distribuidor oficial de Sunflex</footer></body></html>')
+    sub = '<html><body><main>Ventanales correderas y cerramientos de terraza.</main></body></html>'
+
+    monkeypatch.setattr(fp, "_host_is_public", lambda h: True)
+    monkeypatch.setattr(fp, "_robots_allows", lambda d: True)
+    monkeypatch.setattr(fp, "_fetch", lambda url, wall_clock=None: (
+        (shell, "https://spa.example") if url.rstrip("/").endswith("spa.example") else (sub, url)))
+    monkeypatch.setattr(fp.render, "available", lambda: True)
+    monkeypatch.setattr(fp.render, "render_html", lambda url, timeout_ms=None: painted)
+
+    b = fp.page_bundle("spa.example")
+    assert b["rendered"] is True
+    assert "Carpintería de aluminio" in b["text"]
+    # the brand in the rendered footer is reachable now
+    assert "Sunflex" in (b["brands"] or [])
+    # and the link that only exists after rendering was followed
+    assert any("productos" in p for p in b["pages"])
+
+
+def test_without_playwright_the_pipeline_is_unchanged(monkeypatch):
+    """Nobody has to install a browser to run AdWatch. With no renderer the
+    starved page stays starved — same result as before this existed — and
+    nothing raises."""
+    from adwatch.enrich import fetchpage as fp
+
+    shell = '<html><body><div id="root"></div></body></html>'
+    monkeypatch.setattr(fp, "_host_is_public", lambda h: True)
+    monkeypatch.setattr(fp, "_robots_allows", lambda d: True)
+    monkeypatch.setattr(fp, "_fetch", lambda url, wall_clock=None: (shell, "https://spa.example"))
+    monkeypatch.setattr(fp.render, "available", lambda: False)
+    monkeypatch.setattr(fp.render, "render_html",
+                        lambda url, timeout_ms=None: pytest.fail("must not launch a browser"))
+
+    b = fp.page_bundle("spa.example")
+    assert b["rendered"] is False and b["brands"] == []
+
+
+def test_render_never_raises_into_the_pipeline(monkeypatch):
+    """A browser crash must degrade to the plain-fetch result, not take down the
+    enrichment of a company whose site merely happens to be slow."""
+    from adwatch.enrich import render as rd
+    monkeypatch.setattr(rd, "available", lambda: True)
+
+    def boom(*a, **k):
+        raise RuntimeError("browser exploded")
+    monkeypatch.setattr(rd, "_ua", boom)
+    assert rd.render_html("https://example.com") is None
+
+
 def test_brand_evidence_outranks_an_inferred_fit():
     """Proymetal trades as "SUNFLEX Top-Partner", the scan found Sunflex in its
     logo strip, and the model still graded it "gering" — the extract it was given

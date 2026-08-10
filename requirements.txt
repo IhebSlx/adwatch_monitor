@@ -18,3 +18,8 @@ tldextract>=5.0
 # to Claude Haiku (otherwise a deterministic keyword classifier is used).
 anthropic>=0.40
 pytest
+
+# Optional: renders JavaScript-only sites during enrichment. Everything works
+# without it — see adwatch/enrich/render.py. After installing, fetch the browser:
+#   python -m playwright install chromium
+playwright>=1.40

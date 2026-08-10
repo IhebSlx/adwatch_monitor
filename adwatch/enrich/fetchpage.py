@@ -30,7 +30,7 @@ import urllib.robotparser
 import requests
 
 from ..identity import website_source as ws
-from . import extract, site_facts
+from . import extract, render, site_facts
 from .domains import normalize_domain
 
 # Per-page and total text budgets. The TOTAL is what sets the extraction bill, so
@@ -143,6 +143,19 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
         return None
     html, home_url = got
 
+    # A single-page app answers 200 with an empty shell: the fetch "succeeds" and
+    # yields no text, so the company enriches to nothing and quietly drops out of
+    # every list it belongs on. Only these get a browser — and rendering also
+    # restores LINK DISCOVERY, since a SPA builds its navigation in JavaScript and
+    # the raw HTML has no <a href> to follow either.
+    rendered = False
+    if render.available() and \
+            len(ws._page_text(html, limit=10 ** 7)) < render.RENDER_BELOW_CHARS:
+        better = render.render_html(home_url)
+        if better and len(ws._page_text(better, limit=10 ** 7)) > \
+                len(ws._page_text(html, limit=10 ** 7)):
+            html, rendered = better, True
+
     # drop_chrome: the character budget is the scarce resource here, and on
     # menu-heavy sites the navigation would consume all of it before any prose.
     chunks = [ws._page_text(html, limit=_HOME_CHARS, drop_chrome=True)]
@@ -164,13 +177,21 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
             time.sleep(_PAGE_PAUSE)
             sub = _fetch(sub_url)
             if sub:
-                chunks.append(ws._page_text(sub[0], limit=_PER_PAGE_CHARS,
+                sub_html = sub[0]
+                # A site that needed the browser for its homepage needs it for
+                # the rest too — same shell, same empty result.
+                if rendered and len(ws._page_text(sub_html, limit=10 ** 7)) < \
+                        render.RENDER_BELOW_CHARS:
+                    better = render.render_html(sub_url)
+                    if better:
+                        sub_html = better
+                chunks.append(ws._page_text(sub_html, limit=_PER_PAGE_CHARS,
                                             drop_chrome=True))
-                full.append(ws._page_text(sub[0], limit=10 ** 7))
+                full.append(ws._page_text(sub_html, limit=10 ** 7))
                 pages.append(sub_url)
                 categories[sub_url] = ws._classify_link(sub_url) or "other"
                 try:
-                    more = site_facts.extract(sub[0], base_url=sub_url)
+                    more = site_facts.extract(sub_html, base_url=sub_url)
                 except Exception:  # noqa: BLE001
                     more = {}
                 for k, v in more.items():
@@ -191,4 +212,4 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
     brands = extract.scan_brands(" ".join(full))
     return {"domain": dom, "home_url": home_url, "text": text,
             "pages": pages, "chars": len(text), "categories": categories,
-            "facts": facts, "brands": brands}
+            "facts": facts, "brands": brands, "rendered": rendered}
