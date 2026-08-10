@@ -161,6 +161,13 @@
   // travels correctly; a German screen has to show 14.05.2023. Parsed by hand
   // rather than via new Date(), which shifts the day across time zones for a
   // bare date string.
+  // Coloured status chip for an Objekt or a Verkaufschance. Whitelisted rather
+  // than interpolated, so a new CRM value can never inject a class name — it
+  // just falls back to the neutral chip.
+  const VC_STATES = {gewonnen: "state-gewonnen", verloren: "state-verloren",
+                     offen: "state-offen"};
+  const stateChip = (v) => `<span class="state-chip ${VC_STATES[v] || ""}">${esc(v || "—")}</span>`;
+
   const deDate = (iso) => {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
     return m ? `${m[3]}.${m[2]}.${m[1]}` : (iso || "—");
@@ -2001,7 +2008,7 @@
         ${v.roles && v.roles.length > 1
           ? `<div class="sub">Rollen: ${v.roles.map(r => esc(ROLE_LABEL[r] || r)).join(", ")}</div>` : ""}</td>
       <td class="sub">${esc(ort || "—")}</td>
-      <td><span class="state-chip">${esc(v.state || "—")}</span></td>
+      <td>${stateChip(v.state)}</td>
       <td class="num">${v.order_value ? eur(v.order_value)
         : (v.estimated_value ? `<span class="sub">${eur(v.estimated_value)}</span>` : "—")}</td>
     </tr>`;
@@ -2139,7 +2146,7 @@
           <tr data-projekt="${esc(p.project_id)}" style="cursor:pointer">
             <td style="max-width:280px">${esc(p.name)}</td>
             <td style="white-space:nowrap">${p.created ? esc(deDate(p.created)) : "—"}</td>
-            <td><span class="state-chip">${esc(p.status)}</span></td>
+            <td>${stateChip(p.status)}</td>
             <td class="num">${p.members}${p.won_members ? ` <span class="sub">(${p.won_members} gew.)</span>` : ""}</td>
             <td class="num">${eur(p.order_value ?? p.estimated_value)}</td>
             <td style="max-width:220px">${esc((p.firms || []).join(", "))}</td>
@@ -2205,7 +2212,7 @@
       <div class="drawer-section">
         <h3>Objekt</h3>
         <div style="font-size:12.5px">
-          ${kv("Status", `<span class="state-chip">${esc(d.status)}</span>` +
+          ${kv("Status", stateChip(d.status) +
               (d.won_via ? ` <span class="sub">— ${esc(d.won_via)}</span>` : ""))}
           ${kv("Adresse", d.address ? esc(d.address) : null)}
           ${kv("Nutzung", d.type_of_use ? esc(d.type_of_use) : null)}
@@ -2256,7 +2263,7 @@
               <td class="sub" style="white-space:nowrap">${t.closed ? esc(deDate(t.closed)) : "—"}</td>
               <td class="sub">${esc(t.number || "—")}</td>
               <td>${esc(t.firm || "—")}</td>
-              <td><span class="state-chip">${esc(t.state || "—")}</span>${t.lost_reason ? `<div class="sub">${esc(t.lost_reason)}</div>` : ""}</td>
+              <td>${stateChip(t.state)}${t.lost_reason ? `<div class="sub">${esc(t.lost_reason)}</div>` : ""}</td>
               <td class="num">${t.value ? eur(t.value) : "—"}</td>
             </tr>`).join("")}</tbody>
         </table>
@@ -2330,27 +2337,50 @@
             </td>
           </tr>`).join("")}</tbody>
       </table>`;
-    $$("#pruefenWrap .pruefen-ok").forEach(b => b.addEventListener("click", async (ev) => {
-      const tr = ev.target.closest("tr");
+    // A decided row LEAVES the queue. The decision already persists — accept
+    // sets identity_status='verified', reject clears it — and the queue selects
+    // on 'needs_review', so neither comes back on the next load. The row used to
+    // stay at opacity 0.45 with the count unchanged, which made a finished
+    // decision look half-done and left no way to see how many were left.
+    const decide = async (btn, call, msg) => {
+      const tr = btn.closest("tr");
       const cid = Number(tr.dataset.company);
-      ev.target.disabled = true;
+      $$("button", tr).forEach(x => x.disabled = true);
       try {
-        await api(`/api/companies/${cid}/enrichment/accept`, "POST",
-                  { page_id: ev.target.dataset.domain });
-        tr.style.opacity = "0.45";
-        toast("Website bestätigt — wird angereichert.");
-      } catch (e) { toast(e.message, "error"); ev.target.disabled = false; }
-    }));
-    $$("#pruefenWrap .pruefen-no").forEach(b => b.addEventListener("click", async (ev) => {
-      const tr = ev.target.closest("tr");
-      const cid = Number(tr.dataset.company);
-      ev.target.disabled = true;
-      try {
-        await api(`/api/companies/${cid}/identity/reject`, "POST", {});
-        tr.style.opacity = "0.45";
-        toast("Abgelehnt — Suche nach der richtigen Website ist wieder offen.");
-      } catch (e) { toast(e.message, "error"); ev.target.disabled = false; }
-    }));
+        await call(cid);
+      } catch (e) {
+        toast(e.message, "error");
+        $$("button", tr).forEach(x => x.disabled = false);
+        return;
+      }
+      tr.style.transition = "opacity .15s ease";
+      tr.style.opacity = "0";
+      setTimeout(() => {
+        const tbody = tr.parentElement;
+        tr.remove();
+        // the count is the whole queue, not this page, so decrement both
+        const left = Math.max((TABLE_TOTALS["pruefenWrap"] || 1) - 1, 0);
+        TABLE_TOTALS["pruefenWrap"] = left;
+        const cnt = $("#pruefenCount");
+        if (cnt) cnt.textContent = `${tbody.rows.length} von ${left} offen`;
+        if (!tbody.rows.length) {
+          $("#pruefenWrap").innerHTML = left
+            ? `<p class="muted" style="padding:12px">Diese Seite ist abgearbeitet — ${left} weitere warten. <b>Aktualisieren</b> lädt sie.</p>`
+            : `<p class="muted" style="padding:12px">Nichts zu prüfen — alles entschieden. 🎉</p>`;
+        }
+      }, 150);
+      toast(msg);
+    };
+
+    $$("#pruefenWrap .pruefen-ok").forEach(b => b.addEventListener("click", (ev) =>
+      decide(ev.target,
+             (cid) => api(`/api/companies/${cid}/enrichment/accept`, "POST",
+                          { page_id: ev.target.dataset.domain }),
+             "Website bestätigt — wird angereichert.")));
+    $$("#pruefenWrap .pruefen-no").forEach(b => b.addEventListener("click", (ev) =>
+      decide(ev.target,
+             (cid) => api(`/api/companies/${cid}/identity/reject`, "POST", {}),
+             "Abgelehnt — Suche nach der richtigen Website ist wieder offen.")));
   }
 
   // Options come from what is ACTUALLY in the queue, so the screen adapts to

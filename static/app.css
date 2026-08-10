@@ -762,6 +762,13 @@ a.link:hover { text-decoration: underline; }
 .state-new     { background: #ebf2fb; color: #2b6cb0; border-color: #c4d9f2; }
 .state-lapsed  { background: #fdf1e7; color: #b05e1a; border-color: #f2d7bd; }
 .state-never   { background: var(--bg-subtle); color: var(--muted); }
+/* Objekt- und Verkaufschancen-Status. Deliberately the same three tokens the
+   rest of the app already uses for good/bad/pending, so a green chip means the
+   same thing in every table. `offen` is amber rather than blue: it is a pending
+   outcome, not a neutral fact, and the blue is already spoken for by 'new'. */
+.state-gewonnen { background: var(--ok-soft);     color: var(--ok);     border-color: #bfe6cf; }
+.state-verloren { background: var(--danger-soft); color: var(--danger); border-color: #f6cfc9; }
+.state-offen    { background: var(--warn-soft);   color: var(--warn);   border-color: #f2d7bd; }
 .fit-badge {
   display: inline-block; min-width: 30px; text-align: center; font-weight: 700;
   font-variant-numeric: tabular-nums; font-size: 12px; padding: 1.5px 7px;
