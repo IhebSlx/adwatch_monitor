@@ -489,6 +489,20 @@
     makeTableInteractive(table);
   }
 
+  // Clipped text must stay readable somewhere. Measuring every cell after every
+  // render would cost a full layout pass on tables of 500 rows, so the tooltip
+  // is attached on hover, only to the cell under the pointer, and only when it
+  // is actually truncated. Cells that already carry a title keep theirs.
+  document.addEventListener("mouseover", (e) => {
+    const td = e.target.closest?.("td");
+    if (!td || td.dataset.titled || td.title || !td.closest(".table-wrap")) return;
+    td.dataset.titled = "1";
+    if (td.scrollWidth > td.clientWidth + 1) {
+      const full = td.textContent.trim();
+      if (full) td.title = full;
+    }
+  }, true);
+
   // all data tables (each sits in a .table-wrap); decorative info tables are skipped
   $$(".table-wrap table").forEach(enhanceTable);
 

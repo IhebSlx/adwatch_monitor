@@ -883,9 +883,17 @@ th { position: relative; }
 }
 th:hover .col-grip::after, .col-grip:hover::after { opacity: 1; }
 body.col-resizing { cursor: col-resize; user-select: none; }
-/* frozen (fixed-layout) tables: cells clip instead of reflowing neighbours;
-   colspan cells (e.g. the expandable pages row) keep their natural behaviour */
-table.col-resized td:not([colspan]) { overflow: hidden; text-overflow: ellipsis; }
+/* Cells clip instead of reflowing neighbours. This used to be scoped to
+   table.col-resized, i.e. it only took effect after the first drag — but several
+   cells carry an inline max-width with white-space:nowrap, and their default
+   overflow is VISIBLE. So 675px of company names rendered straight through a
+   220px box and painted over the next column, unreadable until you happened to
+   resize something. Clipping has to be the default, not the reward for a drag.
+
+   td only: .col-grip is positioned at right:-4px, so overflow:hidden on th
+   would clip the drag handle off the header.
+   colspan cells (the expandable pages row) keep their natural behaviour. */
+.table-wrap table td:not([colspan]) { overflow: hidden; text-overflow: ellipsis; }
 
 /* Client-side column filter on the tables that arrive complete (Chancen,
    Objekte, Prüfen). Hidden, not removed, so sorting and the row count still see
