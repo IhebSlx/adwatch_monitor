@@ -789,6 +789,7 @@ def list_customers_route(
     lead_source: list[str] = Query(default=[]),
     solarlux_relevance: list[str] = Query(default=[]),
     office_type: list[str] = Query(default=[]), decision_role: list[str] = Query(default=[]),
+    solarlux_fit: list[str] = Query(default=[]),
     sort: str | None = None, direction: str = "asc", page: int = 1, page_size: int = 50,
 ):
     filters = {"q": q, "kv": kv, "segment": segment, "sub_segment": sub_segment,
@@ -806,7 +807,8 @@ def list_customers_route(
                # filtered by lead_source, and the architect grades are what make
                # that list rankable ("Relevanz hoch, vergibt Aufträge" first).
                "lead_source": lead_source, "solarlux_relevance": solarlux_relevance,
-               "office_type": office_type, "decision_role": decision_role}
+               "office_type": office_type, "decision_role": decision_role,
+               "solarlux_fit": solarlux_fit}
     return customers.query_companies(filters, sort, direction, page, page_size)
 
 

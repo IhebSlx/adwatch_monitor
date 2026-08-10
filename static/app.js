@@ -1538,6 +1538,8 @@
       ["Website geprüft", c.identity_status ? `${c.identity_status}${c.identity_matched_by ? " (" + c.identity_matched_by + ")" : ""}` : null],
       ["Profil", c.enrich_profile === "architekt" ? "Architekt/Planer" : (c.enrich_profile ? "Betrieb" : null)],
       ["Solarlux-Relevanz", c.solarlux_relevance], ["Bürotyp", c.office_type],
+      ["Solarlux-Passung", c.solarlux_fit], ["Vertragspartner von", j(c.partner_of)],
+      ["Montiert selbst", yn(c.installs)],
       ["Entscheidungsrolle", c.decision_role], ["Referenz-Umfang", c.reference_scale],
       ["Rechtsform", c.legal_form], ["Positionierung", c.positioning],
       ["Eigene Fertigung", yn(c.own_fabrication)], ["Showroom", yn(c.has_showroom)],
@@ -1834,6 +1836,7 @@
       enrichment_status: $("#custEnrichStatus").value ? [$("#custEnrichStatus").value] : [],
       customer_state: $("#custCustomerState").value ? [$("#custCustomerState").value] : [],
       solarlux_relevance: $("#custRelevance").value ? [$("#custRelevance").value] : [],
+      solarlux_fit: $("#custFit").value ? [$("#custFit").value] : [],
       decision_role: $("#custDecisionRole").value ? [$("#custDecisionRole").value] : [],
       fit_min: $("#custFitMin").value ? Number($("#custFitMin").value) : null,
       revenue_min: $("#custRevenueMin").value ? Number($("#custRevenueMin").value) : null,
@@ -1878,6 +1881,7 @@
     if (f.customer_state?.length)
       parts.push(f.customer_state.map(s => CUSTOMER_STATE_LABEL[s] || s).join(", "));
     if (f.solarlux_relevance?.length) parts.push(`Relevanz: ${f.solarlux_relevance.join(", ")}`);
+    if (f.solarlux_fit?.length) parts.push(`Passung: ${f.solarlux_fit.join(", ")}`);
     if (f.decision_role?.length) parts.push(f.decision_role.join(", "));
     if (f.fit_min != null) parts.push(`Fit ≥ ${f.fit_min}`);
     if (f.page_id_state === "with") parts.push("with Meta page ID");
@@ -2257,7 +2261,7 @@
     website: ["has_website", "no_website", "enrichment_status"],
     umsatz: ["revenue_min", "revenue_max", "revenue_history"],
     kv: ["kv", "exclude_kv"],
-    segment: ["segment", "exclude_segment", "solarlux_relevance", "decision_role"],
+    segment: ["segment", "exclude_segment", "solarlux_relevance", "decision_role", "solarlux_fit"],
     subseg: ["sub_segment", "exclude_sub_segment"], kanal: ["sales_channel"], land: ["country"],
   };
   function _filterActive(f, key) {
@@ -3061,6 +3065,7 @@
     applyOnChange("#custEnrichStatus");
     applyOnChange("#custCustomerState");
     applyOnChange("#custRelevance");
+    applyOnChange("#custFit");
     applyOnChange("#custDecisionRole");
     applyOnChange("#custFitMin");
 
@@ -3076,6 +3081,7 @@
       $("#custNoWebsite").checked = false; $("#custEnrichStatus").value = "";
       $("#custCustomerState").value = ""; $("#custFitMin").value = "";
       $("#custRelevance").value = ""; $("#custDecisionRole").value = "";
+      $("#custFit").value = "";
       applyDefaultExclusion();   // Zurücksetzen = back to DEFAULT, incl. "ohne Private Endkunden"
       CUST.page = 1; loadCustomers();
     });
@@ -3167,7 +3173,9 @@
         + _incExcSection("Ausschließen", () => CUST_DROP.excludeSegment, CUST_OPTS.segment, "thm-exc-seg")
         // Only filled for Architekten/Planer, and this is the menu someone is
         // already in when they narrow to that segment.
-        + `<div class="thm-sec"><div class="thm-sec-title">Solarlux-Relevanz (Architekten)</div>
+        + `<div class="thm-sec"><div class="thm-sec-title">Solarlux-Passung (Verarbeiter)</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custFit">${_optionsHtml("#custFit")}</select></div>
+        <div class="thm-sec"><div class="thm-sec-title">Solarlux-Relevanz (Architekten)</div>
         <select class="thm-input" id="thmProxySel" data-target="#custRelevance">${_optionsHtml("#custRelevance")}</select></div>
         <div class="thm-sec"><div class="thm-sec-title">Entscheidungsrolle</div>
         <select class="thm-input" id="thmProxySel" data-target="#custDecisionRole">${_optionsHtml("#custDecisionRole")}</select></div>`,

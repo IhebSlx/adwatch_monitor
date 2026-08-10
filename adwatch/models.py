@@ -140,6 +140,18 @@ class Company(Base):
     decision_role: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reference_scale: Mapped[str | None] = mapped_column(String(200), nullable=True)
     enrich_profile: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # ---- Verarbeiter/Handel-spezifisch (enrich profile 'betrieb') ----
+    # The mirror of solarlux_relevance, asked of a company that SELLS rather than
+    # specifies: does it already build large glazing (hoch), could it add the
+    # category (mittel), or is it a different trade altogether (gering)?
+    #   partner_of  brands the site claims an EXPLICIT dealership with
+    #               ("distribuidor oficial de CORTIZO") — a contractual tie, far
+    #               stronger than merely naming a brand, and the clearest
+    #               statement of who supplies them today
+    #   installs    does the company mount on site, or only sell over the counter
+    solarlux_fit: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    partner_of: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    installs: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     facebook_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
     instagram_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(300), nullable=True)

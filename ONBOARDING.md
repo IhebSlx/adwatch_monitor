@@ -60,6 +60,27 @@ weder angereichert noch werden ihr Anzeigen zugeordnet. Deshalb gibt es den
 Status `conflict`: „Seite gelesen, gehört nachweislich jemand anderem" —
 solche Domains niemals von Hand auf verified setzen.
 
+## Verarbeiter & Handel: Solarlux-Passung
+
+Betriebe werden danach bewertet, ob sie **heute schon verkaufen, was wir bauen**.
+Drei Felder, alle im **Firmen**-Tab über das Menü der Spalte *Segment*:
+
+- **Solarlux-Passung** — `hoch` = baut bereits große Verglasungen (Glas-Faltwände,
+  Schiebeanlagen, Wintergarten, Terrassen-/Balkonverglasung) · `mittel` = Metallbau,
+  Fenster, Fassade — könnte die Kategorie aufnehmen · `gering` = anderes Gewerk
+  (nur Rollladen, Tore, Zäune, Innenausbau) · leer = Text lässt es nicht erkennen.
+- **Fremdmarken** — welche Systemmarken auf der Website vorkommen. Wichtig: die
+  Marke sagt, *wen wir verdrängen müssten*. `Sunflex` oder `Vitrocsa` heißt, der
+  Betrieb verkauft unsere Produktkategorie bereits — der kürzeste Weg zum Auftrag.
+  `Cortizo`, `Technal`, `Schüco` sind nur Profillieferanten, also ein normaler
+  Fensterbauer.
+- **Vertragspartner von** — ausdrückliche Händlerschaft („distribuidor oficial de
+  CORTIZO"), also eine vertragliche Bindung, nicht bloß eine Erwähnung.
+
+Marken werden **wortgenau auf der ganzen Seite gesucht**, nicht vom Sprachmodell
+geraten — auch im Navigationsmenü und in der Partner-Logoleiste, wo sie meistens
+stehen. Die Passung dagegen ist eine begründete Einschätzung.
+
 ## Architekten (Spanien-Liste)
 
 Architektur- und Planungsbüros werden mit einem **eigenen Profil** angereichert:

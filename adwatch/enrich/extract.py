@@ -29,14 +29,80 @@ from .. import config
 # Solarlux's own brand plus the competitors worth knowing about. Given to the
 # model as a closed vocabulary so results stay comparable across companies
 # instead of free-text noise.
-SOLARLUX_BRANDS = ("Solarlux",)
-COMPETITOR_BRANDS = (
-    "WAREMA", "Sunflex", "Weinor", "Schüco", "Kömmerling", "Griesser", "Markilux",
-    "Lewens", "Klaiber", "Erhardt", "Guhr", "Alukon", "Roma", "Velux", "Velfac",
-    "Internorm", "Josko", "Finstral", "Rehau", "Veka", "Gealan", "Aluprof",
-    "Reynaers", "Heroal", "Wicona", "Hueck", "Sky-Frame", "Vitrocsa", "Air-Lux",
-    "Nanawall", "Corradi", "Pratic", "Gibus", "Renson", "Brustor", "Kettler",
+#
+# Grouped by WHAT THE BRAND MEANS FOR US, because a flat list answers the wrong
+# question. "Builds Sunflex" and "buys Cortizo profiles" are both foreign brands,
+# but the first is a company already selling our product category to our customer
+# and the second is an ordinary window shop. Only the first is a conquest target.
+#
+# The old list was 36 brands, every one of them German or pan-European, with no
+# Iberian system house at all. Probing 22 Spanish installers recorded as naming
+# NO brand: none named a brand the list knew, but 5 named one it could not hear —
+# Cortizo four times, plus Technal, Strugal, Sapa, Guardian. Cortizo is the
+# largest aluminium system house in Spain. We were deaf to the most common answer
+# in the market we are actually working.
+BRANDS_DIRECT = (          # our product category: glass folding / sliding / winter garden
+    "Sunflex", "Vitrocsa", "Sky-Frame", "Air-Lux", "Nanawall", "Panoramah",
+    "Keller", "Lumon", "Seeglass", "Glassspace", "Cortizo Cor Vision",
 )
+BRANDS_TERRACE = (         # terrace roofs, pergolas, awnings — overlaps our outdoor range
+    "Renson", "Brustor", "Corradi", "Pratic", "Gibus", "Weinor", "Markilux",
+    "WAREMA", "Griesser", "Lewens", "Klaiber", "Erhardt", "Guhr", "Alukon",
+    "Ke Outdoor", "Gaviota", "Llambi", "Persax", "Saxun", "Kettler", "Roma",
+)
+BRANDS_SYSTEM = (          # profile system houses — tells us their supply chain, not a rival
+    "Schüco", "Cortizo", "Technal", "Strugal", "Exlabesa", "Alumafel",
+    "Extrugasa", "Hydro", "Sapa", "Indalsu", "Alugom", "Giménez Ganga",
+    "Reynaers", "Heroal", "Wicona", "Hueck", "Aluk", "Aliplast", "Ponzio",
+    "Kömmerling", "Rehau", "Veka", "Gealan", "Aluprof", "Deceuninck",
+    "Internorm", "Josko", "Finstral", "Velfac", "Velux", "Guardian",
+)
+COMPETITOR_BRANDS = BRANDS_DIRECT + BRANDS_TERRACE + BRANDS_SYSTEM
+SOLARLUX_BRANDS = ("Solarlux",)
+
+# What a named brand tells us commercially. Used by the report and the filters so
+# "conquest target" is derived from data instead of retyped in every query.
+BRAND_TIER = ({b: "direkt" for b in BRANDS_DIRECT}
+              | {b: "terrasse" for b in BRANDS_TERRACE}
+              | {b: "system" for b in BRANDS_SYSTEM})
+
+
+def brand_tiers(brands) -> list[str]:
+    """The distinct tiers a company's brand list touches, strongest first."""
+    seen = {BRAND_TIER.get(b) for b in (brands or [])} - {None}
+    return [t for t in ("direkt", "terrasse", "system") if t in seen]
+
+
+# Brand names that are also ordinary words, place names or surnames. A regex
+# would match "Roma" in a Mallorca address and "Keller" in any German basement,
+# so these stay LLM-only, where context decides.
+_AMBIGUOUS_BRANDS = {"Roma", "Sapa", "Keller", "Hydro", "Guardian", "Metra",
+                     "Kettler", "Saxun", "Persax", "Gaviota", "Llambi"}
+SCAN_BRANDS = tuple(b for b in COMPETITOR_BRANDS if b not in _AMBIGUOUS_BRANDS)
+# Word boundaries, NOT hyphen boundaries. Treating "-" as part of the word looks
+# safer and silently loses the most common way both languages write a brand:
+# "Sunflex-Anlagen", "Schüco-Fenster", "sistemas Cortizo-Cor". A trailing word
+# character still blocks the real false positive ("cortizona" is not Cortizo).
+_SCAN_RE = {b: re.compile(rf"(?<!\w){re.escape(b)}(?!\w)", re.I) for b in SCAN_BRANDS}
+
+
+def scan_brands(text: str) -> list[str]:
+    """Brand names present in the page text, found deterministically.
+
+    Brands are a CLOSED vocabulary, so searching for them is a regex problem,
+    not a language problem — and the regex is strictly better here. It reads the
+    whole page instead of the trimmed extract the model gets, so it still sees
+    the two places brands actually live on an installer's site: the "Marcas"
+    navigation menu and the partner logo strip. Both were invisible to the model:
+    the menu because enrichment strips navigation, the rest because it falls past
+    the character budget. Dekovent lost Vitrocsa, Renson and Griesser that way,
+    and Proymetal lost Sunflex — the direct competitors, the ones worth most.
+
+    The model still runs; it decides ROLE (partner_of vs passing mention), which
+    a regex genuinely cannot. This only guarantees nothing is missed.
+    """
+    low = text or ""
+    return [b for b in SCAN_BRANDS if _SCAN_RE[b].search(low)]
 
 # Shared with ad classification (see adwatch/products.py) so "products
 # advertised" and "products offered" are always the same vocabulary and can be
@@ -60,7 +126,7 @@ SPRACHE — wichtig:
   Regionsnamen (Mallorca, Alicante) und die Rechtsform.
 - "evidence" bleibt das WÖRTLICHE Originalzitat in der Sprache der Website.
 
-TEIL 1 — FAKTEN (Felder description_de bis competitor_brands):
+TEIL 1 — FAKTEN (alle Felder bis "evidence"):
 - Gib inhaltlich NUR zurück, was im Text steht. Nichts schätzen, nichts annehmen,
   nichts aus Weltwissen ergänzen. (Übersetzen ist erlaubt, Erfinden nicht.)
 - Fehlt eine Information: null (bzw. leere Liste). Ein leeres Feld ist besser als eine Vermutung.
@@ -72,32 +138,57 @@ TEIL 1 — FAKTEN (Felder description_de bis competitor_brands):
   Eine deutsche Rechtsform (GmbH, e.K., KG …) NUR bei einer deutschen Firma.
 - "evidence": kurzes wörtliches Zitat (max. 120 Zeichen) als Belegstelle je gefülltem Faktenfeld.
 
-TEIL 2 — EINSCHÄTZUNG (Feld assessment_de), 2-3 kurze Sätze:
-- Hier DARFST du begründet schlussfolgern: Größenklasse des Betriebs, Zielkundschaft
-  (Privatkunden / Objekt / Handel), Preis- und Qualitätspositionierung, regionale
-  Reichweite, Professionalität des Auftritts, Eignung als Fachpartner.
-- Aber: nur was aus dem Text plausibel folgt. ERFINDE KEINE ZAHLEN — keine konkreten
-  Mitarbeiterzahlen, Umsätze oder Gründungsjahre, die nicht im Text stehen.
-- Unsicherheit sprachlich kennzeichnen ("wirkt", "dürfte", "eher", "vermutlich").
-- Keine Personennamen. Keine Wiederholung der Faktenliste — nur der zusätzliche Erkenntniswert.
-- Wenn der Text zu dünn für eine sinnvolle Einschätzung ist: null.
+WORAUF ES UNS ANKOMMT — Solarlux baut GLAS-FALTWÄNDE, große Schiebeanlagen,
+Wintergärten, Terrassendächer, Glasdächer und Balkonverglasungen. Wir suchen
+Betriebe, die so etwas heute schon verkaufen und montieren. Zwei Felder
+entscheiden darüber, und sie sind wichtiger als alles andere:
+
+- "competitor_brands": JEDE Systemmarke aus COMPETITOR_LIST, die der Text nennt —
+  egal in welcher Rolle: verbaut, vertreibt, ist Partner, zeigt sie in Referenzen
+  oder im Showroom. Spanische und portugiesische Betriebe nennen ihr System sehr
+  oft ("trabajamos con", "distribuidor oficial de", "sistemas de") — diese
+  Nennungen zählen alle. Nur Marken aus der Liste, nichts dazuerfinden.
+- "partner_of": Marken, zu denen der Text eine AUSDRÜCKLICHE Partnerschaft
+  behauptet — "distribuidor oficial", "concesionario", "Vertragspartner",
+  "Top-Partner", "autorizado", "official dealer", "Premium-Partner". Das ist
+  mehr als eine Erwähnung: es ist eine vertragliche Bindung. Sonst leere Liste.
+
+TEIL 2 — EINSCHÄTZUNG. Hier DARFST und SOLLST du begründet schlussfolgern.
+- "solarlux_fit": Wie gut passt der Betrieb als Verkäufer/Monteur unserer Systeme?
+    "hoch"   = baut heute schon große Verglasungen: Glas-Faltwände, Schiebe-
+               anlagen, Wintergärten, Terrassen-/Balkonverglasung, Glasdächer —
+               oder arbeitet im gehobenen Villen-/Hotelbau mit viel Glas.
+    "mittel" = Metallbau, Fenster, Fassade, Alu-/PVC-Bau ohne die obigen
+               Produkte: könnte die Kategorie aufnehmen, macht sie aber noch nicht.
+    "gering" = anderes Gewerk: nur Rollladen/Markisen, Tore, Zäune, Geländer,
+               Innenausbau, Glaserei ohne Bauelemente, reiner Baustoffhandel.
+  null NUR wenn der Text nicht erkennen lässt, was der Betrieb macht. "gering"
+  ist KEIN Auffangwert für fehlende Information — dafür ist null da.
+- "assessment_de", 2-3 kurze Sätze: Größenklasse, Zielkundschaft (Privat /
+  Objekt / Handel), Preis- und Qualitätspositionierung, regionale Reichweite und
+  die BEGRÜNDUNG des solarlux_fit. Nur was aus dem Text plausibel folgt.
+  ERFINDE KEINE ZAHLEN. Unsicherheit kennzeichnen ("wirkt", "dürfte", "eher").
+  Keine Personennamen. Zu dünner Text: null.
 
 Antworte AUSSCHLIESSLICH mit diesem JSON (keine Erklärung, kein Markdown):
 {
   "description_de": "<1-2 knappe Sätze: was macht die Firma? oder null>",
   "products": [<0-6 Werte aus: PRODUCT_VOCAB>],
+  "competitor_brands": [<genannte Marken aus: COMPETITOR_LIST>],
+  "partner_of": [<Marken aus COMPETITOR_LIST mit ausdrücklicher Partnerschaft>],
+  "own_fabrication": <true wenn eigene Fertigung/Produktion/Werkstatt belegt | false wenn ausdrücklich nur Handel/Vertrieb | null wenn unklar>,
+  "has_showroom": <true wenn Ausstellung/Showroom/Musterhaus genannt | null wenn unklar>,
+  "installs": <true wenn der Betrieb selbst montiert ("montaje", "instalación", "Montage") | null wenn unklar>,
+  "project_focus": [<0-4 aus: "Wohnbau", "Objektbau", "Hotel/Gastro", "Sanierung", "Gewerbe", "Öffentlich">],
+  "positioning": "<premium | mittel | budget — nur bei klaren Hinweisen (Luxus/Exklusiv vs. preiswert), sonst null>",
+  "certifications": [<Zertifikate/Normen WÖRTLICH, z.B. "ISO 9001", "CE", "Passivhaus", "RAL" — max 6, sonst []>],
   "founded_year": <Jahr als Zahl oder null>,
   "employee_hint": "<Angabe zur Betriebsgröße auf Deutsch oder null>",
   "legal_form": "<Rechtsform WÖRTLICH aus dem Text (GmbH, GmbH & Co. KG, KG, AG, e.K., GbR, S.L., S.L.U., S.A., Lda., Unipessoal Lda., SARL, SRL, BV, Ltd …) oder null>",
   "service_area": "<Region/Umkreis auf Deutsch, falls genannt, sonst null>",
   "mentions_solarlux": <true|false>,
-  "competitor_brands": [<genannte Marken aus: COMPETITOR_LIST>],
-  "certifications": [<Zertifikate/Normen WÖRTLICH, z.B. "ISO 9001", "CE", "Passivhaus", "RAL" — max 6, sonst []>],
-  "own_fabrication": <true wenn eigene Fertigung/Produktion/Werkstatt belegt | false wenn ausdrücklich nur Handel/Vertrieb | null wenn unklar>,
-  "has_showroom": <true wenn Ausstellung/Showroom/Musterhaus genannt | null wenn unklar>,
-  "project_focus": [<0-4 aus: "Wohnbau", "Objektbau", "Hotel/Gastro", "Sanierung", "Gewerbe", "Öffentlich">],
-  "positioning": "<premium | mittel | budget — nur bei klaren Hinweisen (Luxus/Exklusiv vs. preiswert), sonst null>",
   "evidence": {"<feldname>": "<Zitat>", ...},
+  "solarlux_fit": "<hoch | mittel | gering | null>",
   "assessment_de": "<2-3 Sätze Einschätzung wie oben, oder null>"
 }
 
@@ -381,11 +472,21 @@ def extract_facts(site_text: str, model: str | None = None,
     client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
     msg = client.messages.create(
         model=use_model,
-        max_tokens=900,   # +200 for the Einschätzung on top of the fact fields
+        # Headroom, not a budget: at 900 the dealer schema (16 fields + an
+        # evidence quote each + the Einschätzung) ran out mid-string and the
+        # reply came back as unterminated JSON — a truncated answer is a lost
+        # company, and output tokens are only billed as produced.
+        max_tokens=1600,
         messages=[{"role": "user", "content": _prompt(profile) + text[:9000]}],
     )
     raw = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
+    if getattr(msg, "stop_reason", None) == "max_tokens":
+        # Say so plainly. Truncation surfaces as "Unterminated string" from the
+        # JSON parser, which reads like a bad model answer and sends you looking
+        # at the prompt instead of at max_tokens — where the fix actually is.
+        raise ValueError("model reply hit max_tokens and was cut off mid-JSON — "
+                         "raise max_tokens or shorten the schema")
     data = _loads_first_object(raw)
 
     desc = (data.get("description_de") or "").strip() or None
@@ -449,10 +550,19 @@ def extract_facts(site_text: str, model: str | None = None,
                            if str(c).strip()][:6],
         "own_fabrication": _tri_state(data.get("own_fabrication")),
         "has_showroom": _tri_state(data.get("has_showroom")),
+        "installs": _tri_state(data.get("installs")),
         "project_focus": _clean_list(data.get("project_focus"), PROJECT_FOCUS, 4),
         "positioning": (str(data.get("positioning")).strip().lower()
                         if str(data.get("positioning") or "").strip().lower()
                         in POSITIONING else None),
+        # An explicit dealership ("distribuidor oficial de CORTIZO") is a
+        # contractual tie, not a passing mention — a much stronger signal about
+        # who supplies this company today, and who we would have to displace.
+        "partner_of": _clean_list(data.get("partner_of"), COMPETITOR_BRANDS, 6),
         "evidence": {str(k)[:40]: str(v)[:200] for k, v in list(evidence.items())[:12]},
+        # Judged, not quoted — same rule as the architects' solarlux_relevance.
+        "solarlux_fit": (str(data.get("solarlux_fit")).strip()
+                         if str(data.get("solarlux_fit") or "").strip() in RELEVANCE else None),
+        "profile": PROFILE_BETRIEB,
         "llm_model": use_model,
     }

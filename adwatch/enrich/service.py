@@ -50,6 +50,18 @@ def _prov(source: str, confidence: float | None = None, evidence: str | None = N
             "evidence": (evidence or None), "fetched_at": dt.datetime.utcnow().isoformat(timespec="seconds")}
 
 
+def _merge_brands(*lists) -> list[str]:
+    """Union of the brand lists, order-stable, deduped case-insensitively."""
+    out, seen = [], set()
+    for lst in lists:
+        for b in (lst or []):
+            key = str(b).strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                out.append(str(b).strip())
+    return out
+
+
 def _resolve_website(comp: dict, allow_search: bool) -> dict:
     """Settle which website belongs to this company.
 
@@ -200,6 +212,15 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             provenance["site_facts"] = _prov(
                 "website-strukturdaten", 0.9,
                 "JSON-LD / tel: / mailto: / meta — kein LLM")
+        # Brands found by scanning the FULL page against the closed vocabulary.
+        # Recorded before the LLM stage so the conquest signal survives even when
+        # extraction is skipped or fails — and so it covers the navigation menus
+        # and logo strips the model's trimmed extract never sees.
+        if bundle.get("brands"):
+            fields["scanned_brands"] = bundle["brands"]
+            provenance["scanned_brands"] = _prov(
+                "website-markenabgleich", 0.9,
+                "Wortgenauer Treffer im Seitentext — kein LLM")
         if allow_llm:
             try:
                 # Architekturbüros get their own prompt: they SPECIFY systems,
@@ -214,7 +235,7 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
                     if value in (None, [], ""):
                         continue
                     fields[key] = value
-                    if key in ("assessment_de", "solarlux_relevance"):
+                    if key in ("assessment_de", "solarlux_relevance", "solarlux_fit"):
                         # an INFERENCE, not an extracted fact: separate source and a
                         # markedly lower confidence, so the report (and any future
                         # consumer) can present it as an estimate rather than a quote.
@@ -308,7 +329,11 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             # reach it — we paid the extraction and then hid the result.
             c.legal_form = merged.get("legal_form") or None
             c.service_area = merged.get("service_area") or None
-            c.competitor_brands = merged.get("competitor_brands") or None
+            # Union of both routes: the scan guarantees completeness over the whole
+            # page, the model contributes anything phrased so loosely that a literal
+            # match missed it. Neither alone was enough.
+            c.competitor_brands = _merge_brands(merged.get("competitor_brands"),
+                                                merged.get("scanned_brands")) or None
             c.mentions_solarlux = merged.get("mentions_solarlux")
             c.assessment = merged.get("assessment_de") or None
             c.certifications = merged.get("certifications") or None
@@ -322,6 +347,11 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             c.office_type = merged.get("office_type") or None
             c.decision_role = merged.get("decision_role") or None
             c.reference_scale = merged.get("reference_scale") or None
+            # dealer profile only — the mirror question: does this company already
+            # SELL what we make, and whose systems does it carry today
+            c.solarlux_fit = merged.get("solarlux_fit") or None
+            c.partner_of = merged.get("partner_of") or None
+            c.installs = merged.get("installs")
             c.enrich_profile = merged.get("profile") or c.enrich_profile
             # Machine-readable self-declared facts (site_facts). These only ever
             # FILL a gap: a phone or address from CRM is authoritative master

@@ -68,6 +68,7 @@ SORTABLE = {
     "customer_state": Company.customer_state, "fit_score": Company.fit_score,
     "opportunity_score": Company.opportunity_score, "target_score": Company.target_score,
     "solarlux_relevance": Company.solarlux_relevance,
+    "solarlux_fit": Company.solarlux_fit,
 }
 
 
@@ -365,7 +366,8 @@ def _apply_filters(stmt, f: dict):
                        ("lead_source", Company.lead_source),
                        ("solarlux_relevance", Company.solarlux_relevance),
                        ("office_type", Company.office_type),
-                       ("decision_role", Company.decision_role)):
+                       ("decision_role", Company.decision_role),
+                       ("solarlux_fit", Company.solarlux_fit)):
         values = f.get(field)
         if values:
             stmt = stmt.where(col.in_(values) if isinstance(values, list) else col == values)
@@ -471,6 +473,7 @@ _REVENUE_SORT_KEYS = {"revenue_y0", "revenue_y1", "revenue_y2", "revenue_y3", "r
 # desc = best first, and NULL keeps sorting last via the existing is_(None) rule.
 _ORDINAL_SORTS = {
     "solarlux_relevance": {"hoch": 3, "mittel": 2, "gering": 1},
+    "solarlux_fit": {"hoch": 3, "mittel": 2, "gering": 1},
 }
 
 
@@ -541,6 +544,8 @@ def _to_dict(c: Company) -> dict:
         "solarlux_relevance": c.solarlux_relevance, "office_type": c.office_type,
         "decision_role": c.decision_role, "reference_scale": c.reference_scale,
         "enrich_profile": c.enrich_profile,
+        "solarlux_fit": c.solarlux_fit, "partner_of": c.partner_of,
+        "installs": c.installs,
         "facebook_url": c.facebook_url, "instagram_url": c.instagram_url,
         "linkedin_url": c.linkedin_url, "site_language": c.site_language,
     }

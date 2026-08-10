@@ -253,6 +253,8 @@ def _migrate(engine) -> None:
                 ("solarlux_relevance", "VARCHAR(10)"), ("office_type", "VARCHAR(30)"),
                 ("decision_role", "VARCHAR(20)"), ("reference_scale", "VARCHAR(200)"),
                 ("enrich_profile", "VARCHAR(16)"),
+                ("solarlux_fit", "VARCHAR(10)"), ("partner_of", "JSON"),
+                ("installs", "BOOLEAN"),
                 ("facebook_url", "VARCHAR(300)"), ("instagram_url", "VARCHAR(300)"),
                 ("linkedin_url", "VARCHAR(300)"), ("site_language", "VARCHAR(8)"),
             ]:

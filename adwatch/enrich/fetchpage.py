@@ -30,7 +30,7 @@ import urllib.robotparser
 import requests
 
 from ..identity import website_source as ws
-from . import site_facts
+from . import extract, site_facts
 from .domains import normalize_domain
 
 # Per-page and total text budgets. The TOTAL is what sets the extraction bill, so
@@ -146,6 +146,12 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
     # drop_chrome: the character budget is the scarce resource here, and on
     # menu-heavy sites the navigation would consume all of it before any prose.
     chunks = [ws._page_text(html, limit=_HOME_CHARS, drop_chrome=True)]
+    # Kept UNSTRIPPED and UNTRIMMED, for the deterministic brand scan only. The
+    # two edits that make the prose extract good — dropping navigation and
+    # capping characters — are exactly the two that hide brand names, because a
+    # "Marcas" menu and a partner logo strip are chrome by every structural test.
+    # Scanning a closed vocabulary costs nothing, so it reads the whole page.
+    full = [ws._page_text(html, limit=10 ** 7)]
     pages = [home_url]
     categories = {home_url: "home"}
     # Machine-readable facts, harvested from the SAME html we already hold — no
@@ -160,6 +166,7 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
             if sub:
                 chunks.append(ws._page_text(sub[0], limit=_PER_PAGE_CHARS,
                                             drop_chrome=True))
+                full.append(ws._page_text(sub[0], limit=10 ** 7))
                 pages.append(sub_url)
                 categories[sub_url] = ws._classify_link(sub_url) or "other"
                 try:
@@ -181,6 +188,7 @@ def page_bundle(domain: str | None, total_chars: int = _TOTAL_CHARS) -> dict | N
         pass
 
     text = " | ".join(c for c in chunks if c)[:total_chars]
+    brands = extract.scan_brands(" ".join(full))
     return {"domain": dom, "home_url": home_url, "text": text,
             "pages": pages, "chars": len(text), "categories": categories,
-            "facts": facts}
+            "facts": facts, "brands": brands}

@@ -2897,6 +2897,47 @@ def test_architect_prompt_never_asks_a_planner_to_sell():
     assert "own_fabrication" in deal and "Bauelemente-/Handwerksbetrieb" in deal
 
 
+def test_brand_scan_survives_the_chrome_strip_and_the_char_budget():
+    """The two edits that make the prose extract good — dropping navigation and
+    capping characters — are the two that hide brand names, because a "Marcas"
+    menu and a partner logo strip are chrome by every structural test. Dekovent
+    lost Vitrocsa, Renson and Griesser that way and Proymetal lost Sunflex: the
+    direct competitors, the ones worth most. Brands are a closed vocabulary, so
+    they are found by scanning the WHOLE page, not by the model's trimmed extract."""
+    from adwatch.identity.website_source import _page_text
+    from adwatch.enrich.extract import scan_brands, brand_tiers
+    html = ("<html><body>"
+            "<nav><ul><li>Marcas</li><li>Vitrocsa</li><li>Renson</li></ul></nav>"
+            "<main>Carpintería de aluminio en Valencia.</main>"
+            "<footer>Distribuidor oficial de Sunflex</footer></body></html>")
+    # the model's view has lost both menu brands ...
+    assert "Vitrocsa" not in _page_text(html, limit=5000, drop_chrome=True)
+    # ... the scan reads the full page and keeps them
+    found = scan_brands(_page_text(html, limit=10 ** 7))
+    assert {"Vitrocsa", "Renson", "Sunflex"} <= set(found)
+    assert brand_tiers(found) == ["direkt", "terrasse"]
+
+
+def test_brand_scan_does_not_match_ordinary_words():
+    """A regex over brand names is only safe because the risky ones are excluded.
+    "Roma" is a Mallorca street, "Keller" is a German surname and a basement —
+    matching those would invent a supplier relationship out of an address."""
+    from adwatch.enrich.extract import scan_brands
+    assert scan_brands("Calle Roma 14, Palma. Herr Keller. Guardian Sapa Hydro") == []
+    # and a real brand still has to stand alone, not sit inside another word
+    assert scan_brands("Wir bauen Sunflex-Anlagen") == ["Sunflex"]
+    assert scan_brands("cortizona ist keine Marke") == []
+
+
+def test_scan_and_model_brands_are_merged_not_replaced():
+    """The scan guarantees completeness over the page; the model catches loose
+    phrasing a literal match misses. Storing either one alone loses companies."""
+    from adwatch.enrich.service import _merge_brands
+    assert _merge_brands(["Schüco"], ["Cortizo", "Schüco"]) == ["Schüco", "Cortizo"]
+    assert _merge_brands(None, None) == []
+    assert _merge_brands(["Sunflex"], ["sunflex"]) == ["Sunflex"]   # case-insensitive dedupe
+
+
 def test_trailing_text_after_the_json_does_not_lose_the_extraction():
     """The model sometimes appends a sentence or a second object after the
     closing brace. json.loads() rejects the WHOLE reply as "Extra data", the
