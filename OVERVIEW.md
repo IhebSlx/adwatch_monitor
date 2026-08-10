@@ -4,7 +4,8 @@ Written 2026-08-10. Every number below was measured against `data/adwatch.db`
 (130,9 MB) on that date, not recalled. Re-measure before quoting any of it later.
 
 Companion documents: `DATA-QUALITY.md` (what was cleaned and how to read the
-numbers), `ONBOARDING.md` (how a colleague starts using it).
+numbers), `AUDIT.md` (what is still wrong and what it would cost you to believe),
+`ONBOARDING.md` (how a colleague starts using it).
 
 ---
 
@@ -164,8 +165,10 @@ opportunity, not the CRM object. It is computed purely from `crm_order_events`.
 
 Concretely, per company:
 
-1. Every Beleg is collapsed to one event per **company + day** (73.112 Belege →
-   ~54.534 events; several documents per order otherwise read as a 0–3 day cadence).
+1. Every Beleg is collapsed to one event per **company + day** (re-measured
+   2026-08-10: **129.676 Belege → 91.992 events**, 1,41 je Event, über 7.734
+   Firmen; several documents per order otherwise read as a 0–3 day cadence).
+   *The older figures 73.112 → 54.534 were from the first, smaller import.*
 2. All gaps between consecutive event days are taken, and the **median** is the
    Rhythmus (`cadence_days`, shown as "142 T").
 3. It needs **at least 4 events** — with fewer there is no rhythm and the app
@@ -357,6 +360,14 @@ register sibling VCs preferentially on deals it already expects to win
 | Schiebe-Dreh-System | 10.666 | 14,1 |
 | Horizontale-Schiebewand | 539 | 4,0 |
 | Balkon- und Fassadengestaltung | 3.050 | 0,0 |
+
+**Population warning (2026-08-10):** this table aggregates *all* of
+`crm_opportunity_products`, and **54 % of those rows (78.732 of 145.865) point at
+Verkaufschancen outside the loaded 2023+ window.** The Objekte tab joins on
+`opportunity_guid` and therefore shows only the 46 % that resolve. cero reads as
+15.723 Positionen / 104,6 Mio € here but 7.475 / 101,7 Mio € within the window —
+positions roughly halve, euros barely move, because the orphan rows are mostly
+value-less. See `AUDIT.md` §2.1.
 
 **These euros are QUOTED, not invoiced** — they span won *and* lost
 Verkaufschancen. Real order events are a separate series: 2025 = 95,3 Mio. €,

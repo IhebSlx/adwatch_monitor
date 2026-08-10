@@ -158,7 +158,7 @@ Project-level wins (8.189) exceed VC-level wins (7.684) for this reason.
 
 | Gap | Size | Why |
 |---|---|---|
-| Verkaufschancen with no address in our DB | 57.776 (100%) | `sl_city`/`sl_postalcode`/`sl_street1` are 92–98% filled **in the CRM**; the Excel export omitted them |
+| Verkaufschancen with no postal code | 14.130 of 57.776 (24,5%) | *Corrected 2026-08-10: the addresses arrived with the direct API pull. `postal_code` and `city` are now 75,5% filled, `street` 62,3%. **`country` is still 100% NULL**, so a German PLZ has to be recognised by its format — the column carries `4812 XN` (Breda) alongside `49324`.* |
 | `CrmOpportunity.name` | 100% empty | dead column; `project_name` is the populated one |
 | `building_type`, `total_amount`, `crm_modified_on` | 100% empty | never mapped from the export |
 | Endkunde pointing at an unknown Firma | 14.675 of 25.945 (57%) | those accounts are outside the imported window |

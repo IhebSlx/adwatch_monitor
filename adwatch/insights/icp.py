@@ -286,12 +286,18 @@ def build_profile(filters: dict | None = None, name: str = "ICP") -> dict:
         filters["exclude_segment"] = already + [s for s in WINNER_EXCLUDED_SEGMENTS if s not in already]
 
     with SessionLocal() as s:
-        stmt = _apply_filters(select(Company), filters)
-        if not filters.get("ids"):
-            # own-group companies never define the profile (see
-            # customers.INTERCOMPANY_NAME_PATTERNS) — they are large, look ideal,
-            # and would teach the model to seek out its own subsidiaries
-            stmt = stmt.where(Company.is_intercompany.is_(False))
+        # Own-group companies never define the profile (see
+        # customers.INTERCOMPANY_NAME_PATTERNS) — they are large, look ideal, and
+        # would teach the model to seek out its own subsidiaries.
+        #
+        # This used to be skipped whenever the filter carried `ids`, which is
+        # exactly the DEFAULT path: material_buyer_ids() returns ids, so the
+        # guard never ran on the profile the app actually builds. Measured
+        # 2026-08-10: 7 of the 8 flagged intercompany companies were in the
+        # default winners set. An id list is a choice of population, never
+        # consent to train on our own companies.
+        stmt = _apply_filters(select(Company), filters).where(
+            Company.is_intercompany.is_(False))
         winners = list(s.scalars(stmt))
     ads = _ad_presence_map([c.id for c in winners]) if winners else {}
 

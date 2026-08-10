@@ -34,6 +34,34 @@ log = logging.getLogger("adwatch.projekte")
 # matter how many sibling attempts died on the way.
 WON, OPEN, LOST = "gewonnen", "offen", "verloren"
 
+
+def specifying_architect(o: CrmOpportunity) -> str | None:
+    """The architect crm_id of a Verkaufschance — only when it is a THIRD PARTY.
+
+    `architect_crm_id` mirrors `slx_executingarchitect_accountid`, the AUSFÜHRENDER
+    Architekt: whoever did the planning. When a dealer plans the job itself it
+    enters itself, which is correct in the CRM and misleading in every count.
+
+    Measured 2026-08-10 over the 7.331 Verkaufschancen with the field set:
+
+        Architekt == Käufer   4.447 (60,7%)  -> Handel 2.295 · Verarbeiter 912 ·
+                                                Baudienstleister 834 · Architekten 54
+        Architekt != Käufer   2.884 (39,3%)  -> Architekten 2.589 · Baudienstleister 136
+
+    So "12,7% of Verkaufschancen name an architect" — the figure in models.py and
+    in the first pass of this analysis — is wrong. A genuinely third-party
+    architect appears on 2.884 of 57.776, i.e. 5,0%.
+
+    Use this wherever an architect is COUNTED or LABELLED. `detail()` deliberately
+    does not: showing a dealer in its own Architekt role is the truth about that
+    deal, and hiding it would make the drawer disagree with Dynamics.
+    """
+    a = (o.architect_crm_id or "").strip()
+    if not a:
+        return None
+    p = (o.parent_account_crm_id or "").strip()
+    return None if p and a.lower() == p.lower() else a
+
 # Member closures that MEAN "the project was won by someone else's VC" — they
 # must never count as project losses.
 _WON_ELSEWHERE = "Zugehörige VC gewonnen"
@@ -224,7 +252,10 @@ def list_projects(status: str | None = None, min_members: int = 1,
         est = sum(float(m.estimated_value or 0) for m in members) or None
         firms = sorted({n for n in (name_of(m.parent_account_crm_id)
                                     for m in members) if n})
-        archs = sorted({n for n in (name_of(m.architect_crm_id)
+        # third-party architects only — see specifying_architect(). The column
+        # otherwise repeats the Käufer under an "Architekten" heading on 6 of
+        # every 10 rows that have the field at all.
+        archs = sorted({n for n in (name_of(specifying_architect(m))
                                     for m in members) if n})
         out.append({
             "project_id": key,

@@ -206,11 +206,22 @@ def upsert_accounts(records: list[dict], *, allow_insert: bool = True) -> dict:
 
         s.commit()
 
-    log.info("crm accounts: received=%d inserted=%d updated=%d unchanged=%d skipped=%d",
-             received, inserted, updated, unchanged, skipped)
+    # Own-group entities arrive from the CRM looking like ordinary customers with
+    # large revenue, and `flag_intercompany` claimed in its own docstring to run
+    # "on every import" while in fact nothing outside a test ever called it. Ten
+    # of them were therefore unflagged — Solarlux Nederland B.V. alone carries
+    # EUR 21,9M of 2023+ revenue, 98% of everything invoiced in the Netherlands —
+    # so they sat in the ICP winners set and the win-back list as prospects.
+    # It has to run where the rows land, not where someone remembers it.
+    reflagged = customers.flag_intercompany()
+
+    log.info("crm accounts: received=%d inserted=%d updated=%d unchanged=%d "
+             "skipped=%d reflagged=%d",
+             received, inserted, updated, unchanged, skipped, reflagged)
     return {"received": received, "inserted": inserted, "updated": updated,
             "unchanged": unchanged, "skipped": skipped,
-            "deactivated_in_crm": deactivated, "company_ids": touched}
+            "deactivated_in_crm": deactivated, "intercompany_reflagged": reflagged,
+            "company_ids": touched}
 
 
 def _snapshot(c: Company) -> tuple:

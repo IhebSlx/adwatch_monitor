@@ -191,12 +191,63 @@ def fold_product_subfamilies(apply: bool = False) -> dict:
     return {"rows": len(moved), "examples": moved[:6]}
 
 
+def clear_out_of_scope_scores(apply: bool = False) -> dict:
+    """Remove scores from rows that are out of scope (consumers, competitors).
+
+    Scores are written by passes that DO respect scope.apply(), so nothing puts
+    new ones there — but a score written before the scope rule existed simply
+    stayed. Measured 2026-08-10: all 1.665 Private Endkunden carried a
+    `fit_score` stamped 2026-07-30, while every in-scope segment had been
+    rescored on 2026-08-05. A stale score is worse than none: it survives every
+    filtered view and then reappears the moment someone queries the column
+    directly, or adds a report that forgets the filter.
+
+    `health` is deliberately KEPT — see insights/rfm.recompute. It is a fact
+    about the row, not a position in a call list.
+
+    Two different rules, because the two exclusions mean different things:
+
+      out of scope (consumers, competitors) — not part of the business at all,
+        so nothing descriptive OR ranked belongs on the row.
+      intercompany (own group) — a real company we really sell to, so `fit_score`
+        stays as a description. Only the RANKINGS go: we are never going to
+        acquire or win back our own Dutch subsidiary.
+    """
+    from . import scope
+    OUT_OF_SCOPE = ("fit_score", "opportunity_score", "target_score",
+                    "fit_breakdown", "winback_score")
+    OWN_GROUP = ("target_score", "winback_score")
+    hit = []
+    with SessionLocal() as s:
+        for c in s.scalars(select(Company).where(
+                ~scope.in_scope_clause() | Company.is_intercompany.is_(True))):
+            fields = (OUT_OF_SCOPE if not scope.is_in_scope(c.segment, c.is_competitor)
+                      else OWN_GROUP)
+            dirty = [f for f in fields if getattr(c, f, None) is not None]
+            if not dirty:
+                continue
+            hit.append({"id": c.id, "name": c.name, "segment": c.segment,
+                        "reason": ("ausserhalb des Geschäfts"
+                                   if not scope.is_in_scope(c.segment, c.is_competitor)
+                                   else "eigene Gesellschaft"),
+                        "fields": dirty})
+            if apply:
+                for f in dirty:
+                    setattr(c, f, None)
+        if apply:
+            s.commit()
+    return {"rows": len(hit),
+            "values_cleared": sum(len(h["fields"]) for h in hit),
+            "examples": hit[:5]}
+
+
 def audit() -> dict:
     """Everything, reported, nothing changed."""
     return {"unbacked_enrichment": clear_unbacked_enrichment(apply=False),
             "website_domains": normalise_website_domains(apply=False),
             "domain_duplicates": find_domain_duplicates(),
-            "product_subfamilies": fold_product_subfamilies(apply=False)}
+            "product_subfamilies": fold_product_subfamilies(apply=False),
+            "out_of_scope_scores": clear_out_of_scope_scores(apply=False)}
 
 
 def repair() -> dict:
@@ -204,4 +255,5 @@ def repair() -> dict:
     merged — that needs judgement about branches versus double entries."""
     return {"unbacked_enrichment": clear_unbacked_enrichment(apply=True),
             "website_domains": normalise_website_domains(apply=True),
-            "product_subfamilies": fold_product_subfamilies(apply=True)}
+            "product_subfamilies": fold_product_subfamilies(apply=True),
+            "out_of_scope_scores": clear_out_of_scope_scores(apply=True)}

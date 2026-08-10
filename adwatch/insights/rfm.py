@@ -179,8 +179,24 @@ def recompute(today: dt.date | None = None) -> dict:
         for c in s.scalars(select(Company)):
             cls = classify(events.get(c.id, []), today)
             c.health = cls["health"]
-            c.winback_score = winback_score(
-                cls, cls["value"], advertising=c.id in advertising)
+            # `health` is a FACT about the row and stays even for companies out of
+            # scope — a Private Endkunde really did buy, and scope.py keeps that
+            # history on purpose. `winback_score` is a POSITION IN A CALL LIST and
+            # must not exist for someone we will never call. This loop had no
+            # scope check at all, so 1.449 consumers carried a win-back score;
+            # overdue_customers() filtered them out of the view, which is exactly
+            # what kept it invisible. Anything reading the column directly — a
+            # report, an export, a future query — got them.
+            # `is_intercompany` is checked separately because scope.py covers
+            # consumers and competitors only — deliberately, since an own-group
+            # company still belongs in the Firmen tab. It just must never be on a
+            # list of people to win back. overdue_customers() already excluded
+            # them from the VIEW; the stored column did not.
+            if scope.is_in_scope(c.segment, c.is_competitor) and not c.is_intercompany:
+                c.winback_score = winback_score(
+                    cls, cls["value"], advertising=c.id in advertising)
+            else:
+                c.winback_score = None
             counts[cls["health"]] += 1
         s.commit()
     log.info("rfm.recompute: %s", dict(counts))

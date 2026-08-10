@@ -214,9 +214,15 @@ class Company(Base):
     beleg_by_year: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # {"2023": 12345.0, ...}
     avg_discount: Mapped[float | None] = mapped_column(Float, nullable=True)  # Ø Grundrabatt = partner tier
     # Prescriptor influence, from opportunity.slx_executingarchitect_accountid.
-    # Only 12.7% of opportunities name an architect, so a 0 here means "not
-    # recorded" at least as often as it means "influences nothing" — never rank
-    # a company DOWN on this, only up.
+    # 12.7% of opportunities fill that field, but it is the AUSFÜHRENDER Architekt
+    # — whoever planned the job — and on 60.7% of those the value is the BUYER
+    # itself (a dealer that plans in-house). A third-party architect appears on
+    # 2,884 of 57,776 opportunities = 5.0%. These columns are imported verbatim
+    # from the CRM export and inherit that conflation, so they count dealers as
+    # their own architects; use insights/projekte.specifying_architect() for any
+    # figure that has to mean "an architecture practice".
+    # A 0 here means "not recorded" at least as often as it means "influences
+    # nothing" — never rank a company DOWN on this, only up.
     arch_projects: Mapped[int] = mapped_column(Integer, default=0)
     arch_won: Mapped[int] = mapped_column(Integer, default=0)
     arch_won_value: Mapped[float] = mapped_column(Float, default=0.0)
@@ -631,17 +637,22 @@ class CrmOpportunity(Base):
 class CrmOrderEvent(Base):
     """One purchase EVENT: a company + a day, with the Belege of that day summed.
 
-    Belege are not orders. 73,112 Belege collapse to 54,534 events (1.34 per
-    event) because a multi-line order is issued as several documents. Computing
-    an order rhythm on raw Belege gives medians of 0-3 days for big dealers and
-    makes churn detection meaningless — this table exists so the cadence is
-    measured on commercial events instead.
+    Belege are not orders. Measured 2026-08-10: 129,676 Belege collapse to
+    91,992 events (1.41 per event) over 7,734 companies, 2019-01-01..2026-08-05,
+    because a multi-line order is issued as several documents. Computing an order
+    rhythm on raw Belege gives medians of 0-3 days for big dealers and makes
+    churn detection meaningless — this table exists so the cadence is measured on
+    commercial events instead.
+
+    (The figures "73,112 Belege -> 54,534 events" appear in OVERVIEW.md and
+    DATA-QUALITY.md and are from the first, smaller import. Re-measure before
+    quoting either document.)
 
     Two more properties of the raw data that this table deliberately preserves
     rather than hides, because both matter when interpreting a number:
-      * ~25% of Belege are 0 EUR (warranty, samples, replacements). They are
+      * 14,049 events are 0 EUR (warranty, samples, replacements). They are
         real contact but not revenue, so `amount` can legitimately be 0.
-      * a Beleg can be negative (Storno/Retoure) — only 4 in the window, but
+      * a Beleg can be negative (Storno/Retoure) — only 3 in the window, but
         summing without care would silently lose them.
     """
     __tablename__ = "crm_order_events"

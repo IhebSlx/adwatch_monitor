@@ -3439,3 +3439,175 @@ def test_architect_relevance_rejects_invented_values(monkeypatch):
     f = extract.extract_facts("y" * 200, profile=extract.PROFILE_ARCHITEKT)
     assert f["solarlux_relevance"] is None
     assert f["office_type"] is None and f["decision_role"] is None
+
+
+# ---------------------------------------------------------------------------
+# Phase-0 audit findings, 2026-08-10. Each of these shipped and stayed invisible
+# until the data was attacked directly rather than read through a filtered view.
+# ---------------------------------------------------------------------------
+
+def test_own_group_is_excluded_even_when_the_filter_names_ids(temp_db):
+    """The intercompany guard used to be skipped whenever the winners filter
+    carried `ids` — which is precisely the DEFAULT path, because
+    material_buyer_ids() returns ids. Measured on the real base: 7 of 8 flagged
+    own-group companies were in the default winners set. The existing
+    intercompany test missed it because that DB has no Belege and therefore fell
+    back to the id-less customer_state filter.
+
+    An id list is a choice of POPULATION. It is never consent to train the
+    profile on our own subsidiaries."""
+    import datetime as dt
+    from adwatch import customers
+    from adwatch.insights import icp
+    from adwatch.models import Company, CrmOrderEvent
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    for i in range(30):
+        s.add(Company(name=f"Haendler {i}", country="DE",
+                      segment="Handel" if i < 20 else "Verarbeiter",
+                      postal_code="49134" if i < 20 else "80331"))
+    s.add(Company(name="Linara Teststadt GmbH", country="DE", segment="Handel",
+                  postal_code="49134"))
+    s.commit()
+    # every one of them a MATERIAL buyer, so material_buyer_ids() picks the
+    # id-carrying path — the one that used to bypass the guard
+    for c in s.scalars(select(Company)):
+        s.add(CrmOrderEvent(company_id=c.id, order_date=dt.date(2025, 3, 1),
+                            amount=50_000.0))
+    s.commit()
+    s.close()
+
+    assert customers.flag_intercompany() == 1
+    ids = icp.material_buyer_ids()
+    assert len(ids) == 31, "alle 31 sind materielle Kaeufer - sonst testet das hier nichts"
+
+    p = icp.build_profile(None)                    # the default path, uses ids
+    assert p["winners_count"] == 30, "die eigene Gesellschaft sitzt im Gewinner-Set"
+    assert p["winners_filter"].get("ids"), "der Default muss weiterhin ueber ids laufen"
+
+    # and explicitly, too: naming the ids by hand must not smuggle them back in
+    p2 = icp.build_profile({"ids": ids})
+    assert p2["winners_count"] == 30
+
+
+def test_out_of_scope_rows_never_carry_a_ranking(temp_db):
+    """Private Endkunden had a winback_score on 1.449 rows and a fit_score on all
+    1.665, because rfm.recompute() iterated select(Company) with no scope filter
+    and nothing ever cleared scores written before the scope rule existed.
+    overdue_customers() filtered them out of the VIEW, which is exactly what kept
+    it invisible — any direct read of the column still got consumers.
+
+    `health` is the deliberate exception: it is a fact about the row, not a
+    position in a call list."""
+    import datetime as dt
+    from adwatch import dataquality as dq
+    from adwatch.insights import rfm
+    from adwatch.models import Company, CrmOrderEvent
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    for r in (Company(name="Echter Haendler", segment="Handel"),
+              Company(name="Herr Privat", segment="Private Endkunden"),
+              Company(name="Schueco Niederlassung", segment="Handel", is_competitor=True),
+              Company(name="Linara Teststadt GmbH", segment="Handel", is_intercompany=True)):
+        s.add(r)
+    s.commit()
+    for c in s.scalars(select(Company)):
+        for yr in (2019, 2020, 2021, 2022):        # a cadence, then silence
+            s.add(CrmOrderEvent(company_id=c.id, order_date=dt.date(yr, 3, 1),
+                                amount=90_000.0))
+        c.fit_score = 55.0
+        c.target_score = 55.0
+    s.commit()
+    s.close()
+
+    rfm.recompute(today=dt.date(2026, 8, 10))
+    dq.clear_out_of_scope_scores(apply=True)
+
+    s = temp_db.SessionLocal()
+    by = {c.name: c for c in s.scalars(select(Company))}
+    assert by["Echter Haendler"].winback_score > 0
+    for name in ("Herr Privat", "Schueco Niederlassung", "Linara Teststadt GmbH"):
+        assert by[name].winback_score is None, f"{name} steht auf einer Rueckgewinnungsliste"
+        assert by[name].target_score is None, f"{name} steht auf der Zielliste"
+        assert by[name].health is not None, f"{name} hat seine Historie verloren"
+    # out of the business entirely -> nothing descriptive either; own group -> kept
+    assert by["Herr Privat"].fit_score is None
+    assert by["Linara Teststadt GmbH"].fit_score == 55.0
+    s.close()
+
+    assert dq.clear_out_of_scope_scores(apply=True)["rows"] == 0   # idempotent
+
+
+def test_account_import_reflags_own_group(temp_db):
+    """flag_intercompany() promised in its own docstring to run "on every import"
+    and was called by nothing outside a test. Fourteen own-group companies were
+    therefore unflagged — Nana Wall Systems Inc. (EUR 39,7 Mio) and Solarlux
+    Nederland B.V. (EUR 21,9 Mio, 98% of all Dutch revenue) among them."""
+    from adwatch import crm_accounts
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    res = crm_accounts.upsert_accounts([
+        {"accountid": "aaaaaaaa-0000-0000-0000-000000000001",
+         "name": "Solarlux Nederland B.V."},
+        {"accountid": "aaaaaaaa-0000-0000-0000-000000000002",
+         "name": "Nana Wall Systems Inc."},
+        {"accountid": "aaaaaaaa-0000-0000-0000-000000000003",
+         "name": "Serin Bauelemente"},
+    ])
+    assert res["intercompany_reflagged"] == 2
+
+    s = temp_db.SessionLocal()
+    flags = {c.name: c.is_intercompany for c in s.scalars(select(Company))}
+    s.close()
+    assert flags["Solarlux Nederland B.V."] is True
+    assert flags["Nana Wall Systems Inc."] is True
+    assert flags["Serin Bauelemente"] is False
+
+
+def test_executing_architect_is_not_always_an_architect():
+    """`architect_crm_id` mirrors slx_executingarchitect_accountid — the
+    AUSFUEHRENDER Architekt. A dealer that plans in-house enters itself, and on
+    the real base that is 4.447 of 7.331 filled values (60,7%). Reading the field
+    as "an architecture practice is involved" overstates it 2,5-fold: third-party
+    architects appear on 2.884 of 57.776 Verkaufschancen (5,0%), not 12,7%."""
+    from adwatch.insights.projekte import specifying_architect
+    from adwatch.models import CrmOpportunity
+
+    dealer, buero = "GUID-HAENDLER", "GUID-BUERO"
+    assert specifying_architect(CrmOpportunity(
+        crm_id="1", parent_account_crm_id=dealer, architect_crm_id=dealer)) is None
+    assert specifying_architect(CrmOpportunity(
+        crm_id="2", parent_account_crm_id=dealer, architect_crm_id=buero)) == buero
+    assert specifying_architect(CrmOpportunity(
+        crm_id="3", parent_account_crm_id=dealer, architect_crm_id=None)) is None
+    # different casing must not create a phantom architect
+    assert specifying_architect(CrmOpportunity(
+        crm_id="4", parent_account_crm_id=dealer.lower(),
+        architect_crm_id=dealer.upper())) is None
+
+
+def test_audit_names_the_columns_that_are_really_outcomes(temp_db):
+    """order_value / invoiced_value / sap_order_numbers are filled on ~92% of won
+    deals and ~0% of lost ones. They sit in the same table as the legitimate
+    features, so the audit has to name them rather than leave a reader to assume
+    somebody checked."""
+    from adwatch import audit
+    from adwatch.models import CrmOpportunity
+
+    s = temp_db.SessionLocal()
+    for i in range(40):
+        won = i < 20
+        s.add(CrmOpportunity(crm_id=f"o{i}",
+                             state="gewonnen" if won else "verloren",
+                             order_value=1000.0 if won else None,
+                             estimated_value=1000.0,
+                             lost_reason=None if won else "Zu teuer"))
+    s.commit()
+    s.close()
+
+    rep = audit.outcome_leakage()
+    assert "order_value" in rep["unusable"]
+    assert "estimated_value" not in rep["unusable"], "gleich gefuellt - also brauchbar"
