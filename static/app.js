@@ -1594,10 +1594,6 @@
         <div class="kpi-value">${o.project_win_rate != null ? (o.project_win_rate * 100).toFixed(1) + " %" : "—"}</div></div>
       <div class="kpi"><div class="kpi-label">Gewonnener Wert</div>
         <div class="kpi-value" title="${eur(o.won_value)}">${eurShort(o.won_value)}</div></div>`;
-    fillPruefenFacets(data.facets || {});
-    const cnt = $("#pruefenCount");
-    if (cnt) cnt.textContent = data.total != null
-      ? `${data.shown} von ${data.total} offen` : "";
     const rows = data.rows || [];
     if (!rows.length) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Keine Projekte für diesen Filter.</p>`;
