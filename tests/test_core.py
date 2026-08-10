@@ -3026,6 +3026,75 @@ def test_render_never_raises_into_the_pipeline(monkeypatch):
     assert rd.render_html("https://example.com") is None
 
 
+def test_unproven_website_keeps_no_facts(temp_db, monkeypatch):
+    """Facts and the identity verdict are written in one run, so they agree —
+    until a verdict is REVISED. D3 Outdoor Girona kept a full profile (products,
+    Corradi as an installed brand) read off a site the checker had already ruled
+    was not theirs. A description with no website at all sat on 15 more rows."""
+    from adwatch import dataquality as dq
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name="Demoted", segment="Handel", identity_status="conflict",
+                website_domain="fremd.de", description="von der falschen Seite",
+                products=["Fenster"], competitor_brands=["Corradi"],
+                enrichment_status="enriched"),
+        Company(name="Ohne Website", segment="Handel", identity_status="not_found",
+                description="woher auch immer", enrichment_status="enriched"),
+        Company(name="Sauber", segment="Handel", identity_status="verified",
+                website_domain="echt.de", description="belegt",
+                products=["Wintergarten"], enrichment_status="enriched"),
+    ])
+    s.commit(); s.close()
+    monkeypatch.setattr(dq, "SessionLocal", temp_db.SessionLocal)
+
+    assert dq.clear_unbacked_enrichment(apply=False)["rows"] == 2   # dry run changes nothing
+    dq.clear_unbacked_enrichment(apply=True)
+
+    with temp_db.SessionLocal() as s2:
+        rows = {c.name: c for c in s2.query(Company).all()}
+        assert rows["Demoted"].description is None
+        assert rows["Demoted"].competitor_brands is None
+        assert rows["Demoted"].enrichment_status == "none"
+        # the domain and the verdict STAY — they are the evidence the check ran
+        assert rows["Demoted"].website_domain == "fremd.de"
+        assert rows["Demoted"].identity_status == "conflict"
+        # a verified row is untouched
+        assert rows["Sauber"].description == "belegt"
+    # idempotent
+    assert dq.clear_unbacked_enrichment(apply=False)["rows"] == 0
+
+
+def test_shared_domain_is_reported_not_merged(temp_db, monkeypatch):
+    """Nearly a bad automated fix. Most shared domains are corporate GROUPS, not
+    duplicates: Lindner has 8 legal entities on one website, each with its own
+    SAP number and revenue. Only a shared domain AND a matching name means the
+    same firm twice."""
+    from adwatch import dataquality as dq
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name="Lindner Building Envelope GmbH", segment="Handel", website_domain="lindner.com"),
+        Company(name="Lindner Scandinavia AB", segment="Handel", website_domain="lindner.com"),
+        Company(name="CBF", segment="Handel", website_domain="calviabalear.com"),
+        Company(name="CBF S.L.", segment="Handel", website_domain="calviabalear.com"),
+    ])
+    s.commit(); s.close()
+    monkeypatch.setattr(dq, "SessionLocal", temp_db.SessionLocal)
+
+    out = dq.find_domain_duplicates()
+    by_dom = {g["domain"]: g for g in out["top"]}
+    assert by_dom["calviabalear.com"]["duplicate_pairs"] == [["CBF", "CBF S.L."]]
+    # the Lindner entities share a domain but are different firms, so no pair
+    assert "lindner.com" not in by_dom
+    assert out["groups_with_a_duplicate_pair"] == 1
+    # and nothing was deleted
+    with temp_db.SessionLocal() as s2:
+        assert s2.query(Company).count() == 4
+
+
 def test_brand_evidence_outranks_an_inferred_fit():
     """Proymetal trades as "SUNFLEX Top-Partner", the scan found Sunflex in its
     logo strip, and the model still graded it "gering" — the extract it was given
