@@ -2156,14 +2156,45 @@
   // Verkaufschancen sharing sl_primary_opportunityid — so this is assembled
   // from its members. That assembly IS the point: one win among five losses is
   // a won project, and only here can you see why the other five were lost.
+  // The drawer is an empty <aside> in the markup; the chrome — head, close
+  // button, and the .drawer-body that actually carries `overflow-y:auto` — is
+  // built by whoever opens it. This function used to write into
+  // `$(".drawer-body") || drawer`, and opened from the Objekte tab nothing had
+  // built a .drawer-body yet, so the fallback dropped the sections straight
+  // into .company-drawer. That is a flex column with no scrolling and no head:
+  // long Objekte overflowed with no way to scroll and no ✕ to close. It only
+  // looked right when a company drawer had been opened first, which is exactly
+  // how it got past review.
+  function drawerShell(drawer, title, subtitle) {
+    $("#drawerBackdrop").classList.remove("hidden");
+    drawer.classList.remove("hidden");
+    drawer.innerHTML = `
+      <div class="drawer-head">
+        <div>
+          <h2>${esc(title)}</h2>
+          ${subtitle ? `<span class="muted">${esc(subtitle)}</span>` : ""}
+        </div>
+        <div class="drawer-head-actions">
+          <button class="btn btn-ghost drawer-close" title="Schließen">✕</button>
+        </div>
+      </div>
+      <div class="drawer-body"></div>`;
+    $(".drawer-close", drawer).addEventListener("click", closeCompanyDrawer);
+    return $(".drawer-body", drawer);
+  }
+
   async function openProjektDrawer(pid) {
     const drawer = $("#companyDrawer");
-    const body = $(".drawer-body", drawer) || drawer;
-    drawer.classList.remove("hidden");
+    let body = drawerShell(drawer, "Objekt", "wird geladen …");
     body.innerHTML = `<p class="muted" style="padding:14px">Objekt wird geladen …</p>`;
     let d;
     try { d = await api(`/api/projekte/${encodeURIComponent(pid)}`); }
     catch (e) { body.innerHTML = `<p class="muted" style="padding:14px">Fehler: ${esc(e.message)}</p>`; return; }
+    // now that the name is known, rebuild the head with it — the Objekt's name
+    // is the building address, which is what a reader needs pinned at the top
+    // while scrolling through its Verkaufschancen
+    body = drawerShell(drawer, d.name || "(ohne Namen)",
+                       [d.address, d.channel].filter(Boolean).join(" · "));
 
     const roleName = {kaeufer: "Käufer", architekt: "Architekt", endkunde: "Endkunde"};
     const kv = (k, v) => v == null || v === "" ? "" : `
@@ -2172,7 +2203,7 @@
 
     body.innerHTML = `
       <div class="drawer-section">
-        <h3>${esc(d.name)}</h3>
+        <h3>Objekt</h3>
         <div style="font-size:12.5px">
           ${kv("Status", `<span class="state-chip">${esc(d.status)}</span>` +
               (d.won_via ? ` <span class="sub">— ${esc(d.won_via)}</span>` : ""))}
