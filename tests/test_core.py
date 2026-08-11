@@ -867,8 +867,16 @@ def test_icp_parsers():
     assert age_bucket(2020, today) == "<10 Jahre"
     assert age_bucket(1955, today) == "50+ Jahre"
     assert age_bucket(None) is None
-    assert plz_zone("49134") == "PLZ 4x"
-    assert plz_zone("123") is None
+    # Namespaced by country: DE, FR, ES and IT all use five digits, so a
+    # country-blind zone equated Barcelona 08036 with German 0xxxx (Saxony).
+    # 6.023 non-German companies were carrying a German zone, 1.700 Spanish.
+    assert plz_zone("49134", "DE") == "DE 4x"
+    assert plz_zone("08036", "ES") == "ES 0x"
+    assert plz_zone("75008", "FR") == "FR 7x"
+    assert plz_zone("08036", "ES") != plz_zone("08036", "DE")
+    assert plz_zone("49134") == "DE 4x", "ohne Land bleibt DE die Annahme"
+    assert plz_zone("123", "DE") is None
+    assert plz_zone("1010", "AT") is None, "vierstellig — keine Zone, nicht geraten"
 
 
 def test_icp_winners_never_include_consumers(temp_db):

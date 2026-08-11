@@ -155,9 +155,30 @@ def age_bucket(founded_year: int | None, today: dt.date | None = None) -> str | 
     return "50+ Jahre"
 
 
-def plz_zone(postal_code: str | None) -> str | None:
+def plz_zone(postal_code: str | None, country: str | None = None) -> str | None:
+    """The postcode region, namespaced by country.
+
+    Germany, France, Spain and Italy all use five digits, so a country-blind zone
+    silently equated Barcelona 08036 with German 0xxxx — Saxony. Measured
+    2026-08-10: 6.023 non-German companies were carrying a German zone, 1.700 of
+    them Spanish, and PLZ-Zone is one of only four features the profile does not
+    drop as leaky. So the geography feature was actively wrong for every
+    non-German market rather than merely weak.
+
+    Namespacing rather than restricting to DE: a profile trained on German
+    winners simply has no lift for 'ES 0x', so the feature is skipped for Spanish
+    companies (missing data never punishes) instead of scoring them on a
+    coincidence. And once there are enough Spanish winners, the same code learns
+    Spanish zones without a change.
+
+    The identity check already learned this — see
+    test_postcode_check_is_country_aware — and the ICP had not.
+    """
     d = re.sub(r"\D", "", str(postal_code or ""))
-    return f"PLZ {d[0]}x" if len(d) == 5 else None
+    if len(d) != 5:
+        return None
+    cc = (country or "DE").strip().upper()[:2] or "DE"
+    return f"{cc} {d[0]}x"
 
 
 def _ad_presence_map(ids: list[int] | None = None) -> dict[int, str]:
@@ -235,7 +256,7 @@ def company_features(c: Company, ads: dict[int, str],
         "segment": c.segment or None,
         "sub_segment": c.sub_segment or None,
         "sales_channel": c.sales_channel or None,
-        "plz_zone": plz_zone(c.postal_code),
+        "plz_zone": plz_zone(c.postal_code, c.country),
         "products": list(c.products) if c.products else [],
         "crm_products": list((crm_products or {}).get(c.id) or []),
         "size_bucket": size_bucket(c.employee_hint),
@@ -321,6 +342,21 @@ _SMOOTH = 2.0
 # A value must appear at least this often in the population before its lift is
 # trusted for scoring. Rare values produce enormous lifts from tiny numerators.
 _MIN_VALUE_SUPPORT = 15
+
+# ...and at least this many WINNERS must sit behind it. The population floor
+# alone was not enough, because it constrains the DENOMINATOR while the noise
+# lives in the numerator. Measured 2026-08-11 on the PLZ-Zone feature:
+#
+#   ES 1x   lift 0.24   128 population rows   1 winner
+#   ES 3x   lift 0.49    61 population rows   1 winner
+#   IT 7x   lift 1.83    15 population rows   1 winner
+#   FI 0x   lift 1.83    15 population rows   1 winner
+#
+# Every Spanish company was pushed to the bottom of the ranking by a "geography"
+# lift derived from a single buyer, and which Spanish region looked better than
+# another was decided by which one happened to contain him. One winner cannot
+# carry a rate, however well-covered the population is.
+_MIN_WINNER_SUPPORT = 10
 
 # Lift is clamped into this band before scoring. The cap stops one extreme value
 # dominating the weighted sum; the floor keeps a "never buys" value informative
@@ -443,6 +479,11 @@ def build_profile(filters: dict | None = None, name: str = "ICP",
             # refuses to score anything at all on a small base.
             floor = max(3, min(_MIN_VALUE_SUPPORT, p_known // 10))
             if p_count < floor or not p_known or not w_known:
+                continue
+            # Same reasoning applied to the numerator, and scaled down the same
+            # way so a small winners set can still score at all.
+            w_count = int(round(w_share * w_known))
+            if w_count < max(3, min(_MIN_WINNER_SUPPORT, w_known // 10)):
                 continue
             w_rate = (w_share * w_known + _SMOOTH) / (w_known + _SMOOTH * k)
             p_rate = (p_count + _SMOOTH) / (p_known + _SMOOTH * k)
