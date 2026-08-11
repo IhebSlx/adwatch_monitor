@@ -25,6 +25,14 @@ FREEMAIL_DOMAINS = {
     "1und1.de", "einsundeins.de", "telekom.de", "t-mobile.de", "o2online.de",
     "ewetel.net", "htp-tel.de", "netcologne.de", "versanet.de", "gmail.de",
     "protonmail.com", "proton.me", "yandex.com", "zoho.com",
+    # Country variants of the big freemailers. `gmail.co.uk` reached the Spanish
+    # review queue as a website candidate for "D. Miguel Romero" because only
+    # `gmail.com` and `gmail.de` were listed.
+    "gmail.co.uk", "gmail.es", "gmail.fr", "gmail.it", "gmail.nl",
+    "hotmail.es", "hotmail.fr", "hotmail.it", "hotmail.co.uk", "hotmail.nl",
+    "outlook.es", "outlook.fr", "outlook.it", "yahoo.es", "yahoo.fr",
+    "yahoo.it", "yahoo.co.uk", "live.nl", "telefonica.net", "terra.es",
+    "wanadoo.es", "movistar.es", "orange.es", "ya.com",
 }
 
 # Domains that are never a single company's own site, even though partners

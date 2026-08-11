@@ -62,6 +62,60 @@ def _merge_brands(*lists) -> list[str]:
     return out
 
 
+# Signals strong enough to write a website into master data on their own — the
+# same four identity/find_website.PROVEN accepts, and the three ONBOARDING
+# promises a colleague ("eigene Telefonnummer, PLZ+Straße, PLZ+Name").
+_PROVEN_SIGNALS = ("domain_in_name", "phone", "plz_street", "plz_name", "manual")
+
+# Origins that are themselves corroboration, because the candidate came out of
+# our OWN master data rather than a search engine's guess.
+_CORROBORATED_ORIGINS = ("sap", "sap_salvaged", "email_domain")
+
+
+def _review_worthy(t: dict) -> bool:
+    """Is this candidate worth a human's time?
+
+    Only PLAUSIBLY-RELATED failures are. A candidate that came from the company's
+    own data (its e-mail, its SAP typo) always is; a search hit only when a name
+    signal connects it to the company. Unrelated portals a search coughed up are
+    recorded for the audit trail but do NOT queue the company — that is an
+    honest "no website found".
+
+    Module-level and shared on purpose: this decides BOTH whether the company is
+    queued and which candidate is shown. While the two were separate rules, seven
+    of nine Spanish review items reached the Prüfen tab with an empty Kandidat
+    column — a decision with nothing to decide.
+    """
+    if not t.get("domain"):
+        return False
+    if t.get("origin") in ("email_domain", "sap_salvaged"):
+        return True
+    sig = t.get("signals") or {}
+    return bool(sig.get("name_in_text") or sig.get("name_in_domain"))
+
+
+def _accepts(origin: str | None, matched_by: str | None) -> bool:
+    """May this (origin, signal) pair be written into master data, or does a
+    human decide?
+
+    `domain_plus_name` means only that the domain shares a token with the company
+    name. identity/find_website deliberately routes exactly that to review, while
+    this module used to accept it — two standards for one question. Measured on
+    the first 20 Spanish companies it produced "Montajes Portico Balear SL" ->
+    portsdebalears.com and "+ PLUS" -> pressingplus.com, both wrong, and both
+    then enriched with a stranger's facts.
+
+    The origin is the second half of the question and the reason this is not just
+    a shorter list: the company's own e-mail sitting on that domain is
+    corroboration a search result does not have. So email_domain +
+    domain_plus_name stays accepted (aluminioscerratosa.com for "Aluminios
+    Cerratosa"), serper + domain_plus_name does not.
+    """
+    if matched_by in _PROVEN_SIGNALS:
+        return True
+    return bool(matched_by) and origin in _CORROBORATED_ORIGINS
+
+
 def _resolve_website(comp: dict, allow_search: bool) -> dict:
     """Settle which website belongs to this company.
 
@@ -70,9 +124,18 @@ def _resolve_website(comp: dict, allow_search: bool) -> dict:
     queue. `bundle` is the crawl (reused for extraction) when one succeeded."""
     existing = normalize_domain(comp.get("website_domain")) or salvage_domain(comp.get("website_domain"))
     if existing and normalize_domain(comp.get("website_domain")):
-        # Already known and well-formed -> authoritative. Crawl only to extract.
+        # Already known and well-formed -> authoritative, never replaced. But the
+        # page is being crawled anyway, so validate it while we are here: a CRM
+        # domain is a CLAIM (ONBOARDING: "Eine Website gilt erst als 'diese
+        # Firma', wenn ein harter Beweis vorliegt"), and 22.794 rows sit at
+        # 'unverified' for want of anyone checking. Costs nothing extra and turns
+        # a claim into evidence — or leaves it a claim, which is also the truth.
         bundle = fetchpage.page_bundle(existing)
-        return {"domain": existing, "source": "sap", "validated_by": "sap",
+        proof = validate.validate_site(comp, existing, (bundle or {}).get("text"))
+        return {"domain": existing, "source": "sap",
+                "validated_by": proof["matched_by"] or "sap",
+                "proved_stored_domain": bool(proof["matched_by"]),
+                "signals": proof["signals"],
                 "candidates": [], "bundle": bundle, "status": "ok"}
 
     tried: list[dict] = []
@@ -89,7 +152,7 @@ def _resolve_website(comp: dict, allow_search: bool) -> dict:
             result = validate.validate_site(comp, dom, (bundle or {}).get("text"))
             tried.append({**cand, "validated": result["ok"], "matched_by": result["matched_by"],
                           "signals": result["signals"], "reachable": bundle is not None})
-            if result["ok"]:
+            if result["ok"] and _accepts(cand["origin"], result["matched_by"]):
                 return {"domain": dom, "source": cand["origin"], "validated_by": result["matched_by"],
                         "candidates": tried, "bundle": bundle, "status": "ok"}
         return None
@@ -122,22 +185,16 @@ def _resolve_website(comp: dict, allow_search: bool) -> dict:
         if hit:
             return hit
 
-    # Only PLAUSIBLY-RELATED failures deserve a human's time. A candidate that
-    # came from the company's own data (its email / its SAP typo) is always
-    # review-worthy; a search hit is only review-worthy when at least a name
-    # signal connects it to the company. Unrelated portals a search coughed up
-    # (all signals false) are recorded for the audit trail but do NOT put the
-    # company into the review queue — that's an honest "no website found".
-    def _review_worthy(t: dict) -> bool:
-        if not t.get("domain"):
-            return False
-        if t.get("origin") in ("email_domain", "sap_salvaged"):
-            return True
-        sig = t.get("signals") or {}
-        return bool(sig.get("name_in_text") or sig.get("name_in_domain"))
-
-    status = "needs_review" if any(_review_worthy(t) for t in tried) else "no_website_found"
+    # The SAME predicate decides the status and picks what the human is shown.
+    # They used to be two rules: _review_worthy queued the company (name appears
+    # on the page or in the domain), while the picker only offered candidates
+    # carrying a match signal. Seven of nine Spanish review items therefore
+    # landed in the queue with an empty Kandidat column — a decision with nothing
+    # to decide.
+    review = next((t for t in tried if _review_worthy(t)), None)
+    status = "needs_review" if review else "no_website_found"
     return {"domain": None, "source": None, "validated_by": None,
+            "review_candidate": (review or {}).get("domain"),
             "candidates": tried, "bundle": None, "status": status}
 
 
@@ -282,8 +339,23 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
         # 'www.x .de') may be REPAIRED, but only by a domain that passed the
         # deterministic validation gate. A working SAP value is never replaced.
         raw = (c.website_domain or "").strip()
-        _hard_proof = site["validated_by"] in ("phone", "plz_street", "plz_name",
-                                               "domain_plus_name", "manual")
+        # Same four signals identity/find_website.PROVEN accepts, and the same
+        # three ONBOARDING promises a colleague ("eigene Telefonnummer,
+        # PLZ+Straße, PLZ+Name"). `domain_plus_name` used to be in here, so this
+        # path auto-accepted evidence the identity finder deliberately sends to a
+        # human — two standards for one question. It writes a domain whose only
+        # claim is a shared token: measured on the first 20 Spanish companies it
+        # gave "Montajes Portico Balear SL" -> portsdebalears.com and "+ PLUS" ->
+        # pressingplus.com, both wrong, both then fully enriched.
+        _hard_proof = site["validated_by"] in ("domain_in_name", "phone",
+                                               "plz_street", "plz_name", "manual")
+        # A weak signal still counts when the CANDIDATE ITSELF came from our own
+        # master data: the company's own e-mail sitting on that domain is
+        # corroboration a search result does not have. So email_domain +
+        # domain_plus_name is accepted (aluminioscerratosa.com for "Aluminios
+        # Cerratosa"), serper + domain_plus_name is not (portsdebalears.com for
+        # "Montajes Portico Balear SL"). The signal and its origin are two
+        # different questions and only judging both separates those two cases.
         if site["domain"] and (not raw or (normalize_domain(raw) is None and _hard_proof)):
             note = (f"repaired malformed value {raw!r}, validated by {site['validated_by']}"
                     if raw else f"validated by {site['validated_by']}")
@@ -384,6 +456,52 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
             if facts.get("founded_year") and not c.founded_year:
                 c.founded_year = facts["founded_year"]
         c.enrichment_status = status
+
+        # ---- the identity verdict this run just reached --------------------
+        # It was computed (validate_site ran on every candidate) and then thrown
+        # away: only CompanyEnrichment.website_validated_by kept it, while the
+        # Company identity columns stayed empty. Two consequences, both measured
+        # on the first 20 Spanish companies:
+        #
+        #   * the Pruefen queue selects on Company.identity_status == 'needs_review',
+        #     so seven companies with website suggestions were invisible to the
+        #     human who has to decide them;
+        #   * six companies carried a domain and a full profile with no verdict at
+        #     all — the state dataquality.clear_unbacked_enrichment exists to clean
+        #     up, arriving fresh from the pipeline that should prevent it.
+        #
+        # A human's decision always outranks this (accept_candidate writes
+        # 'manual'), and a verdict is never downgraded from verified.
+        if c.identity_matched_by != "manual" and (row.website_source != "manual"):
+            considered = site.get("candidates") or []
+            # Chosen by _resolve_website with the same predicate that set the
+            # status, so a queued company always has something to look at.
+            # Picking it separately offered "Montajes Portico Balear SL" ->
+            # elpais.com and "Carpintería Guerrero" -> qdq.com — search results
+            # that matched nothing, dressed up as suggestions. A queue full of
+            # newspapers teaches the reader to click Nein without looking.
+            review_domain = site.get("review_candidate")
+            # A stored domain counts as proven only when the page itself proved it
+            # this run (`proved_stored_domain`) — "it was already in the column"
+            # is provenance, not evidence, and must stay 'unverified'.
+            _proved = (site.get("proved_stored_domain") if site["source"] == "sap"
+                       else bool(site["validated_by"]))
+            if site["domain"] and _proved:
+                c.identity_status = "verified"
+                c.identity_matched_by = site["validated_by"]
+                c.website_source = site["source"] or c.website_source
+                c.identity_evidence = {"searched": bool(considered),
+                                       "candidates": considered,
+                                       "accepted": site["domain"],
+                                       "signals": site.get("signals"),
+                                       "review_candidate": None}
+                c.identity_checked_at = dt.datetime.utcnow()
+            elif status == "needs_review" and c.identity_status != "verified":
+                c.identity_status = "needs_review"
+                c.identity_evidence = {"searched": True, "candidates": considered,
+                                       "accepted": None,
+                                       "review_candidate": review_domain}
+                c.identity_checked_at = dt.datetime.utcnow()
         # A human's decision outranks any automatic label: once a website was
         # approved in the review queue, a later automatic pass (which now simply
         # sees "website present" and would relabel it 'sap') must not overwrite

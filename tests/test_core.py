@@ -3788,3 +3788,79 @@ def test_dossier_objekte_come_from_all_vcs_not_the_last_ten(temp_db):
     assert len(d["projekte"]) <= 20            # die Liste selbst bleibt gedeckelt
     assert d["rollen"]["kaeufer"]["vcs"] == 30
     assert len(d["rollen"]["kaeufer"]["recent"]) == 10
+
+
+# ---------------------------------------------------------------------------
+# Enrichment identity gate, 2026-08-11. Every one of these was found by running
+# 20 Spanish companies through the pipeline and reading what it wrote.
+# ---------------------------------------------------------------------------
+
+def test_a_shared_token_is_not_proof_unless_the_candidate_is_ours():
+    """`domain_plus_name` means only that the domain shares a word with the
+    company name. identity/find_website.PROVEN deliberately routes that to a
+    human and ONBOARDING promises the same three hard signals — but
+    enrich/service listed it as proof and wrote it straight into master data.
+
+    Measured on the first 20 Spanish companies: "Montajes Portico Balear SL" ->
+    portsdebalears.com and "+ PLUS" -> pressingplus.com, both wrong, both then
+    enriched with a stranger's facts.
+
+    The origin is the other half of the question: the company's own e-mail on
+    that domain is corroboration a search result does not have."""
+    from adwatch.enrich.service import _accepts
+
+    assert not _accepts("serper", "domain_plus_name"), "eine geteilte Silbe ist kein Beweis"
+    assert _accepts("email_domain", "domain_plus_name"), "die eigene Mail-Domain schon"
+    assert _accepts("sap", "domain_plus_name")
+    for hard in ("phone", "plz_street", "plz_name", "domain_in_name"):
+        assert _accepts("serper", hard), f"{hard} ist ein harter Beweis"
+    assert not _accepts("serper", None)
+    assert not _accepts("email_domain", None), "ohne jedes Signal zaehlt auch die Herkunft nicht"
+
+
+def test_spanish_directories_never_reach_the_review_queue():
+    """The directory blocklist was built during German testing — 60+ entries, all
+    German portals — so the Spanish equivalents ranked straight through it. A
+    directory contains every company name by definition, which is exactly the
+    signal _review_worthy trusts, so they clogged the queue instead of failing
+    closed: "Carpintería Guerrero S.L." was offered qdq.com and "Montajes Portico
+    Balear SL" got elpais.com.
+
+    Substring matching cuts both ways, so the real company sites are asserted
+    too — `elpaisajista.es` must survive `elpais.`."""
+    from adwatch.enrich.website_finder import _is_directory
+    from adwatch.enrich.domains import is_usable_company_domain
+
+    for junk in ("qdq.com", "paginasamarillas.es", "einforma.com", "axesor.es",
+                 "eleconomista.es", "elpais.com", "idealista.com", "expansion.com"):
+        assert _is_directory(junk), f"{junk} ist ein Verzeichnis/Portal"
+    for freemail in ("gmail.co.uk", "hotmail.es", "terra.es", "wanadoo.es"):
+        assert not is_usable_company_domain(freemail), f"{freemail} ist Freemail"
+
+    # and the ones that merely LOOK like an entry above
+    for real in ("elpaisajista.es", "expansion-metallbau.de", "alurei.com",
+                 "dorflex.net", "aluminioscerratosa.com"):
+        assert _is_directory(real) is False, f"{real} ist eine echte Firmenseite"
+        assert is_usable_company_domain(real)
+
+
+def test_a_queued_company_always_has_something_to_decide(temp_db):
+    """Two rules had drifted apart: _review_worthy put a company in the queue
+    when its name appeared on the page, while the candidate was picked only from
+    entries carrying a match signal. Seven of nine Spanish review items therefore
+    reached the Pruefen tab with an empty Kandidat column — a decision with
+    nothing to decide. One predicate now does both jobs."""
+    from adwatch.enrich import service
+
+    tried = [
+        {"domain": "zufall.example", "origin": "serper", "signals": {}},
+        {"domain": "treffer.example", "origin": "serper",
+         "signals": {"name_in_domain": True}},
+    ]
+    worthy = [t for t in tried if service._review_worthy(t)]
+    assert [t["domain"] for t in worthy] == ["treffer.example"], \
+        "nur der Kandidat mit Signal ist eine Entscheidung wert"
+
+    # a candidate that matched nothing must not put the company in the queue
+    assert not any(service._review_worthy(t) for t in
+                   [{"domain": "zeitung.example", "origin": "serper", "signals": {}}])

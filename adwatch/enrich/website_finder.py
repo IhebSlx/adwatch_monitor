@@ -41,6 +41,24 @@ _DIRECTORY_HINTS = (
     "werliefertwas", "kompass.com", "herold.", "infobel", "yellowmap", "cybo.",
     "ortsdienst", "unternehmen24", "firmenkontor", "bizim.", "dnb.com",
     "wogibtes", "branchen-info", "meinprospekt", "kaufda",
+    # --- Spain / Iberia -----------------------------------------------------
+    # This list was built during GERMAN testing and every entry above is a German
+    # portal, so the Spanish equivalents ranked straight through it. Measured on
+    # the first 20 Spanish companies: "Carpintería Guerrero S.L." was offered
+    # qdq.com and "Montajes Portico Balear SL" got elpais.com — a directory
+    # contains every company name by definition, which is exactly the signal
+    # _review_worthy trusts, so these clog the queue rather than fail closed.
+    "qdq.", "paginasamarillas", "paginas-amarillas", "einforma", "axesor",
+    "empresia", "infocif", "iberinform", "datosempresas", "ranking-empresas",
+    "guiaempresas", "expansion.com", "cnae.", "borme.", "infoempresa",
+    "universidadempresa", "eleconomista", "elpais.", "elmundo.", "abc.es",
+    "lavanguardia", "20minutos", "elconfidencial", "elperiodico",
+    # property portals: these carry construction firms as advertisers, so a
+    # fabricator's name genuinely appears on them
+    "idealista.", "fotocasa.", "habitaclia", "milanuncios", "pisos.com",
+    # --- other markets we already hold rows for -----------------------------
+    "pagesjaunes", "societe.com", "verif.com", "paginegialle", "ufficiocamerale",
+    "kvk.nl", "telefoonboek", "goudengids", "companyweb", "trendstop",
 )
 
 
