@@ -152,12 +152,17 @@ class CustomerExportIn(BaseModel):
 class JobEstimateIn(BaseModel):
     company_ids: list[int]
     sources: list[str] = ["meta"]
+    # re-fetch companies already fetched this week (they are skipped by
+    # default — see jobs._fetched_this_week; 51% of all fetches ever made
+    # were same-week repeats)
+    refetch: bool = False
 
 
 class JobCreateIn(BaseModel):
     company_ids: list[int]
     sources: list[str] = ["meta"]
     label: str | None = None
+    refetch: bool = False
 
 
 class IdentityJobIn(BaseModel):
@@ -857,7 +862,8 @@ def list_customers_route(
 @app.post("/api/fetch-jobs/estimate")
 def estimate_job_route(payload: JobEstimateIn):
     try:
-        return jobs.estimate(payload.company_ids, payload.sources)
+        return jobs.estimate(payload.company_ids, payload.sources,
+                             refetch=getattr(payload, "refetch", False))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -869,7 +875,8 @@ def create_job_route(payload: JobCreateIn):
     if "google" in payload.sources and not config.GOOGLE_ADS_ACTOR_ID:
         raise HTTPException(400, "Google Ads fetching needs GOOGLE_ADS_ACTOR_ID in .env")
     try:
-        job = jobs.create_job(payload.company_ids, payload.sources, payload.label)
+        job = jobs.create_job(payload.company_ids, payload.sources, payload.label,
+                              refetch=getattr(payload, "refetch", False))
     except ValueError as e:
         raise HTTPException(400, str(e))
     try:

@@ -26,7 +26,7 @@ from sqlalchemy import select
 
 from . import config
 from .db import SessionLocal
-from .models import Company, FetchJob, WeeklyCompanyMetric
+from .models import CollectionRun, Company, FetchJob, WeeklyCompanyMetric
 
 logger = logging.getLogger("adwatch.jobs")
 
@@ -124,7 +124,37 @@ def _google_fetchable_ids(s, company_ids: list[int]) -> set[int]:
         (Company.identity_status.is_(None)) | (Company.identity_status != "conflict"))))
 
 
-def _plan_units(s, company_ids: list[int], sources: list[str]) -> list[tuple[int, str]]:
+def _fetched_this_week(s, company_ids: list[int]) -> set[tuple[int, str]]:
+    """(company_id, source) pairs already fetched SUCCESSFULLY in the current
+    ad week — the ones a re-run would pay Apify for a second time.
+
+    Measured 2026-08-11 over the 614 runs on record: only 300 distinct
+    company+source pairs, so **51% of every ad fetch ever made was a repeat**.
+    One pair was fetched ten times. The worst of it was a single morning
+    (2026-08-06) where seven overlapping Spanish runs — "Status-Reparatur",
+    "Lock-Retry", "init_db + logger fix", "Lauf 3", "Lauf 4" — each restarted
+    from the top and re-fetched what the previous attempt had already bought.
+
+    The metrics themselves were never duplicated: WeeklyCompanyMetric is keyed
+    on (company, source, week_start) and a re-fetch overwrites the row. That is
+    exactly why this was invisible — the DATA looked fine, only the invoice grew.
+
+    A failed run does NOT count as fetched: `status` is 'ok' or 'no_active_ads'
+    for a fetch that actually completed, and 'no_active_ads' is a real answer
+    (we looked, there was nothing) worth as much as a hit.
+    """
+    from .collect.pipeline import monday_of
+    week = monday_of(dt.date.today())
+    rows = s.execute(
+        select(CollectionRun.company_id, CollectionRun.source)
+        .where(CollectionRun.company_id.in_(company_ids),
+               CollectionRun.week_start == week,
+               CollectionRun.status.in_(["ok", "no_active_ads"]))).all()
+    return {(cid, src) for cid, src in rows}
+
+
+def _plan_units(s, company_ids: list[int], sources: list[str],
+                refetch: bool = False) -> list[tuple[int, str]]:
     """The ordered (company, source) work units for a fetch job, routed per
     company by what is actually fetchable:
       - a Meta unit only where a Meta page has been found,
@@ -132,20 +162,29 @@ def _plan_units(s, company_ids: list[int], sources: list[str]) -> list[tuple[int
       - a company that qualifies for NEITHER contributes no units at all
         (it drops out of the job — nothing is fetched for it).
     Order is deterministic — company_ids order, Meta before Google — so a
-    resumed job's `completed` cursor still lines up with the same unit list."""
+    resumed job's `completed` cursor still lines up with the same unit list.
+
+    A pair already fetched successfully THIS WEEK is skipped: the ad week is the
+    unit of freshness everywhere else in this app (WeeklyCompanyMetric is keyed on
+    it), so fetching twice inside one week buys the same row twice. Pass
+    `refetch=True` to override — the one case that needs it is a deliberate
+    same-week refresh after a company's page or website changed.
+    """
     want_meta, want_google = "meta" in sources, "google" in sources
     meta_ok = _meta_fetchable_ids(s, company_ids) if want_meta else set()
     google_ok = _google_fetchable_ids(s, company_ids) if want_google else set()
+    fresh = set() if refetch else _fetched_this_week(s, company_ids)
     units: list[tuple[int, str]] = []
     for cid in company_ids:
-        if want_meta and cid in meta_ok:
+        if want_meta and cid in meta_ok and (cid, "meta") not in fresh:
             units.append((cid, "meta"))
-        if want_google and cid in google_ok:
+        if want_google and cid in google_ok and (cid, "google") not in fresh:
             units.append((cid, "google"))
     return units
 
 
-def estimate(company_ids: list[int], sources: list[str]) -> dict:
+def estimate(company_ids: list[int], sources: list[str],
+             refetch: bool = False) -> dict:
     """Pre-flight numbers shown before a job is created — count, rough time,
     rough cost range. Uses each company's own last known ad count per source
     when available, else the dataset's average for that source. Only the units
@@ -159,7 +198,13 @@ def estimate(company_ids: list[int], sources: list[str]) -> dict:
                          .where(WeeklyCompanyMetric.company_id.in_(company_ids))).all()
         meta_fetchable = _meta_fetchable_ids(s, company_ids) if "meta" in sources else set()
         google_fetchable = _google_fetchable_ids(s, company_ids) if "google" in sources else set()
-        units = _plan_units(s, company_ids, sources)
+        units = _plan_units(s, company_ids, sources, refetch=refetch)
+        # what the freshness guard is keeping off the invoice, so the pre-flight
+        # figure explains itself instead of just looking smaller than expected
+        fresh = _fetched_this_week(s, company_ids)
+        fresh_skipped = sum(1 for (cid, src) in fresh if src in sources
+                            and (cid in meta_fetchable if src == "meta"
+                                 else cid in google_fetchable))
     latest: dict[tuple[int, str], tuple[dt.date, int]] = {}
     for cid, src, total, week in rows:
         key = (cid, src)
@@ -185,6 +230,9 @@ def estimate(company_ids: list[int], sources: list[str]) -> dict:
         "meta_skipped": (len(company_ids) - len(meta_fetchable)) if "meta" in sources else None,
         "google_fetchable": len(google_fetchable) if "google" in sources else None,
         "google_skipped": (len(company_ids) - len(google_fetchable)) if "google" in sources else None,
+        # already fetched this week — excluded unless refetch=True
+        "fresh_skipped": 0 if refetch else fresh_skipped,
+        "refetch": refetch,
         "est_seconds_low": round(est_seconds * 0.7),
         "est_seconds_high": round(est_seconds * 1.3),
         "est_cost_usd_low": round(cost_low, 2),
@@ -210,7 +258,7 @@ def _job_to_dict(j: FetchJob) -> dict:
 
 
 def create_job(company_ids: list[int], sources: list[str], label: str | None = None,
-               kind: str = "fetch") -> dict:
+               kind: str = "fetch", refetch: bool = False) -> dict:
     if not company_ids:
         raise ValueError("No companies selected")
     with SessionLocal() as s:
@@ -232,8 +280,16 @@ def create_job(company_ids: list[int], sources: list[str], label: str | None = N
                 raise ValueError("sources must be a non-empty list of 'meta'/'google'")
             # total counts only units that will actually run (Meta needs a page,
             # Google needs a website) — never the raw company × source product.
-            total = len(_plan_units(s, company_ids, sources))
+            total = len(_plan_units(s, company_ids, sources, refetch=refetch))
             if total == 0:
+                # distinguish "cannot fetch" from "already bought this week" —
+                # the second is good news and needs a different answer
+                fresh = _fetched_this_week(s, company_ids)
+                if fresh and not refetch:
+                    raise ValueError(
+                        f"Nothing to fetch — alle {len(fresh)} abrufbaren Einheiten wurden "
+                        "diese Woche schon abgerufen. Erneut abrufen kostet dasselbe noch "
+                        "einmal (refetch=true erzwingt es).")
                 raise ValueError("Nothing to fetch — none of the selected companies has a "
                                  "fetchable source (a Meta page for Meta, a website for Google).")
         job = FetchJob(sources=sources, company_ids=company_ids, label=label, kind=kind,

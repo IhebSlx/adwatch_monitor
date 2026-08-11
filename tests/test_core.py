@@ -3872,3 +3872,95 @@ def test_a_queued_company_always_has_something_to_decide(temp_db):
     # a candidate that matched nothing must not put the company in the queue
     assert not any(service._review_worthy(t) for t in
                    [{"domain": "zeitung.example", "origin": "serper", "signals": {}}])
+
+
+def test_a_company_is_not_fetched_twice_in_one_week(temp_db):
+    """Measured 2026-08-11 over every ad fetch on record: 614 runs for only 300
+    distinct company+source pairs, so 51% of all Apify spend bought a row that
+    had already been bought. One pair was fetched ten times. The worst of it was
+    a single morning of seven overlapping Spanish runs ("Status-Reparatur",
+    "Lock-Retry", "Lauf 3", "Lauf 4"), each restarting from the top.
+
+    It stayed invisible because the DATA never duplicated: WeeklyCompanyMetric is
+    keyed on (company, source, week_start), so a re-fetch overwrote the row.
+    Only the invoice grew.
+
+    The ad week is the unit of freshness, and a successful run inside it means
+    paid-for. A FAILED run does not count — that one deserves a retry."""
+    import datetime as dt
+    from adwatch import jobs
+    from adwatch.collect.pipeline import monday_of
+    from adwatch.models import CollectionRun, Company, CompanyPage
+    from sqlalchemy import select
+
+    week = monday_of(dt.date.today())
+    s = temp_db.SessionLocal()
+    for i in range(4):
+        s.add(Company(name=f"Haendler {i}", website_domain=f"h{i}.example"))
+    s.commit()
+    ids = list(s.scalars(select(Company.id).order_by(Company.id)))
+    # all four have a Meta page, so all four are meta-fetchable
+    for cid in ids:
+        s.add(CompanyPage(company_id=cid, source="meta", page_id=f"p{cid}", active=True))
+    # #0 fetched fine this week, #1 came back empty (also a real answer),
+    # #2 errored, #3 was fetched but LAST week
+    s.add(CollectionRun(company_id=ids[0], source="meta", week_start=week, status="ok"))
+    s.add(CollectionRun(company_id=ids[1], source="meta", week_start=week,
+                        status="no_active_ads"))
+    s.add(CollectionRun(company_id=ids[2], source="meta", week_start=week, status="error"))
+    s.add(CollectionRun(company_id=ids[3], source="meta",
+                        week_start=week - dt.timedelta(days=7), status="ok"))
+    s.commit()
+    s.close()
+
+    s = temp_db.SessionLocal()
+    fresh = jobs._fetched_this_week(s, ids)
+    assert (ids[0], "meta") in fresh, "erfolgreich abgerufen = bezahlt"
+    assert (ids[1], "meta") in fresh, "'keine Anzeigen' ist auch eine Antwort"
+    assert (ids[2], "meta") not in fresh, "ein Fehlversuch darf erneut laufen"
+    assert (ids[3], "meta") not in fresh, "letzte Woche ist nicht diese Woche"
+
+    units = jobs._plan_units(s, ids, ["meta"])
+    assert sorted(u[0] for u in units) == sorted([ids[2], ids[3]])
+
+    # the override still exists for a deliberate same-week refresh
+    forced = jobs._plan_units(s, ids, ["meta"], refetch=True)
+    assert len(forced) == 4
+    s.close()
+
+    # and the pre-flight number explains the difference instead of just shrinking
+    est = jobs.estimate(ids, ["meta"])
+    assert est["total_units"] == 2
+    assert est["fresh_skipped"] == 2
+    assert jobs.estimate(ids, ["meta"], refetch=True)["total_units"] == 4
+
+
+def test_all_fetched_this_week_says_so_instead_of_nothing_to_fetch(temp_db):
+    """"Nothing to fetch" has two very different causes: nobody is fetchable, or
+    everybody was already bought this week. The second is good news and needs to
+    read as such, or the next person just forces a refetch to make the error go
+    away."""
+    import datetime as dt
+    import pytest
+    from adwatch import jobs
+    from adwatch.collect.pipeline import monday_of
+    from adwatch.models import CollectionRun, Company, CompanyPage
+    from sqlalchemy import select
+
+    week = monday_of(dt.date.today())
+    s = temp_db.SessionLocal()
+    s.add(Company(name="Haendler", website_domain="h.example"))
+    s.commit()
+    cid = s.scalar(select(Company.id))
+    s.add(CompanyPage(company_id=cid, source="meta", page_id="p1", active=True))
+    s.add(CollectionRun(company_id=cid, source="meta", week_start=week, status="ok"))
+    s.commit()
+    s.close()
+
+    with pytest.raises(ValueError) as e:
+        jobs.create_job([cid], ["meta"])
+    assert "diese Woche schon abgerufen" in str(e.value)
+
+    # forcing it works and creates a real job
+    job = jobs.create_job([cid], ["meta"], refetch=True)
+    assert job["total"] == 1
