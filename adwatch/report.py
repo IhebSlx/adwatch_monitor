@@ -446,7 +446,8 @@ def _enrichment_map(company_ids: list[int] | None) -> dict[int, dict]:
     return out
 
 
-def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int = 80) -> list:
+def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int = 80,
+                    links: dict | None = None) -> list:
     """FIRMENPROFILE — one compact block per enriched company: what the website
     says (belegt), then the AI assessment (clearly marked as an estimate), then
     the hard fields and any ad activity.
@@ -485,7 +486,10 @@ def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int =
         e = enr[d["company_id"]]
         head = _esc(d["company"])
         if e.get("website"):
-            head += f' &nbsp;·&nbsp; {_link(_web_url(e["website"]), _esc(e["website"]))}'
+            head += f' &nbsp;·&nbsp; {_link(_esc(e["website"]), _web_url(e["website"]))}'
+        cta = _ads_cta((links or {}).get(d["company_id"]))
+        if cta:
+            head += " &nbsp;·&nbsp; " + cta
         story.append(Paragraph(f"<b>{head}</b>", nm))
 
         if e.get("description"):
@@ -620,6 +624,9 @@ def _qualification_story(filters: dict | None, styles) -> list:
          and c.decision_role != "vergibt Aufträge"),
         key=lambda c: (c.name or "").lower())
 
+    shown = (betriebe_hoch[:40] + (arch_top + arch_next)[:40] + buyers[:25])
+    qlinks = _page_link_map([c.id for c in shown])
+
     n = len(pop)
     enriched = sum(1 for c in pop if c.enrichment_status == "enriched")
     with_site = sum(1 for c in pop if c.website_domain)
@@ -689,11 +696,16 @@ def _qualification_story(filters: dict | None, styles) -> list:
                                      ("Showroom", c.has_showroom)) if ok]
             if c.partner_of:
                 feats.append("Partner: " + ", ".join(c.partner_of[:3]))
+            merk = _esc(" · ".join(feats)) or "—"
+            cta = _ads_cta(qlinks.get(c.id))
+            if cta:
+                merk += "<br/>" + cta
             rows.append([
-                Paragraph(_esc(c.name), cell), Paragraph(_esc(c.city or "—"), cell),
+                Paragraph(_link(_esc(c.name), _web_url(c.website_domain)), cell),
+                Paragraph(_esc(c.city or "—"), cell),
                 Paragraph("<b>" + _esc(", ".join(_has_direct(c))) + "</b>"
                           if _has_direct(c) else "—", cell),
-                Paragraph(_esc(" · ".join(feats)) or "—", cell)])
+                Paragraph(merk, cell)])
         story.append(_rowtable(rows, [52 * mm, 30 * mm, 40 * mm, 56 * mm]))
         if len(betriebe_hoch) > 40:
             story.append(Paragraph(f"… {len(betriebe_hoch) - 40} weitere im Explorer "
@@ -716,11 +728,17 @@ def _qualification_story(filters: dict | None, styles) -> list:
                 prof.append(", ".join(c.project_focus[:3]))
             if c.reference_scale:
                 prof.append(str(c.reference_scale)[:60])
+            cta = _ads_cta(qlinks.get(c.id))
+            if cta:
+                prof.append(cta)
             rows.append([
-                Paragraph(_esc(c.name), cell), Paragraph(_esc(c.city or "—"), cell),
+                Paragraph(_link(_esc(c.name), _web_url(c.website_domain)), cell),
+                Paragraph(_esc(c.city or "—"), cell),
                 Paragraph("<b>vergibt Aufträge</b>" if c in arch_top
                           else _esc(c.decision_role or "unklar"), cell),
-                Paragraph(_esc(" · ".join(prof)) or "—", cell)])
+                # prof entries are escaped individually; the CTA is markup
+                Paragraph(" · ".join([_esc(x) for x in prof[:-1]] + [prof[-1]])
+                          if cta and prof else (_esc(" · ".join(prof)) or "—"), cell)])
         story.append(_rowtable(rows, [52 * mm, 28 * mm, 30 * mm, 68 * mm]))
         if len(arch_top) + len(arch_next) > 40:
             story.append(Paragraph(f"… {len(arch_top) + len(arch_next) - 40} weitere im "
@@ -740,7 +758,8 @@ def _qualification_story(filters: dict | None, styles) -> list:
         for c in buyers[:25]:
             cnt, total, last, _biggest = buys[c.id]
             rows.append([
-                Paragraph(_esc(c.name), cell), Paragraph(_esc(c.city or "—"), cell),
+                Paragraph(_link(_esc(c.name), _web_url(c.website_domain)), cell),
+                Paragraph(_esc(c.city or "—"), cell),
                 Paragraph(_esc(c.segment or "—"), cell),
                 Paragraph(str(cnt), cell), Paragraph(_eur(total), cell),
                 Paragraph(_de_date(last) if last else "—", cell)])
@@ -827,17 +846,21 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     data = sorted(data, key=_sortkey)
 
     # ---- overview table ----
+    # ONLY companies whose ads were actually fetched. Every un-fetched company
+    # used to get its own row of dashes reading "keine Daten" — on a market like
+    # Spain that was 1.540 rows of nothing across ~40 pages, and the reader gave
+    # up before reaching the substance. The un-fetched majority is one honest
+    # summary line instead. Wording matters: they are "nie abgerufen", never
+    # "inaktiv" — unknown must not look like inactive (the divergence rule).
     story.append(Paragraph("Übersicht", h2))
+    fetched = [d for d in data if d.get("has_data")]
+    unfetched = len(data) - len(fetched)
     header = ["Firma", "Aktive Anz.", "Personal", "Verkauf", "Marke", "Gesch. Ausg./Wo."]
     rows = [[Paragraph(header[0], cellh)] + [Paragraph(h, cellhr) for h in header[1:]]]
-    for d in data:
+    for d in fetched:
         cats = d.get("ads_by_category") or {}
-        name = Paragraph(_esc(d["company"]), cell)
-        if not d.get("has_data"):
-            dash = Paragraph("—", cellr)
-            rows.append([name, dash, dash, dash, dash,
-                         Paragraph('<font color="#647380">keine Daten</font>', cellr)])
-            continue
+        # the name is the link: Ad Library when a page is resolved, else website
+        name = Paragraph(_company_link(_esc(d["company"]), links.get(d["company_id"])), cell)
         act = d["total_active_ads"] or 0
         active_txt = (f"<b>{act}</b>" + _delta_frag(d.get("delta_ads"))) if act else "0"
         spend = "0" if act == 0 else f"{_eur(d['spend_low'])}–{_eur(d['spend_high'])}"
@@ -849,26 +872,39 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
             Paragraph(str(cats.get("brand_awareness", 0)), cellr),
             Paragraph(_esc(spend), cellr),
         ])
+    if not fetched:
+        story.append(Paragraph(
+            f"Für keine der {len(data):,} Firmen im Bericht wurden bisher Anzeigen "
+            "abgerufen — die Übersicht entfällt. Anzeigen-Daten entstehen erst "
+            "durch einen Abruf (Companies-Tab, Auswahl → Anzeigen abrufen)."
+            .replace(",", "."), body))
+    elif unfetched:
+        story.append(Paragraph(
+            f"{unfetched:,} weitere Firmen im Bericht wurden nie abgerufen und "
+            "stehen deshalb nicht in dieser Tabelle — nicht abgerufen heißt "
+            "unbekannt, nicht inaktiv.".replace(",", "."), note))
+        story.append(Spacer(1, 4))
 
-    table = Table(rows, colWidths=[60 * mm, 25 * mm, 19 * mm, 18 * mm, 16 * mm, 40 * mm], repeatRows=1)
-    style = [
-        ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
-        ("LINEBELOW", (0, 0), (-1, 0), 0, ACCENT),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BG]),
-        ("LINEBELOW", (0, 1), (-1, -1), 0.4, LINE),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("LEFTPADDING", (0, 0), (-1, -1), 7),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-    ]
-    table.setStyle(TableStyle(style))
-    story.append(table)
+    if fetched:
+        table = Table(rows, colWidths=[60 * mm, 25 * mm, 19 * mm, 18 * mm, 16 * mm, 40 * mm], repeatRows=1)
+        style = [
+            ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
+            ("LINEBELOW", (0, 0), (-1, 0), 0, ACCENT),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BG]),
+            ("LINEBELOW", (0, 1), (-1, -1), 0.4, LINE),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ]
+        table.setStyle(TableStyle(style))
+        story.append(table)
 
     # ---- Firmenprofile: the enriched picture per company. Comes BEFORE the ad
     # detail blocks and does not depend on ad data, so a market that has never
     # been fetched still produces a substantive report. ----
-    story += _profiles_story(data, filters, styles)
+    story += _profiles_story(data, filters, styles, links=links)
 
     # ---- detail: only the active advertisers (keeps the report uncluttered) ----
     active_rows = [d for d in data if d.get("has_data") and (d.get("total_active_ads") or 0) > 0]
