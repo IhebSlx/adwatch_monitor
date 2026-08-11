@@ -420,9 +420,28 @@ def _enrichment_map(company_ids: list[int] | None) -> dict[int, dict]:
                 "legal_form": f.get("legal_form"),
                 "service_area": f.get("service_area"),
                 "mentions_solarlux": f.get("mentions_solarlux"),
-                "competitor_brands": f.get("competitor_brands") or [],
+                "competitor_brands": comp.competitor_brands or f.get("competitor_brands") or [],
                 "website": comp.website_domain,
                 "status": enr.status,
+                # Qualification fields, from the two extraction profiles. Read
+                # from the Company columns (the merged, retraction-aware copy)
+                # rather than this run's raw blob — same rule the Explorer uses.
+                # betrieb: does this company already sell what we build?
+                "solarlux_fit": comp.solarlux_fit,
+                "partner_of": comp.partner_of or [],
+                "own_fabrication": comp.own_fabrication,
+                "installs": comp.installs,
+                "has_showroom": comp.has_showroom,
+                # architekt: does this office plan projects where we fit, and
+                # does it decide? (Spain: offices genuinely award contracts)
+                "solarlux_relevance": comp.solarlux_relevance,
+                "decision_role": comp.decision_role,
+                "office_type": comp.office_type,
+                "reference_scale": comp.reference_scale,
+                "project_focus": comp.project_focus or [],
+                "segment": comp.segment,
+                "city": comp.city,
+                "identity_status": comp.identity_status,
             }
     return out
 
@@ -488,6 +507,31 @@ def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int =
         if bits:
             story.append(Paragraph(" &nbsp;·&nbsp; ".join(bits), meta))
 
+        # The qualification line — the fields a colleague actually calls on.
+        # Wording mirrors ONBOARDING: Passung/Fremdmarken for a Betrieb,
+        # Relevanz/Entscheidungsrolle for an Architekturbüro.
+        qual = []
+        if e.get("solarlux_fit"):
+            qual.append(f'<b>Passung: {_esc(e["solarlux_fit"])}</b>')
+        if e.get("own_fabrication") is True:
+            qual.append("eigene Fertigung")
+        if e.get("installs") is True:
+            qual.append("montiert selbst")
+        if e.get("has_showroom") is True:
+            qual.append("Showroom")
+        if e.get("partner_of"):
+            qual.append("Vertragspartner von <b>" + _esc(", ".join(e["partner_of"][:4])) + "</b>")
+        if e.get("solarlux_relevance"):
+            qual.append(f'<b>Relevanz: {_esc(e["solarlux_relevance"])}</b>')
+        if e.get("decision_role"):
+            qual.append(_esc(e["decision_role"]))
+        if e.get("office_type"):
+            qual.append(_esc(e["office_type"]))
+        if e.get("reference_scale"):
+            qual.append(_esc(str(e["reference_scale"])[:70]))
+        if qual:
+            story.append(Paragraph(" &nbsp;·&nbsp; ".join(qual), meta))
+
         brands = []
         if e.get("mentions_solarlux") is True:
             brands.append("<b>nennt Solarlux</b>")
@@ -506,6 +550,227 @@ def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int =
         story.append(Paragraph(f"… {len(rows) - limit} weitere angereicherte Firmen nicht "
                                "dargestellt — vollständig im Excel-Export.", note))
     return story
+
+
+def _qualification_story(filters: dict | None, styles) -> list:
+    """MARKTQUALIFIZIERUNG — the scorecard section: who in this scope should be
+    called first, judged from evidence, not from a model.
+
+    Exists because a market can deserve a report long before it can carry an
+    ICP. Spain today: 21 material buyers against a floor of 30, so a trained
+    ranking would be noise wearing a number — but 397 enriched companies carry
+    Passung, Relevanz, Entscheidungsrolle and the brand evidence, and those
+    ARE rankable by rule. The section is scope-driven and market-agnostic;
+    nothing here names a country (the hard-coded-Spain lesson is in the git
+    log twice).
+
+    Tiering follows ONBOARDING verbatim:
+      Betriebe    Passung 'hoch' first; within that, carrying a DIRECT category
+                  brand (Sunflex, Vitrocsa, ...) outranks everything — that
+                  company demonstrably sells our category today, and the brand
+                  names who we would displace.
+      Architekten Relevanz 'hoch' + 'vergibt Aufträge' first — in Spain the
+                  office genuinely awards the contract.
+    Buyers on record are listed as the REFERENCE set, never mixed into the
+    prospect tiers.
+    """
+    from sqlalchemy import select as _select
+
+    from . import scope as _scope
+    from .db import SessionLocal as _S
+    from .enrich.extract import BRANDS_DIRECT
+    from .models import Company as _C, CrmOrderEvent as _O
+
+    with _S() as s:
+        stmt = _scope.apply(_select(_C)).where(_C.is_intercompany.is_(False))
+        ids = _filtered_company_ids(filters)
+        if ids is not None:
+            stmt = stmt.where(_C.id.in_(ids))
+        pop = list(s.scalars(stmt))
+        buys: dict[int, tuple[int, float, dt.date | None, float]] = {}
+        if pop:
+            pids = [c.id for c in pop]
+            for cid, n, total, last, biggest in s.execute(
+                    _select(_O.company_id, _sql_count(_O.id),
+                            _sql_sum(_O.amount), _sql_max(_O.order_date),
+                            _sql_max(_O.amount))
+                    .where(_O.company_id.in_(pids)).group_by(_O.company_id)):
+                buys[cid] = (n, float(total or 0), last, float(biggest or 0))
+    if not pop:
+        return []
+
+    direct = {b.lower() for b in BRANDS_DIRECT}
+
+    def _has_direct(c) -> list[str]:
+        return [b for b in (c.competitor_brands or []) if b.lower() in direct]
+
+    # ---- tiers ---------------------------------------------------------------
+    buyers = sorted((c for c in pop if c.id in buys),
+                    key=lambda c: -buys[c.id][1])
+    prospects = [c for c in pop if c.id not in buys]
+    betriebe_hoch = sorted(
+        (c for c in prospects if c.solarlux_fit == "hoch"),
+        key=lambda c: (not _has_direct(c), (c.name or "").lower()))
+    arch_top = sorted(
+        (c for c in prospects if c.solarlux_relevance == "hoch"
+         and c.decision_role == "vergibt Aufträge"),
+        key=lambda c: (c.name or "").lower())
+    arch_next = sorted(
+        (c for c in prospects if c.solarlux_relevance == "hoch"
+         and c.decision_role != "vergibt Aufträge"),
+        key=lambda c: (c.name or "").lower())
+
+    n = len(pop)
+    enriched = sum(1 for c in pop if c.enrichment_status == "enriched")
+    with_site = sum(1 for c in pop if c.website_domain)
+    verified = sum(1 for c in pop if c.identity_status == "verified")
+    material = sum(1 for (_c, _t, _l, biggest) in buys.values() if biggest >= 2000)
+
+    h2 = ParagraphStyle("qh2", parent=styles["Heading2"], textColor=INK,
+                        fontSize=13, spaceBefore=16, spaceAfter=4)
+    h3 = ParagraphStyle("qh3", parent=styles["Normal"], textColor=INK,
+                        fontSize=10.5, leading=14, spaceBefore=10, spaceAfter=2)
+    body = ParagraphStyle("qbody", parent=styles["Normal"], textColor=INK,
+                          fontSize=9, leading=13)
+    note = ParagraphStyle("qnote", parent=styles["Normal"], textColor=MUTED,
+                          fontSize=7.5, leading=11, spaceBefore=2)
+    cell = ParagraphStyle("qcell", parent=styles["Normal"], textColor=INK,
+                          fontSize=8.5, leading=12)
+
+    story: list = [
+        Paragraph("Marktqualifizierung", h2),
+        Paragraph(
+            f"{n:,} Firmen im Bericht &nbsp;·&nbsp; Website bekannt: {with_site:,} "
+            f"&nbsp;·&nbsp; davon nachweislich die eigene: {verified:,} "
+            f"&nbsp;·&nbsp; angereichert: {enriched:,} &nbsp;·&nbsp; "
+            f"Käufer im Bestand: {len(buys):,} (davon {material:,} mit Auftrag "
+            f"ab 2.000&nbsp;€)".replace(",", "."), body),
+        Paragraph("Die Einstufungen stammen von der jeweils eigenen Website "
+                  "(Extraktion mit Beleg). <b>Passung</b>: verkauft der Betrieb "
+                  "heute schon große Verglasungen? <b>Relevanz</b>: plant das Büro "
+                  "Projekte, in die wir gehören? Firmen ohne Anreicherung fehlen "
+                  "hier — nicht, weil sie unpassend wären, sondern weil noch "
+                  "niemand nachgesehen hat.", note),
+    ]
+
+    def _rowtable(rows, widths):
+        t = Table(rows, colWidths=widths, repeatRows=1)
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BG]),
+            ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        return t
+
+    hdr = ParagraphStyle("qhdr", parent=styles["Normal"], textColor=colors.white,
+                         fontSize=8.5, leading=11)
+
+    # ---- Betriebe ------------------------------------------------------------
+    if betriebe_hoch:
+        story.append(Paragraph(
+            f"Verarbeiter / Handel mit Passung <b>hoch</b> — {len(betriebe_hoch)} "
+            "Firmen, noch ohne Kauf", h3))
+        story.append(Paragraph(
+            "Reihenfolge: Firmen mit einer <b>direkten Kategorie-Marke</b> "
+            "(Sunflex, Vitrocsa, Sky-Frame …) zuerst — sie verkaufen unsere "
+            "Produktkategorie nachweislich heute, die Marke sagt, wen wir "
+            "verdrängen müssten.", note))
+        rows = [[Paragraph("<b>Firma</b>", hdr), Paragraph("<b>Ort</b>", hdr),
+                 Paragraph("<b>Kategorie-Marken</b>", hdr),
+                 Paragraph("<b>Merkmale</b>", hdr)]]
+        for c in betriebe_hoch[:40]:
+            feats = [x for x, ok in (("eigene Fertigung", c.own_fabrication),
+                                     ("montiert", c.installs),
+                                     ("Showroom", c.has_showroom)) if ok]
+            if c.partner_of:
+                feats.append("Partner: " + ", ".join(c.partner_of[:3]))
+            rows.append([
+                Paragraph(_esc(c.name), cell), Paragraph(_esc(c.city or "—"), cell),
+                Paragraph("<b>" + _esc(", ".join(_has_direct(c))) + "</b>"
+                          if _has_direct(c) else "—", cell),
+                Paragraph(_esc(" · ".join(feats)) or "—", cell)])
+        story.append(_rowtable(rows, [52 * mm, 30 * mm, 40 * mm, 56 * mm]))
+        if len(betriebe_hoch) > 40:
+            story.append(Paragraph(f"… {len(betriebe_hoch) - 40} weitere im Explorer "
+                                   "(Filter: Solarlux-Passung = hoch).", note))
+
+    # ---- Architekten ----------------------------------------------------------
+    if arch_top or arch_next:
+        story.append(Paragraph(
+            f"Architektur- und Planungsbüros mit Relevanz <b>hoch</b> — "
+            f"{len(arch_top)} vergeben Aufträge, {len(arch_next)} weitere", h3))
+        story.append(Paragraph(
+            "Ein Büro verkauft nichts — es plant und schreibt aus. <b>vergibt "
+            "Aufträge</b> heißt: Bauleitung / Ausschreibung / schlüsselfertig "
+            "belegt auf der eigenen Website. Diese Büros zuerst.", note))
+        rows = [[Paragraph("<b>Büro</b>", hdr), Paragraph("<b>Ort</b>", hdr),
+                 Paragraph("<b>Rolle</b>", hdr), Paragraph("<b>Profil</b>", hdr)]]
+        for c in (arch_top + arch_next)[:40]:
+            prof = [p for p in (c.office_type,) if p]
+            if c.project_focus:
+                prof.append(", ".join(c.project_focus[:3]))
+            if c.reference_scale:
+                prof.append(str(c.reference_scale)[:60])
+            rows.append([
+                Paragraph(_esc(c.name), cell), Paragraph(_esc(c.city or "—"), cell),
+                Paragraph("<b>vergibt Aufträge</b>" if c in arch_top
+                          else _esc(c.decision_role or "unklar"), cell),
+                Paragraph(_esc(" · ".join(prof)) or "—", cell)])
+        story.append(_rowtable(rows, [52 * mm, 28 * mm, 30 * mm, 68 * mm]))
+        if len(arch_top) + len(arch_next) > 40:
+            story.append(Paragraph(f"… {len(arch_top) + len(arch_next) - 40} weitere im "
+                                   "Explorer (Filter: Solarlux-Relevanz = hoch).", note))
+
+    # ---- the reference set ----------------------------------------------------
+    if buyers:
+        story.append(Paragraph(f"Referenz: Käufer im Bestand — {len(buyers)} Firmen", h3))
+        story.append(Paragraph(
+            "Wer hier bereits kauft, ist der Maßstab für alles oben — und der "
+            "Türöffner: eine Referenz in derselben Stadt schlägt jedes Argument.",
+            note))
+        rows = [[Paragraph("<b>Firma</b>", hdr), Paragraph("<b>Ort</b>", hdr),
+                 Paragraph("<b>Segment</b>", hdr),
+                 Paragraph("<b>Bestellungen</b>", hdr),
+                 Paragraph("<b>Umsatz</b>", hdr), Paragraph("<b>zuletzt</b>", hdr)]]
+        for c in buyers[:25]:
+            cnt, total, last, _biggest = buys[c.id]
+            rows.append([
+                Paragraph(_esc(c.name), cell), Paragraph(_esc(c.city or "—"), cell),
+                Paragraph(_esc(c.segment or "—"), cell),
+                Paragraph(str(cnt), cell), Paragraph(_eur(total), cell),
+                Paragraph(_de_date(last) if last else "—", cell)])
+        story.append(_rowtable(rows, [50 * mm, 28 * mm, 26 * mm, 22 * mm, 26 * mm, 26 * mm]))
+
+    # ---- honesty --------------------------------------------------------------
+    if material < 30:
+        story.append(Paragraph(
+            f"<b>Warum hier kein Score steht:</b> in diesem Bericht haben "
+            f"{material} Firmen einen Auftrag ab 2.000&nbsp;€ — unter 30 sind "
+            "statistische Profile Rauschen. Die Rangfolge oben ist deshalb eine "
+            "belegte <b>Checkliste</b> (Passung, Marken, Entscheidungsrolle), "
+            "kein trainiertes Modell. Ehrlich gereiht schlägt falsch gewichtet.",
+            note))
+    return story
+
+
+def _sql_count(col):
+    from sqlalchemy import func as _f
+    return _f.count(col)
+
+
+def _sql_sum(col):
+    from sqlalchemy import func as _f
+    return _f.sum(col)
+
+
+def _sql_max(col):
+    from sqlalchemy import func as _f
+    return _f.max(col)
 
 
 def build_report(path: str | None = None, filters: dict | None = None) -> str:
@@ -544,6 +809,10 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
         Spacer(1, 13),
     ]
     story += _divergence_story(filters, links=links)
+    # The scorecard: who to call first, judged from website evidence. Carries a
+    # market that has no ad data and too few buyers for an ICP — which is every
+    # market except Germany today.
+    story += _qualification_story(filters, styles)
 
     if not data:
         story.append(Paragraph("Keine Firmen entsprechen dem gewählten Filter.", body))
