@@ -354,8 +354,14 @@ def _divergence_story(filters: dict | None = None, limit: int = 10, links: dict 
     header = ["#", "Firma", "Divergenz", "Typ", "Grund"]
     trows = [[Paragraph(h, cellh) for h in header]]
     for i, r in enumerate(rows, start=1):
-        cta = _ads_cta(links.get(r["company_id"]))
-        firma = _esc(r["company"]) + (f'<br/><font size="7.5">{cta}</font>' if cta else "")
+        info = links.get(r["company_id"]) or {}
+        cta = _ads_cta(info)
+        # the name is the way to the company itself (its website); the ad
+        # links below are the way to its ads. Linking the name to the Ad
+        # Library instead made the website vanish from the row whenever a
+        # page was resolved - four verified websites read as "no website".
+        firma = (_link(r["company"], _web_url(info.get("website")))
+                 + (f'<br/><font size="7.5">{cta}</font>' if cta else ""))
         trows.append([
             Paragraph(str(i), cell),
             Paragraph(firma, cell),
@@ -486,7 +492,7 @@ def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int =
         e = enr[d["company_id"]]
         head = _esc(d["company"])
         if e.get("website"):
-            head += f' &nbsp;·&nbsp; {_link(_esc(e["website"]), _web_url(e["website"]))}'
+            head += f' &nbsp;·&nbsp; {_link(e["website"], _web_url(e["website"]))}'
         cta = _ads_cta((links or {}).get(d["company_id"]))
         if cta:
             head += " &nbsp;·&nbsp; " + cta
@@ -701,7 +707,7 @@ def _qualification_story(filters: dict | None, styles) -> list:
             if cta:
                 merk += "<br/>" + cta
             rows.append([
-                Paragraph(_link(_esc(c.name), _web_url(c.website_domain)), cell),
+                Paragraph(_link(c.name, _web_url(c.website_domain)), cell),
                 Paragraph(_esc(c.city or "—"), cell),
                 Paragraph("<b>" + _esc(", ".join(_has_direct(c))) + "</b>"
                           if _has_direct(c) else "—", cell),
@@ -732,7 +738,7 @@ def _qualification_story(filters: dict | None, styles) -> list:
             if cta:
                 prof.append(cta)
             rows.append([
-                Paragraph(_link(_esc(c.name), _web_url(c.website_domain)), cell),
+                Paragraph(_link(c.name, _web_url(c.website_domain)), cell),
                 Paragraph(_esc(c.city or "—"), cell),
                 Paragraph("<b>vergibt Aufträge</b>" if c in arch_top
                           else _esc(c.decision_role or "unklar"), cell),
@@ -758,7 +764,7 @@ def _qualification_story(filters: dict | None, styles) -> list:
         for c in buyers[:25]:
             cnt, total, last, _biggest = buys[c.id]
             rows.append([
-                Paragraph(_link(_esc(c.name), _web_url(c.website_domain)), cell),
+                Paragraph(_link(c.name, _web_url(c.website_domain)), cell),
                 Paragraph(_esc(c.city or "—"), cell),
                 Paragraph(_esc(c.segment or "—"), cell),
                 Paragraph(str(cnt), cell), Paragraph(_eur(total), cell),
@@ -868,8 +874,11 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     rows = [[Paragraph(header[0], cellh)] + [Paragraph(h, cellhr) for h in header[1:]]]
     for d in advertisers:
         cats = d.get("ads_by_category") or {}
-        # the name is the link: Ad Library when a page is resolved, else website
-        name = Paragraph(_company_link(_esc(d["company"]), links.get(d["company_id"])), cell)
+        info = links.get(d["company_id"]) or {}
+        cta = _ads_cta(info)
+        # name -> website, ads -> explicit CTAs. One rule, whole report.
+        name = Paragraph(_link(d["company"], _web_url(info.get("website")))
+                         + (f'<br/><font size="7.5">{cta}</font>' if cta else ""), cell)
         act = d["total_active_ads"] or 0
         active_txt = f"<b>{act}</b>" + _delta_frag(d.get("delta_ads"))
         spend = f"{_eur(d['spend_low'])}–{_eur(d['spend_high'])}"
