@@ -855,15 +855,24 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
     story.append(Paragraph("Übersicht", h2))
     fetched = [d for d in data if d.get("has_data")]
     unfetched = len(data) - len(fetched)
+    # A row earns its place by carrying information. "Fetched, currently zero
+    # ads" is ONE bit — as a row it repeats six zeros; a hundred of them (Spain:
+    # 100 of 109 fetched) is a wall the reader has to climb. So: rows only for
+    # companies with ACTIVE ads, counts for everyone else. The distinction the
+    # counts must keep is fetched-and-quiet (a fact: not advertising right now)
+    # versus never-fetched (unknown — must not read as inactive).
+    advertisers = [d for d in fetched
+                   if (d.get("total_active_ads") or 0) > 0]
+    quiet = len(fetched) - len(advertisers)
     header = ["Firma", "Aktive Anz.", "Personal", "Verkauf", "Marke", "Gesch. Ausg./Wo."]
     rows = [[Paragraph(header[0], cellh)] + [Paragraph(h, cellhr) for h in header[1:]]]
-    for d in fetched:
+    for d in advertisers:
         cats = d.get("ads_by_category") or {}
         # the name is the link: Ad Library when a page is resolved, else website
         name = Paragraph(_company_link(_esc(d["company"]), links.get(d["company_id"])), cell)
         act = d["total_active_ads"] or 0
-        active_txt = (f"<b>{act}</b>" + _delta_frag(d.get("delta_ads"))) if act else "0"
-        spend = "0" if act == 0 else f"{_eur(d['spend_low'])}–{_eur(d['spend_high'])}"
+        active_txt = f"<b>{act}</b>" + _delta_frag(d.get("delta_ads"))
+        spend = f"{_eur(d['spend_low'])}–{_eur(d['spend_high'])}"
         rows.append([
             name,
             Paragraph(active_txt, cellr),
@@ -872,17 +881,25 @@ def build_report(path: str | None = None, filters: dict | None = None) -> str:
             Paragraph(str(cats.get("brand_awareness", 0)), cellr),
             Paragraph(_esc(spend), cellr),
         ])
-    if not fetched:
+    fetched = advertisers          # the table downstream is advertisers-only
+    # Numbers get the German thousands dot individually — a blanket
+    # .replace(",", ".") on the whole sentence also eats its prose commas
+    # ("unbekannt, nicht inaktiv" came out as "unbekannt. nicht inaktiv").
+    _n = lambda v: f"{v:,}".replace(",", ".")
+    tail_bits = []
+    if quiet:
+        tail_bits.append(f"{_n(quiet)} Firmen abgerufen und derzeit ohne aktive "
+                         "Anzeigen")
+    if unfetched:
+        tail_bits.append(f"{_n(unfetched)} Firmen nie abgerufen — unbekannt, "
+                         "nicht inaktiv")
+    if not advertisers:
         story.append(Paragraph(
-            f"Für keine der {len(data):,} Firmen im Bericht wurden bisher Anzeigen "
-            "abgerufen — die Übersicht entfällt. Anzeigen-Daten entstehen erst "
-            "durch einen Abruf (Companies-Tab, Auswahl → Anzeigen abrufen)."
-            .replace(",", "."), body))
-    elif unfetched:
+            "Keine Firma im Bericht hat derzeit aktive Anzeigen. "
+            + " · ".join(tail_bits) + ".", body))
+    elif tail_bits:
         story.append(Paragraph(
-            f"{unfetched:,} weitere Firmen im Bericht wurden nie abgerufen und "
-            "stehen deshalb nicht in dieser Tabelle — nicht abgerufen heißt "
-            "unbekannt, nicht inaktiv.".replace(",", "."), note))
+            "Nicht in der Tabelle: " + " · ".join(tail_bits) + ".", note))
         story.append(Spacer(1, 4))
 
     if fetched:
