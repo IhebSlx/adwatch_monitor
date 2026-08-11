@@ -3964,3 +3964,58 @@ def test_all_fetched_this_week_says_so_instead_of_nothing_to_fetch(temp_db):
     # forcing it works and creates a real job
     job = jobs.create_job([cid], ["meta"], refetch=True)
     assert job["total"] == 1
+
+
+def test_a_resumed_fetch_job_continues_at_the_right_company(temp_db):
+    """The freshness guard turned _plan_units from a pure function of the job's
+    stored inputs into one that also depends on what the job ITSELF has fetched.
+    _run_body rebuilt the unit list from those inputs on every start, so a
+    resumed job would rebuild a SHORTER list while `completed` still counted
+    positions in the original — and the cursor would skip past companies that
+    were never fetched at all.
+
+    Four companies, two fetched, then interrupted: the resumed job must run
+    exactly the other two, not positions 3 and 4 of a list that lost its head."""
+    import datetime as dt
+    from adwatch import jobs
+    from adwatch.collect.pipeline import monday_of
+    from adwatch.models import CollectionRun, Company, CompanyPage, FetchJob
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    for i in range(4):
+        s.add(Company(name=f"Haendler {i}", website_domain=f"h{i}.example"))
+    s.commit()
+    ids = list(s.scalars(select(Company.id).order_by(Company.id)))
+    for cid in ids:
+        s.add(CompanyPage(company_id=cid, source="meta", page_id=f"p{cid}", active=True))
+    s.commit()
+    s.close()
+
+    job = jobs.create_job(ids, ["meta"], label="resume test")
+    assert job["total"] == 4
+    stored = [tuple(u) for u in job["plan"]["units"]]
+    assert stored == [(cid, "meta") for cid in ids], "der Plan ist der Vertrag"
+
+    # simulate: the first two ran, then the app died
+    week = monday_of(dt.date.today())
+    s = temp_db.SessionLocal()
+    for cid in ids[:2]:
+        s.add(CollectionRun(company_id=cid, source="meta", week_start=week, status="ok"))
+    row = s.get(FetchJob, job["id"])
+    row.completed = 2
+    row.status = "interrupted"
+    s.commit()
+    s.close()
+
+    # the plan must NOT shrink now that two of its companies count as fresh
+    s = temp_db.SessionLocal()
+    replanned = jobs._plan_units(s, ids, ["meta"])
+    s.close()
+    assert len(replanned) == 2, "ohne Plan wuerde neu geplant nur noch 2 Einheiten ergeben"
+
+    again = jobs.get_job(job["id"])
+    units = [tuple(u) for u in again["plan"]["units"]]
+    assert units == stored, "der gespeicherte Plan bleibt unveraendert"
+    # cursor 2 into the ORIGINAL plan -> the remaining two are companies 3 and 4
+    assert units[again["completed"]:] == [(ids[2], "meta"), (ids[3], "meta")]

@@ -280,7 +280,8 @@ def create_job(company_ids: list[int], sources: list[str], label: str | None = N
                 raise ValueError("sources must be a non-empty list of 'meta'/'google'")
             # total counts only units that will actually run (Meta needs a page,
             # Google needs a website) — never the raw company × source product.
-            total = len(_plan_units(s, company_ids, sources, refetch=refetch))
+            planned = _plan_units(s, company_ids, sources, refetch=refetch)
+            total = len(planned)
             if total == 0:
                 # distinguish "cannot fetch" from "already bought this week" —
                 # the second is good news and needs a different answer
@@ -294,6 +295,16 @@ def create_job(company_ids: list[int], sources: list[str], label: str | None = N
                                  "fetchable source (a Meta page for Meta, a website for Google).")
         job = FetchJob(sources=sources, company_ids=company_ids, label=label, kind=kind,
                        total=total, status="queued")
+        if kind not in ("identity", "enrich"):
+            # STORE the unit list instead of recomputing it at run time. It used
+            # to be rebuilt from the same stored inputs, which was fine while
+            # _plan_units was a pure function of them — but it now also excludes
+            # pairs already fetched this week, and a job's OWN fetches change
+            # that. A resumed job would rebuild a shorter list while `completed`
+            # still counted positions in the original one, and the cursor would
+            # skip past companies that were never fetched. The plan is the
+            # contract; the cursor indexes into it.
+            job.plan = {"units": [[cid, src] for cid, src in planned]}
         s.add(job)
         s.commit()
         return _job_to_dict(job)
@@ -339,6 +350,7 @@ def _run_body(job_id: int, runners: dict) -> None:
         job.started_at = job.started_at or dt.datetime.utcnow()
         s.commit()
         company_ids, sources, kind = job.company_ids, job.sources, getattr(job, "kind", "fetch") or "fetch"
+        stored_plan = (getattr(job, "plan", None) or {}).get("units")
 
     # Identity jobs are one unit per company (Meta only, no ad fetch); fetch
     # jobs fan out per (company, source) but ROUTED — a Meta unit only where a
@@ -349,9 +361,17 @@ def _run_body(job_id: int, runners: dict) -> None:
         units = [(cid, "meta") for cid in company_ids]
     elif kind == "enrich":
         units = [(cid, "enrich") for cid in company_ids]
+    elif stored_plan:
+        # the plan fixed at create time — see create_job. Recomputing here would
+        # let the job's own fetches shorten the list under a cursor that still
+        # counts positions in the original.
+        units = [(cid, src) for cid, src in stored_plan]
     else:
+        # jobs created before the plan was persisted: same behaviour as before,
+        # with refetch=True so the freshness guard cannot shorten the list
+        # mid-flight and desynchronise the cursor.
         with SessionLocal() as s:
-            units = _plan_units(s, company_ids, sources)
+            units = _plan_units(s, company_ids, sources, refetch=True)
 
     for idx, (cid, src) in enumerate(units):
         with SessionLocal() as s:
