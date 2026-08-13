@@ -793,6 +793,114 @@
     badge.classList.toggle("hidden", !n);
   }
 
+  // ================= PIPELINE-BOARD =================
+  // Die Kette pro Markt: Bestand -> Identität -> Anreicherung -> Anzeigen ->
+  // Qualifizierung -> ICP -> Bericht. Nur Lesen und Navigieren — Läufe starten
+  // weiterhin dort, wo sie wohnen (Firmen, Entscheidungen, Berichte). Sperren
+  // werden ANGEZEIGT statt nur durchgesetzt: der ICP-Boden steht mit Zahl da.
+  let pipelineLoaded = false;
+  function ensurePipelineLoaded() { if (!pipelineLoaded) loadPipeline(); }
+
+  // Kartenklick-Trick von Heute: der echte Nav-Button wird geklickt, damit
+  // localStorage + showTab denselben Weg nehmen wie ein Klick des Nutzers.
+  function gotoTab(name) {
+    const b = $$(".tab").find(t => t.dataset.tab === name);
+    if (b) b.click();
+  }
+
+  const deN = (n) => (n || 0).toLocaleString("de-DE");
+
+  async function loadPipeline(country) {
+    const board = $("#pipeBoard");
+    board.innerHTML = `<p class="hint">Lädt…</p>`;
+    let d;
+    try {
+      d = await api(`/api/pipeline${country ? `?country=${encodeURIComponent(country)}` : ""}`);
+    } catch (e) {
+      board.innerHTML = `<p class="hint">Fehler beim Laden: ${esc(e.message)}</p>`;
+      return;
+    }
+    pipelineLoaded = true;
+    const sel = $("#pipeCountry");
+    sel.innerHTML = d.markets.map(m =>
+      `<option value="${m.country}"${m.country === d.selected ? " selected" : ""}>` +
+      `${esc(m.label)} — ${deN(m.total)} Firmen</option>`).join("");
+    if (!sel.dataset.wired) {   // einmal verdrahten — innerHTML ersetzt nur die Optionen
+      sel.addEventListener("change", () => loadPipeline(sel.value));
+      sel.dataset.wired = "1";
+    }
+    $("#pipeMeta").textContent = "ohne Private Endkunden und Wettbewerber-Standorte";
+    renderPipeline(d.stages);
+  }
+
+  function pipeRow(name, pctOrNull, counts, action) {
+    const bar = pctOrNull == null ? "" : `
+      <div class="pipe-bar" title="${pctOrNull}%">
+        <div class="pipe-fill" style="width:${Math.max(pctOrNull, 1.5)}%"></div>
+      </div>`;
+    return `
+      <div class="pipe-row">
+        <div class="pipe-name">${esc(name)}</div>
+        <div>${bar}</div>
+        <div class="pipe-counts">${counts}</div>
+        <div class="pipe-action">${action || ""}</div>
+      </div>`;
+  }
+
+  function renderPipeline(st) {
+    const total = st.bestand.total || 1;
+    const pct = (n) => Math.round((n / total) * 100);
+    const idV = st.identitaet;
+    const geschlossen = idV.not_found + idV.unreachable + idV.conflict;
+
+    const rows = [
+      pipeRow("Bestand", null,
+        `<b>${deN(st.bestand.total)}</b> Firmen · ${deN(st.bestand.mit_website)} mit Website · ` +
+        `${deN(st.bestand.kaeufer)} Käufer`,
+        ""),
+      pipeRow("Identität", pct(idV.verified),
+        `<b>${deN(idV.verified)}</b> verifiziert · ` +
+        `<span class="pipe-warn">${deN(idV.offen)} offen</span> · ` +
+        `${deN(idV.unbekannt)} unbekannt · ${deN(geschlossen)} geschlossen (kein Web / Konflikt)`,
+        idV.offen ? `<button class="btn btn-sm btn-primary" data-goto="pruefen">${deN(idV.offen)} entscheiden</button>` : "✓"),
+      pipeRow("Anreicherung", pct(st.anreicherung.mit_fakten),
+        `<b>${deN(st.anreicherung.mit_fakten)}</b> mit Fakten · ` +
+        `${deN(st.anreicherung.verified_ohne_fakten)} verifiziert, aber ohne Fakten · ` +
+        `${deN(st.anreicherung.ohne_website_final)} ohne auffindbare Website <span class="muted">(Endstand, keine Lücke)</span>`,
+        st.anreicherung.verified_ohne_fakten
+          ? `<button class="btn btn-sm" data-goto="customers">Lauf über Firmen starten</button>` : "✓"),
+      pipeRow("Anzeigen", pct(st.anzeigen.je_abgerufen),
+        `<b>${deN(st.anzeigen.je_abgerufen)}</b> je abgerufen · ${deN(st.anzeigen.aktiv)} aktuell aktiv · ` +
+        `${deN(st.anzeigen.nie_abgerufen)} nie abgerufen <span class="muted">(unbekannt, nicht inaktiv)</span>`,
+        st.anzeigen.apify_konfiguriert
+          ? `<button class="btn btn-sm" data-goto="customers">Abruf über Firmen</button>`
+          : `<span class="pipe-lock">⛔ Apify nicht konfiguriert</span>`),
+      pipeRow("Qualifizierung", null,
+        `<b>${deN(st.qualifizierung.betriebe_hoch)}</b> Betriebe Passung hoch · ` +
+        `<b>${deN(st.qualifizierung.bueros_hoch)}</b> Büros Relevanz hoch ` +
+        `<span class="muted">(davon ${deN(st.qualifizierung.vergibt)} vergeben Aufträge)</span> · ` +
+        `${deN(st.qualifizierung.betriebe_mittel)} Betriebe mittel`,
+        `<button class="btn btn-sm" data-goto="customers">Liste in Firmen</button>`),
+      pipeRow("ICP", null,
+        st.icp.modus === "scorecard"
+          ? `<span class="pipe-warn">⚠ ${deN(st.icp.material_kaeufer)} von ${st.icp.boden} nötigen Käufern ab 2.000 €</span> — ` +
+            `unter dem Boden sind Verteilungen Rauschen: <b>Scorecard statt Modell</b>`
+          : `✓ Boden erreicht (${deN(st.icp.material_kaeufer)} Käufer ab 2.000 €) — ` +
+            `<span class="muted">ob ein Modell wirklich trennt, entscheidet die Ampel im ICP-Tab</span>`,
+        `<button class="btn btn-sm" data-goto="profil">ICP-Tab</button>`),
+      pipeRow("Bericht", null,
+        st.bericht
+          ? `<b>${esc(st.bericht.label)}</b> · ${esc((st.bericht.created_at || "").slice(0, 10))}`
+          : `<span class="muted">noch kein Bericht für dieses Land</span>`,
+        (st.bericht
+          ? `<a class="btn btn-sm" href="/api/reports/${encodeURIComponent(st.bericht.filename)}" target="_blank">Öffnen</a> `
+          : "") + `<button class="btn btn-sm" data-goto="reports">Berichte</button>`),
+    ];
+    $("#pipeBoard").innerHTML = rows.join("");
+    $$("#pipeBoard [data-goto]").forEach(b =>
+      b.addEventListener("click", () => gotoTab(b.dataset.goto)));
+  }
+
   function render() {
     renderTopbar();
     renderSignals();
@@ -1437,6 +1545,7 @@
       $$(".tab").forEach(t => t.classList.toggle("active", t === btn));
       $$(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
       if (name === "dashboard") loadHeute();   // Karten beim Rückwechsel auffrischen
+      if (name === "pipeline") ensurePipelineLoaded();
       if (name === "customers") ensureCustomersLoaded();
       if (name === "chancen") ensureChancenLoaded();
       if (name === "pruefen") ensurePruefenLoaded();

@@ -490,6 +490,14 @@ def _resolve_recipients(recipient_ids: list[int] | None, recipient: str | None) 
     return emails
 
 
+# --- Pipeline-Board: wo ein Markt in der Kette Bestand -> Identität ->
+# --- Anreicherung -> Anzeigen -> Qualifizierung -> Bericht steht.
+@app.get("/api/pipeline")
+def pipeline_board_route(country: str | None = None):
+    from .insights import pipeline
+    return pipeline.board(country)
+
+
 @app.get("/api/reports")
 def list_reports():
     from .report import list_reports as _list

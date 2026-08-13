@@ -1052,3 +1052,31 @@ body.nav-collapsed .nav-badge {
 .heute-cards .kpi-value { font-size: 21px; margin-top: 8px; overflow: hidden;
                           text-overflow: ellipsis; white-space: nowrap; }
 .heute-cards .kpi-hint { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+
+/* ===================== Phase 2: Pipeline-Board ===================== */
+/* Eine Zeile pro Stufe: Name | Fortschritt | Zahlen mit ehrlicher Lücke |
+   nächster Schritt. Die Balkenbreite hat ein Minimum, damit "1 von 33.000"
+   sichtbar bleibt statt auf 0px zu verschwinden. */
+.pipe-row {
+  display: grid; grid-template-columns: 120px 170px 1fr auto;
+  gap: 16px; align-items: center;
+  padding: 13px 4px; border-bottom: 1px solid var(--border);
+}
+.pipe-row:last-child { border-bottom: none; }
+.pipe-name { font-weight: 700; font-size: 13px; }
+.pipe-bar {
+  height: 8px; border-radius: 999px;
+  background: var(--bg-subtle); border: 1px solid var(--border);
+  overflow: hidden;
+}
+.pipe-fill { height: 100%; border-radius: 999px; background: var(--accent-grad); }
+.pipe-counts { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5;
+               font-variant-numeric: tabular-nums; }
+.pipe-warn { color: #8a5220; font-weight: 600; }
+.pipe-lock { font-size: 12px; color: #8a5220; white-space: nowrap; }
+.pipe-action { white-space: nowrap; text-align: right; }
+@media (max-width: 900px) {
+  .pipe-row { grid-template-columns: 100px 1fr; }
+  .pipe-bar { grid-column: 2; }
+  .pipe-counts, .pipe-action { grid-column: 1 / -1; text-align: left; }
+}

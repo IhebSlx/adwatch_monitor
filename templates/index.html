@@ -37,6 +37,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
         Heute
       </button>
+      <button class="tab" data-tab="pipeline" data-label="Pipeline">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"/></svg>
+        Pipeline
+      </button>
       <button class="tab" data-tab="pruefen" data-label="Entscheidungen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         Entscheidungen
@@ -204,6 +208,26 @@
       </div>
 
       <div id="detailPanel" class="card hidden"></div>
+    </section>
+
+    <!-- ================= TAB: Pipeline ================= -->
+    <!-- Die Kette, die die App ohnehin erzwingt (Identität vor Anreicherung,
+         Anreicherung vor Anzeigen, 30 Käufer vor einem ICP-Modell), endlich
+         sichtbar: pro Stufe Zählerstand, ehrliche Lücke, nächster Schritt.
+         Befüllt von loadPipeline() aus GET /api/pipeline. -->
+    <section id="tab-pipeline" class="tab-panel">
+      <header class="page-head">
+        <h1>Pipeline</h1>
+        <p>Wo steht der Markt in der Kette — und was ist der nächste Schritt? Sperren stehen hier mit Zahl und Grund, nicht nur im Code.</p>
+      </header>
+      <div class="card">
+        <div class="filter-bar">
+          <select id="pipeCountry" style="width:240px"></select>
+          <span class="spacer"></span>
+          <span id="pipeMeta" class="muted"></span>
+        </div>
+        <div id="pipeBoard"><p class="hint">Lädt…</p></div>
+      </div>
     </section>
 
     <!-- ================= TAB: Companies ================= -->

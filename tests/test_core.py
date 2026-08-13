@@ -3955,6 +3955,60 @@ def test_the_backfill_closes_only_what_was_really_searched(temp_db):
     assert dataquality.close_searched_not_found(apply=False)["rows"] == 0
 
 
+def test_pipeline_board_counts_the_chain_honestly(temp_db):
+    """Das Board zeigt die Kette, die die App ohnehin erzwingt — und es muss
+    dieselben Regeln sprechen wie der Rest des Codes: Private Endkunden sind
+    nie Teil eines Zählers (scope), 'not_found' ist ein Endstand und keine
+    Lücke, Käufer zählen in der Qualifizierung nicht als Ziele, und unter
+    MIN_WINNERS_USABLE Material-Käufern heißt der Modus 'scorecard'."""
+    import datetime as dt
+    from adwatch.insights import pipeline
+    from adwatch.models import Company, CompanyEnrichment, CrmOrderEvent
+
+    s = temp_db.SessionLocal()
+    # 1: verifiziert + Fakten + Material-Käufer (2.500 €)
+    s.add(Company(name="Kaeufer SL", country="ES", segment="Handel",
+                  website_domain="kaeufer.example", identity_status="verified",
+                  solarlux_fit="hoch"))
+    # 2: Interessent mit Passung hoch — der eigentliche Zieltyp
+    s.add(Company(name="Ziel SL", country="ES", segment="Verarbeiter",
+                  identity_status="needs_review", solarlux_fit="hoch"))
+    # 3: gesucht, nichts gefunden — Endstand, keine Lücke
+    s.add(Company(name="Ohne Web SL", country="ES", segment="Handel",
+                  identity_status="not_found"))
+    # 4: Privatkunde — darf in KEINEM Zähler auftauchen
+    s.add(Company(name="Privat", country="ES", segment="Private Endkunden",
+                  identity_status="verified", solarlux_fit="hoch"))
+    s.commit()
+    ids = {c.name: c.id for c in s.query(Company).all()}
+    s.add(CompanyEnrichment(company_id=ids["Kaeufer SL"], status="enriched",
+                            fields={"description_de": "x"}))
+    s.add(CrmOrderEvent(company_id=ids["Kaeufer SL"],
+                        order_date=dt.date(2025, 3, 1), amount=2500.0))
+    s.commit()
+
+    st = pipeline.market_status(s, "ES")
+    s.close()
+
+    assert st["bestand"]["total"] == 3, "Privatkunden zaehlen nirgends mit"
+    assert st["identitaet"]["verified"] == 1
+    assert st["identitaet"]["offen"] == 1
+    assert st["identitaet"]["not_found"] == 1
+    assert st["anreicherung"]["mit_fakten"] == 1
+    assert st["anreicherung"]["ohne_website_final"] == 1, \
+        "not_found ist Endstand, keine Luecke"
+    # der Käufer hat Passung hoch, zählt aber NICHT als Ziel — er ist Referenz
+    assert st["qualifizierung"]["betriebe_hoch"] == 1, \
+        "nur der Interessent, nicht der Kaeufer"
+    assert st["bestand"]["kaeufer"] == 1
+    assert st["icp"]["material_kaeufer"] == 1
+    assert st["icp"]["modus"] == "scorecard", "1 Kaeufer liegt unter dem Boden"
+
+    # und das Board waehlt bei unbekanntem Land den groessten Markt
+    b = pipeline.board("XX")
+    assert b["selected"] == "ES"
+
+
 def test_profiles_are_cut_at_the_bottom_not_at_the_alphabet(temp_db):
     """The profile section inherited the overview's ordering: active advertisers
     first, then by NAME. Spain has nine advertisers and ~700 enriched companies,
