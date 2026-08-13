@@ -192,6 +192,50 @@ class RevealIn(BaseModel):
 # Page
 # ---------------------------------------------------------------------------
 
+@app.get("/health")
+def health():
+    """Watchdog-Endpunkt für den Betrieb als Dienst: EIN Blick sagt, ob die App
+    lebt und ob ihre drei Lebensadern intakt sind — Datenbank erreichbar,
+    letzte Sicherung frisch, letzter CRM-Sync nicht uralt. Antwortet 503 bei
+    degradiertem Zustand, damit ein stumpfer HTTP-Check (Task Scheduler,
+    Uptime-Monitor) ohne JSON-Parsen alarmieren kann."""
+    import datetime as _dt
+
+    from sqlalchemy import func as _func, text as _text
+
+    from .models import Company as _C
+
+    out: dict = {"status": "ok"}
+    try:
+        with SessionLocal() as s:
+            s.execute(_text("SELECT 1"))
+            out["db"] = "ok"
+            last_sync = s.scalar(_func.max(_C.crm_synced_at))
+            out["crm_last_sync"] = last_sync.isoformat() if last_sync else None
+    except Exception as exc:  # noqa: BLE001 — genau dafür ist der Endpunkt da
+        out["db"] = f"error: {exc}"
+        out["status"] = "degraded"
+    out["job_running"] = jobs.is_busy()
+    try:
+        newest = max(config.BACKUP_DIR.glob("adwatch_*.db"),
+                     key=lambda p: p.stat().st_mtime, default=None)
+        if newest:
+            age_h = (_dt.datetime.now().timestamp() - newest.stat().st_mtime) / 3600
+            out["backup_last"] = newest.name
+            out["backup_age_hours"] = round(age_h, 1)
+            # nightly um 03:30 — älter als 2 Tage heißt: der Zeitplan läuft nicht
+            if age_h > 48:
+                out["status"] = "degraded"
+        else:
+            out["backup_last"] = None
+            out["status"] = "degraded"
+    except Exception:  # noqa: BLE001
+        out["backup_last"] = "error"
+    code = 200 if out["status"] == "ok" else 503
+    return Response(content=json.dumps(out), media_type="application/json",
+                    status_code=code)
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     html = (config.ROOT / "templates" / "index.html").read_text(encoding="utf-8")

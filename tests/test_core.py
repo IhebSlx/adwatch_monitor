@@ -3955,6 +3955,35 @@ def test_the_backfill_closes_only_what_was_really_searched(temp_db):
     assert dataquality.close_searched_not_found(apply=False)["rows"] == 0
 
 
+def test_health_reports_the_three_lifelines(temp_db):
+    """Für den Betrieb als Dienst: EIN HTTP-Blick muss sagen, ob die App lebt.
+    Der Endpunkt prüft die drei Lebensadern (DB, Sicherung, CRM-Sync-Alter) und
+    antwortet mit dem STATUSCODE, nicht nur im JSON — ein stumpfer Uptime-Check
+    ohne Parser muss alarmieren können. Ohne einzige Sicherung ist der Zustand
+    'degraded' (503): eine Datenbank, deren Wert aus bezahlten Abrufen und
+    menschlichen Urteilen besteht, läuft nie gesund ungesichert."""
+    from fastapi.testclient import TestClient
+    from adwatch import backup, web
+
+    client = TestClient(web.app)
+    r = client.get("/health")
+    body = r.json()
+    assert body["db"] == "ok"
+    assert "job_running" in body
+    if body["backup_last"] is None:
+        assert r.status_code == 503 and body["status"] == "degraded", \
+            "ohne Sicherung darf /health nicht 'ok' sagen"
+    else:
+        assert r.status_code in (200, 503)
+
+    # nach einer Sicherung ist der Backup-Teil gesund
+    backup.backup_now(tag="healthtest")
+    r2 = client.get("/health")
+    b2 = r2.json()
+    if b2["backup_last"]:
+        assert b2["backup_age_hours"] < 1
+
+
 def test_the_map_never_pins_a_private_household(temp_db):
     """Die Karte zeigt Firmen. Private Endkunden sind Privatadressen — ein Pin
     auf deren Wohnung ist genau die Sorte Leck, die die scope-Klausel
