@@ -193,8 +193,12 @@ def _resolve_website(comp: dict, allow_search: bool) -> dict:
     # to decide.
     review = next((t for t in tried if _review_worthy(t)), None)
     status = "needs_review" if review else "no_website_found"
+    # Whether a SEARCH actually ran, not just whether one was allowed to: only a
+    # company that was really searched may be written off as 'not_found', because
+    # that verdict tells the next run not to spend on it again.
     return {"domain": None, "source": None, "validated_by": None,
             "review_candidate": (review or {}).get("domain"),
+            "searched": bool(allow_search),
             "candidates": tried, "bundle": None, "status": status}
 
 
@@ -501,6 +505,19 @@ def enrich_company(company_id: int, allow_search: bool = True, allow_llm: bool =
                 c.identity_evidence = {"searched": True, "candidates": considered,
                                        "accepted": None,
                                        "review_candidate": review_domain}
+                c.identity_checked_at = dt.datetime.utcnow()
+            elif (status == "no_website_found" and site.get("searched")
+                  and c.identity_status != "verified"):
+                # "We searched and found nothing" was left as NULL — which is the
+                # same thing the column says for "nobody has looked yet". Measured
+                # on job 57: 248 Spanish companies, every one with a full candidate
+                # trail, all indistinguishable from untouched. find_website.
+                # pending_ids counts NULL as pending (NOT_FOUND means "do not
+                # re-spend"), so the next search run would have paid Serper a
+                # second time for an answer already on record.
+                c.identity_status = "not_found"
+                c.identity_evidence = {"searched": True, "candidates": considered,
+                                       "accepted": None, "review_candidate": None}
                 c.identity_checked_at = dt.datetime.utcnow()
         # A human's decision outranks any automatic label: once a website was
         # approved in the review queue, a later automatic pass (which now simply

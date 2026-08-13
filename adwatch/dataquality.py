@@ -241,19 +241,73 @@ def clear_out_of_scope_scores(apply: bool = False) -> dict:
             "examples": hit[:5]}
 
 
+def close_searched_not_found(apply: bool = False) -> dict:
+    """Write the verdict for companies that WERE searched and yielded nothing.
+
+    Enrichment's persist block had a branch for a proven site and one for a
+    review candidate, and nothing at all for the third outcome. So a company that
+    was searched properly and simply has no findable website kept
+    identity_status NULL — the same value the column carries for a company nobody
+    has ever looked at.
+
+    That silence costs money. find_website.pending_ids counts NULL as pending and
+    treats 'not_found' as "do not re-spend"; measured on job 57, 248 Spanish
+    companies were queued to be searched a second time for an answer already on
+    record. Same shape as the same-week ad re-fetch, different invoice.
+
+    Only rows with a candidate trail are closed: that trail IS the evidence a
+    search ran. A company with an empty trail might have been enriched with
+    allow_search=False, which proves nothing about the wider web and must leave
+    the question open. Nothing is deleted — these rows carry no domain and no
+    website-derived facts (checked before this shipped), so the verdict adds
+    knowledge without discarding any.
+    """
+    import datetime as dt
+
+    from .models import CompanyEnrichment
+
+    hit = []
+    with SessionLocal() as s:
+        rows = s.execute(
+            select(Company, CompanyEnrichment.website_candidates)
+            .join(CompanyEnrichment, CompanyEnrichment.company_id == Company.id)
+            .where(Company.identity_status.is_(None),
+                   CompanyEnrichment.status == "no_website_found")).all()
+        for c, candidates in rows:
+            tried = candidates or []
+            if not tried:
+                continue          # no proof a search ever ran — leave it open
+            hit.append({"id": c.id, "name": c.name, "candidates": len(tried)})
+            if apply:
+                c.identity_status = "not_found"
+                c.identity_evidence = {"searched": True, "candidates": tried,
+                                       "accepted": None, "review_candidate": None,
+                                       "closed_by": "dataquality.close_searched_not_found"}
+                c.identity_checked_at = dt.datetime.utcnow()
+        if apply:
+            s.commit()
+    return {"rows": len(hit), "examples": hit[:5]}
+
+
 def audit() -> dict:
     """Everything, reported, nothing changed."""
     return {"unbacked_enrichment": clear_unbacked_enrichment(apply=False),
             "website_domains": normalise_website_domains(apply=False),
             "domain_duplicates": find_domain_duplicates(),
             "product_subfamilies": fold_product_subfamilies(apply=False),
+            "searched_not_found": close_searched_not_found(apply=False),
             "out_of_scope_scores": clear_out_of_scope_scores(apply=False)}
 
 
 def repair() -> dict:
     """Apply the repairs that are safe without a human. Duplicates are NOT
-    merged — that needs judgement about branches versus double entries."""
-    return {"unbacked_enrichment": clear_unbacked_enrichment(apply=True),
+    merged — that needs judgement about branches versus double entries.
+
+    Order matters: the verdict is written BEFORE clear_unbacked_enrichment reads
+    it, so a freshly closed 'not_found' row is checked for unbacked facts in the
+    same pass rather than a run later."""
+    return {"searched_not_found": close_searched_not_found(apply=True),
+            "unbacked_enrichment": clear_unbacked_enrichment(apply=True),
             "website_domains": normalise_website_domains(apply=True),
             "product_subfamilies": fold_product_subfamilies(apply=True),
             "out_of_scope_scores": clear_out_of_scope_scores(apply=True)}

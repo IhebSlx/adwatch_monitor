@@ -3874,6 +3874,87 @@ def test_a_queued_company_always_has_something_to_decide(temp_db):
                    [{"domain": "zeitung.example", "origin": "serper", "signals": {}}])
 
 
+def test_searched_and_found_nothing_is_not_the_same_as_never_looked(temp_db):
+    """Measured on job 57 at 661/1103: 248 Spanish companies came back
+    'no_website_found' with a full candidate trail — searched properly, nothing
+    provable — and every one kept identity_status NULL, which is exactly what the
+    column says for a company nobody has touched.
+
+    That is not cosmetic. find_website.pending_ids treats NULL as pending and
+    NOT_FOUND as "do not re-spend", so the next search run would have paid Serper
+    a second time for 248 answers already on record — the same mistake as the
+    same-week ad re-fetch, on a different invoice.
+
+    The verdict may only be written when a search REALLY ran: an enrichment pass
+    with allow_search=False knows nothing about the wider web and must leave the
+    question open rather than close it wrongly."""
+    from adwatch.enrich import service
+
+    searched = {"domain": None, "source": None, "validated_by": None,
+                "review_candidate": None, "searched": True,
+                "candidates": [{"domain": "fremd.example", "origin": "serper",
+                                "validated": False, "signals": {}}],
+                "bundle": None, "status": "no_website_found"}
+    assert searched["searched"] is True
+
+    # the resolver reports the distinction itself, from its own argument
+    import adwatch.enrich.service as svc
+    comp = {"name": "Sin Web SL", "website_domain": None, "email": None,
+            "city": "Madrid", "country": "ES"}
+    no_search = svc._resolve_website(comp, allow_search=False)
+    assert no_search["status"] == "no_website_found"
+    assert no_search["searched"] is False, \
+        "ohne Suche darf nichts als 'nicht gefunden' abgeschlossen werden"
+
+    # and the status the finder writes is the one that stops the re-spend
+    from adwatch.identity.find_website import NOT_FOUND
+    assert NOT_FOUND == "not_found"
+
+
+def test_the_backfill_closes_only_what_was_really_searched(temp_db):
+    """The repair for the rows already written without a verdict. A candidate
+    trail is the evidence that a search ran; without one the row may have come
+    from an allow_search=False pass, which knows nothing about the wider web and
+    must not be allowed to close the question."""
+    from adwatch import dataquality
+    from adwatch.models import Company, CompanyEnrichment
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    s.add(Company(name="Gesucht SL", country="ES"))
+    s.add(Company(name="Nie gesucht SL", country="ES"))
+    s.add(Company(name="Schon geprueft SL", country="ES",
+                  identity_status="verified", identity_matched_by="phone"))
+    s.commit()
+    ids = list(s.scalars(select(Company.id).order_by(Company.id)))
+    s.add(CompanyEnrichment(company_id=ids[0], status="no_website_found",
+                            website_candidates=[{"domain": "fremd.example",
+                                                 "origin": "serper",
+                                                 "validated": False}]))
+    s.add(CompanyEnrichment(company_id=ids[1], status="no_website_found",
+                            website_candidates=None))
+    s.add(CompanyEnrichment(company_id=ids[2], status="no_website_found",
+                            website_candidates=[{"domain": "x.example"}]))
+    s.commit()
+    s.close()
+
+    dry = dataquality.close_searched_not_found(apply=False)
+    assert dry["rows"] == 1, "nur die wirklich gesuchte Firma"
+
+    dataquality.close_searched_not_found(apply=True)
+    s = temp_db.SessionLocal()
+    got = {c.name: c.identity_status for c in s.scalars(select(Company))}
+    assert got["Gesucht SL"] == "not_found"
+    assert got["Nie gesucht SL"] is None, "ohne Suchspur bleibt die Frage offen"
+    assert got["Schon geprueft SL"] == "verified", "ein Urteil wird nie ueberschrieben"
+    ev = s.scalar(select(Company).where(Company.name == "Gesucht SL")).identity_evidence
+    assert ev["searched"] is True and ev["accepted"] is None
+    s.close()
+
+    # idempotent: a second run finds nothing left to do
+    assert dataquality.close_searched_not_found(apply=False)["rows"] == 0
+
+
 def test_a_company_is_not_fetched_twice_in_one_week(temp_db):
     """Measured 2026-08-11 over every ad fetch on record: 614 runs for only 300
     distinct company+source pairs, so 51% of all Apify spend bought a row that
