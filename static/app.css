@@ -1114,3 +1114,20 @@ body.nav-collapsed .nav-badge {
 .dot-kunde { background: #1c7c3c; }
 .dot-architekt { background: #8a5220; }
 .dot-interessent { background: #4f5ce5; }
+
+/* ===================== Phase 5: Warteschlangen-Tastatur + Aktivität ===================== */
+/* fokussierte Zeile in Entscheidungen: klarer Rand, kein Farbrausch */
+#pruefenWrap tbody tr.row-focus {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* Aktivitätsanzeiger in der Seitenleiste: dezenter Chip, klickbar */
+.nav-activity {
+  border: 1px solid var(--side-line); border-radius: 999px;
+  background: rgba(255, 255, 255, .07); color: #cdd1ff;
+  font: inherit; font-size: 12px; font-weight: 600;
+  padding: 5px 12px; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.nav-activity:hover { background: rgba(255, 255, 255, .12); }
+body.nav-collapsed .nav-activity { font-size: 10px; padding: 4px 6px; }

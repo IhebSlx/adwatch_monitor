@@ -87,7 +87,10 @@
     </nav>
 
     <div class="sidebar-foot">
-      <div class="source-switch" id="sourceSwitch" title="Which ad platform(s) to fetch">
+      <!-- Läuft irgendwo ein Job, sagt es die Seitenleiste — egal welcher Tab
+           offen ist. Klick führt zu den Logs. Befüllt von pollActivity(). -->
+      <button id="navActivity" class="nav-activity hidden" title="Laufender Job — Klick öffnet Logs"></button>
+      <div class="source-switch" id="sourceSwitch" title="Welche Anzeigen-Plattform(en) abrufen">
         <label><input type="checkbox" id="sourceMeta" checked> Meta</label>
         <label><input type="checkbox" id="sourceGoogle"> Google</label>
       </div>
@@ -533,7 +536,7 @@
             <tbody id="customersTableBody"></tbody>
           </table>
         </div>
-        <p class="hint" id="customersEmptyHint">No companies yet — add one by hand or import a file above.</p>
+        <p class="hint" id="customersEmptyHint">Noch keine Firmen — oben eine Datei importieren oder von Hand anlegen.</p>
         <div id="custScrollSentinel" class="scroll-sentinel"><span id="custPageInfo" class="muted"></span></div>
       </div>
 
@@ -653,8 +656,13 @@
             <option value="">Alle Segmente</option>
           </select>
           <span id="pruefenCount" class="muted"></span>
+          <span id="pruefenSession" class="muted"></span>
           <button class="btn" id="pruefenReload" style="margin-left:auto">Aktualisieren</button>
         </div>
+        <!-- 536 Entscheidungen sind Fließbandarbeit — Durchsatz ist ein Feature.
+             Der Tastatur-Handler klickt die ECHTEN Buttons der fokussierten
+             Zeile, damit Serialisierung und Undo-Pfad identisch bleiben. -->
+        <p class="hint" style="margin:0 0 8px">Tastatur: <b>↑</b>/<b>↓</b> Zeile wählen · <b>J</b> Ja · <b>N</b> Nein · <b>O</b> Website öffnen</p>
         <div id="pruefenWrap" class="table-wrap">
           <p class="muted" style="padding:12px">Wird geladen …</p>
         </div>

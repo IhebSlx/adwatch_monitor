@@ -952,19 +952,55 @@
       return;
     }
     if (!custMap) {
-      custMap = L.map("custMap", { preferCanvas: true }).setView([49.5, 8.0], 5);
+      custMap = L.map("custMap", {
+        preferCanvas: true,
+        // EINE Erde: ohne Grenzen kachelt Leaflet die Welt beim Rauszoomen
+        // endlos nebeneinander ("viele Erden") und lässt ins graue Nichts
+        // pannen. minZoom stoppt, wo genau eine Welt den Container füllt;
+        // Viscosity 1.0 macht die Kante hart statt gummiartig.
+        minZoom: 2,
+        maxBounds: [[-85, -180], [85, 180]],
+        maxBoundsViscosity: 1.0,
+      }).setView([49.5, 8.0], 5);
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende',
         maxZoom: 19,
+        noWrap: true,   // Kacheln enden am Antimeridian statt sich zu wiederholen
+        // noWrap allein unterbindet nur das ZEICHNEN der Wiederholung — die
+        // Anfragen für x außerhalb des Rasters gingen trotzdem raus und kamen
+        // als 400 zurück (gemessen: 3 pro Rauszoomen). bounds stoppt sie.
+        bounds: [[-85, -180], [85, 180]],
       }).addTo(custMap);
       custClusters = L.markerClusterGroup({ chunkedLoading: true });
       custMap.addLayer(custClusters);
       custMap.on("moveend zoomend", updateMapCount);
+      window._custMap = custMap;   // Debug-Griff — die Instanz lebt sonst unerreichbar in der Closure
     }
     // der Container war eben noch display:none — Leaflet muss nachmessen
     setTimeout(() => custMap.invalidateSize(), 0);
     await loadCustMapPins();
   }
+
+  // Schlanker Aktivitätsanzeiger: läuft ein Job, zeigt es die Seitenleiste —
+  // egal welcher Tab offen ist. Ein Request alle 30 s, kein Websocket-Theater.
+  async function pollActivity() {
+    const el = $("#navActivity");
+    if (!el) return;
+    let jobs;
+    try { jobs = await api("/api/fetch-jobs"); }
+    catch { return; }   // Server kurz weg — der nächste Puls versucht es wieder
+    const run = (jobs || []).find(j => j.status === "running" || j.status === "cancelling");
+    if (run) {
+      el.textContent = `⏳ ${run.completed}/${run.total}`;
+      el.title = (run.label || run.kind) + " — Klick öffnet Logs";
+      el.classList.remove("hidden");
+    } else {
+      el.classList.add("hidden");
+    }
+  }
+  $("#navActivity")?.addEventListener("click", () => gotoTab("logs"));
+  setInterval(pollActivity, 30000);
+  pollActivity();
 
   $$("#custViewToggle .view-btn").forEach(b => b.addEventListener("click", async () => {
     $$("#custViewToggle .view-btn").forEach(x => x.classList.toggle("active", x === b));
@@ -2593,6 +2629,8 @@
             </td>
           </tr>`).join("")}</tbody>
       </table>`;
+    pruefenFocus(pruefenRows()[0]);   // Tastatur ist sofort einsatzbereit
+    paintPruefenSession();
     // Both counters that name a number of rows: the queue line (#pruefenCount)
     // and the shared "N Zeilen" tag that _applyTableState draws above every
     // table. Updating only the first left "36 Zeilen" frozen while the list
@@ -2646,6 +2684,13 @@
       const cid = Number(tr.dataset.company);
       const tbody = tr.parentElement;
       const anchor = tr.nextElementSibling;
+      // Maus-Klick auf eine fokussierte Zeile: Fokus wandert weiter, wie beim
+      // Tastatur-Weg — eine hinausanimierende Zeile trägt keinen Fokus
+      if (tr.classList.contains("row-focus")) {
+        const nx = tr.nextElementSibling || tr.previousElementSibling;
+        if (nx) pruefenFocus(nx);
+      }
+      bumpPruefenSession(1);
       $$("button", tr).forEach(x => x.disabled = true);
       // counters move with the animation, not after it — the row is already
       // visibly leaving, so a number that waits 260 ms reads as lag
@@ -2677,6 +2722,7 @@
         if (anchor && anchor.parentElement === tbody) tbody.insertBefore(tr, anchor);
         else tbody.appendChild(tr);
         TABLE_TOTALS["pruefenWrap"] = (TABLE_TOTALS["pruefenWrap"] || 0) + 1;
+        bumpPruefenSession(-1);   // nicht gespeichert = nicht entschieden
         $$("button", tr).forEach(x => x.disabled = false);
         repaintPruefen(tbody);
         toast(`Nicht gespeichert: ${e.message}`, "error");
@@ -2712,6 +2758,64 @@
         vals.map(v => `<option value="${esc(v)}"${v === keep ? " selected" : ""}>${esc(LEAD_SOURCE_LABEL(v))}</option>`).join("");
       el.value = vals.includes(keep) ? keep : "";
     }
+  }
+
+  // ---- Tastatur für die Entscheidungen-Warteschlange -----------------------
+  // 536 Entscheidungen sind Fließbandarbeit — Durchsatz ist ein Feature. Der
+  // Handler klickt die ECHTEN Buttons der fokussierten Zeile: Serialisierung,
+  // Zähler und Undo-Pfad bleiben exakt der Maus-Weg, nur die Hand bleibt auf
+  // der Tastatur. ↑/↓ wählen, J = Ja, N = Nein, O = Website öffnen.
+  function pruefenRows() { return $$("#pruefenWrap tbody tr"); }
+  function pruefenFocused() { return $("#pruefenWrap tbody tr.row-focus"); }
+  function pruefenFocus(tr) {
+    pruefenRows().forEach(r => r.classList.toggle("row-focus", r === tr));
+    tr?.scrollIntoView({ block: "nearest" });
+  }
+  function pruefenMove(step) {
+    const rows = pruefenRows();
+    if (!rows.length) return;
+    const cur = pruefenFocused();
+    const i = rows.indexOf(cur);
+    pruefenFocus(rows[Math.min(Math.max(i + step, 0), rows.length - 1)]);
+  }
+
+  document.addEventListener("keydown", (ev) => {
+    if (!$("#tab-pruefen")?.classList.contains("active")) return;
+    if (/^(input|select|textarea)$/i.test(ev.target.tagName)) return;
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const k = ev.key.toLowerCase();
+    if (ev.key === "ArrowDown") { ev.preventDefault(); pruefenMove(1); return; }
+    if (ev.key === "ArrowUp") { ev.preventDefault(); pruefenMove(-1); return; }
+    if (!["j", "n", "o"].includes(k)) return;
+    const tr = pruefenFocused();
+    if (!tr) { pruefenMove(1); return; }   // erster Druck holt den Fokus
+    if (k === "o") {
+      const a = $("td a[href]", tr);
+      if (a) window.open(a.href, "_blank", "noopener");
+      return;
+    }
+    // Fokus wandert VOR dem Klick zur Nachbarzeile — die entschiedene Zeile
+    // animiert gerade hinaus und kann keinen Fokus mehr tragen
+    const next = tr.nextElementSibling || tr.previousElementSibling;
+    $(k === "j" ? ".pruefen-ok" : ".pruefen-no", tr)?.click();
+    if (next) pruefenFocus(next);
+  });
+
+  // Sitzungszähler: sichtbarer Fortschritt motiviert bei 536 Entscheidungen
+  // mehr als jede Fortschrittsleiste. Pro Tag in localStorage, ehrlich in beide
+  // Richtungen — eine nicht gespeicherte Entscheidung zählt wieder herunter.
+  const _pruefenSessionKey = () =>
+    "adwatch.pruefenSession." + new Date().toISOString().slice(0, 10);
+  function bumpPruefenSession(delta) {
+    const n = Math.max((Number(localStorage.getItem(_pruefenSessionKey())) || 0) + delta, 0);
+    localStorage.setItem(_pruefenSessionKey(), String(n));
+    paintPruefenSession();
+  }
+  function paintPruefenSession() {
+    const el = $("#pruefenSession");
+    if (!el) return;
+    const n = Number(localStorage.getItem(_pruefenSessionKey())) || 0;
+    el.textContent = n ? `· heute entschieden: ${n}` : "";
   }
 
   function ensurePruefenLoaded() {
