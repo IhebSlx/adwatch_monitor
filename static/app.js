@@ -695,6 +695,7 @@
     }
     render();
     loadDivergence();   // independent fetch — never blocks the main render
+    loadHeute();        // dito — Heute-Karten und Entscheidungen-Badge
   }
 
   // Divergenz = Marketing-Aktivität × Umsatz-Lücke (insights/divergence.py).
@@ -727,6 +728,69 @@
       if (e.target.closest("a")) return;   // links keep working
       openCompanyDrawer(Number(tr.dataset.cid));
     }));
+  }
+
+  // HEUTE — die Antwort auf "was braucht mich gerade?": offene Entscheidungen,
+  // der laufende Job, der neueste Bericht. Drei vorhandene Endpunkte, keine
+  // neue Backend-Logik. Jede Karte degradiert einzeln zu "—", damit ein
+  // fehlschlagender Abruf nie die ganze Reihe leert.
+  async function loadHeute() {
+    const box = $("#heuteCards");
+    if (!box) return;
+    const [rev, jobs, reps] = await Promise.all([
+      api("/api/identity/review?limit=1").catch(() => null),
+      api("/api/fetch-jobs").catch(() => null),
+      api("/api/reports").catch(() => null),
+    ]);
+
+    // Die Zahl an der Navigation IST die Aufgabenliste — sie muss stimmen,
+    // auch wenn der Entscheidungen-Tab nie geöffnet wurde.
+    const open = rev ? (rev.total || 0) : null;
+    setPruefenBadge(open);
+
+    const running = (jobs || []).find(j => j.status === "running" || j.status === "cancelling");
+    const interrupted = (jobs || []).find(j => j.status === "interrupted");
+    const rep = ((reps || {}).reports || [])[0];
+
+    const jobCard = running
+      ? { label: "Läuft gerade", value: `${running.completed}/${running.total}`,
+          hint: running.label || running.kind, goto: "logs" }
+      : interrupted
+        ? { label: "Unterbrochener Lauf", value: `${interrupted.completed}/${interrupted.total}`,
+            hint: "Fortsetzbar — in Logs auf „Fortsetzen“", goto: "logs" }
+        : { label: "Läufe", value: "keine aktiv", hint: "Nichts wartet im Hintergrund", goto: "logs" };
+
+    const cards = [
+      { label: "Entscheidungen offen",
+        value: open == null ? "—" : open.toLocaleString("de-DE"),
+        hint: open ? "Website-Vorschläge warten auf Ja/Nein" : "Warteschlange ist leer",
+        goto: "pruefen" },
+      jobCard,
+      rep
+        ? { label: "Letzter Bericht", value: rep.label || rep.filename,
+            hint: rep.filter_label || "ohne Filter", goto: "reports" }
+        : { label: "Berichte", value: "—", hint: "Noch keiner erzeugt", goto: "reports" },
+    ];
+    box.innerHTML = cards.map(c => `
+      <button class="kpi kpi-link" data-goto="${c.goto}">
+        <div class="kpi-label">${esc(c.label)}</div>
+        <div class="kpi-value">${esc(String(c.value))}</div>
+        <div class="kpi-hint">${esc(c.hint)}</div>
+      </button>`).join("");
+    // showTab lebt in wireStatic() und ist hier nicht erreichbar — der Klick
+    // auf den Nav-Button nimmt denselben Weg wie ein echter Klick des Nutzers
+    // (Listener setzt localStorage und ruft showTab).
+    $$("#heuteCards [data-goto]").forEach(b => b.addEventListener("click", () => {
+      const tab = $$(".tab").find(t => t.dataset.tab === b.dataset.goto);
+      if (tab) tab.click();
+    }));
+  }
+
+  function setPruefenBadge(n) {
+    const badge = $("#navBadgePruefen");
+    if (!badge || n == null) return;
+    badge.textContent = n.toLocaleString("de-DE");
+    badge.classList.toggle("hidden", !n);
   }
 
   function render() {
@@ -769,7 +833,7 @@
   function renderTopbar() {
     const fetchBtn = $("#fetchBtn");
     fetchBtn.disabled = STATE.fetch_running || !STATE.apify_configured;
-    fetchBtn.textContent = STATE.fetch_running ? "Fetching…" : "Fetch latest ads";
+    fetchBtn.textContent = STATE.fetch_running ? "Ruft ab…" : "Anzeigen abrufen";
 
     const anyData = STATE.metrics.some(m => m.has_data);
     $("#noDataNotice").classList.toggle("hidden", anyData);
@@ -1360,7 +1424,9 @@
       $("#navToggle").textContent = on ? "»" : "«";
       try { localStorage.setItem("navCollapsed", on ? "1" : ""); } catch { /* private mode */ }
     };
-    $$(".tab").forEach(t => { t.title = t.textContent.trim(); });
+    // data-label statt textContent: der Entscheidungen-Tab trägt eine Badge,
+    // deren Zahl sonst im Tooltip landen würde ("Entscheidungen 536")
+    $$(".tab").forEach(t => { t.title = (t.dataset.label || t.textContent).trim(); });
     $("#navToggle").addEventListener("click", () =>
       applyNavCollapsed(!document.body.classList.contains("nav-collapsed")));
     try { if (localStorage.getItem("navCollapsed") === "1") applyNavCollapsed(true); } catch { }
@@ -1370,6 +1436,7 @@
       if (!btn) return;
       $$(".tab").forEach(t => t.classList.toggle("active", t === btn));
       $$(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
+      if (name === "dashboard") loadHeute();   // Karten beim Rückwechsel auffrischen
       if (name === "customers") ensureCustomersLoaded();
       if (name === "chancen") ensureChancenLoaded();
       if (name === "pruefen") ensurePruefenLoaded();
@@ -2345,6 +2412,7 @@
       const left = Math.max(TABLE_TOTALS["pruefenWrap"] || 0, 0);
       const cnt = $("#pruefenCount");
       if (cnt) cnt.textContent = `${tbody.rows.length} von ${left} offen`;
+      setPruefenBadge(left);   // die Zahl an der Navigation zählt live mit
       const table = tbody.closest("table");
       if (table) _applyTableState(table, "pruefenWrap");
     };

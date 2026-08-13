@@ -1018,3 +1018,37 @@ th.sorted-desc .th-caret::after { content: " ↓"; color: var(--accent); }
 .tag-warn { background: #fdf0e3; color: #8a5220; }
 .icp-feature-weak .fit-bar-fill { opacity: .45; }
 .icp-feature-weak .fit-row-pct { color: #8a5220; }
+
+/* ===================== Phase 1: Navigation in Arbeitsmodi ===================== */
+/* Gruppen-Überschriften: erst entscheiden (Arbeit), dann nachschlagen (Daten),
+   dann liefern (Erkenntnisse). System zuletzt — Debugging, nicht Alltag. */
+.nav-group {
+  margin: 14px 6px 3px; font-size: 10px; font-weight: 700;
+  letter-spacing: .13em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--side-muted) 66%, transparent);
+  user-select: none;
+}
+.tabs .nav-group:first-child { margin-top: 2px; }
+/* eingeklappte Leiste: Beschriftungen weg, ein dünner Trenner bleibt als Gruppengrenze */
+body.nav-collapsed .nav-group {
+  font-size: 0; margin: 7px 10px;
+  border-top: 1px solid var(--side-line);
+}
+
+/* Offene Entscheidungen direkt an der Navigation — die Zahl IST die Aufgabe. */
+.nav-badge {
+  margin-left: auto; min-width: 20px; padding: 1px 7px;
+  border-radius: 999px; font-size: 11px; font-weight: 700; text-align: center;
+  background: var(--accent); color: #fff; line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+body.nav-collapsed .nav-badge {
+  position: absolute; top: 3px; right: 5px;
+  font-size: 9px; min-width: 15px; padding: 1px 4px; line-height: 1.4;
+}
+
+/* Heute-Karten: KPI-Optik, aber klickbar — jede Karte führt an den Ort der Arbeit. */
+.heute-cards .kpi { cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.heute-cards .kpi-value { font-size: 21px; margin-top: 8px; overflow: hidden;
+                          text-overflow: ellipsis; white-space: nowrap; }
+.heute-cards .kpi-hint { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
