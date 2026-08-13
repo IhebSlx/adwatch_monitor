@@ -466,6 +466,32 @@ def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int =
     if not rows:
         return []
 
+    # Ranked by interest, not by name. `data` arrives sorted "active advertisers
+    # first, then alphabetically" — fine for the overview, wrong here: Spain has
+    # nine advertisers, so the other ~700 profiles were ordered purely by name and
+    # the cut at `limit` landed inside the letter A. Every high-fit Betrieb and
+    # every architect who awards contracts from B to Z was named in the tables
+    # above and then missing from the profiles below.
+    #
+    # Same tiers the qualification section ranks by, so the two sections agree:
+    # whoever is called out first up there is described first down here.
+    from .enrich.extract import BRANDS_DIRECT as _BRANDS_DIRECT
+    _direct = {b.lower() for b in _BRANDS_DIRECT}
+
+    def _tier(d) -> int:
+        e = enr.get(d["company_id"], {})
+        if e.get("solarlux_fit") == "hoch":
+            return 0 if any(b.lower() in _direct
+                            for b in (e.get("competitor_brands") or [])) else 1
+        if e.get("solarlux_relevance") == "hoch":
+            return 2 if e.get("decision_role") == "vergibt Aufträge" else 3
+        if e.get("solarlux_fit") == "mittel" or e.get("solarlux_relevance") == "mittel":
+            return 4
+        return 5
+
+    rows = sorted(rows, key=lambda d: (_tier(d), -(d.get("total_active_ads") or 0),
+                                       (d["company"] or "").lower()))
+
     h2 = ParagraphStyle("ph2", parent=styles["Heading2"], textColor=INK, fontSize=13,
                         spaceBefore=16, spaceAfter=4)
     nm = ParagraphStyle("pnm", parent=styles["Normal"], textColor=INK, fontSize=10,
@@ -557,8 +583,14 @@ def _profiles_story(data: list[dict], filters: dict | None, styles, limit: int =
             story.append(Paragraph(" &nbsp;·&nbsp; ".join(brands), meta))
 
     if len(rows) > limit:
-        story.append(Paragraph(f"… {len(rows) - limit} weitere angereicherte Firmen nicht "
-                               "dargestellt — vollständig im Excel-Export.", note))
+        # Say what the cut was made ON. "N weitere nicht dargestellt" reads like a
+        # random remainder; these are the lower-ranked ones, and the reader needs
+        # to know nothing qualified was dropped to make room for a name.
+        story.append(Paragraph(
+            f"… {len(rows) - limit} weitere angereicherte Firmen nicht dargestellt. "
+            "Gereiht nach Passung/Relevanz (Betriebe mit Passung hoch, dann Büros, "
+            "die Aufträge vergeben) — abgeschnitten wird am unteren Ende, nie am "
+            "Alphabet. Vollständig im Excel-Export.", note))
     return story
 
 

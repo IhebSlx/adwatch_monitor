@@ -3955,6 +3955,54 @@ def test_the_backfill_closes_only_what_was_really_searched(temp_db):
     assert dataquality.close_searched_not_found(apply=False)["rows"] == 0
 
 
+def test_profiles_are_cut_at_the_bottom_not_at_the_alphabet(temp_db):
+    """The profile section inherited the overview's ordering: active advertisers
+    first, then by NAME. Spain has nine advertisers and ~700 enriched companies,
+    so in practice the section was alphabetical and the cut at limit=80 landed
+    inside the letter A — 'Aluminios y Cristaleria Hisalma' was the last profile
+    in the report. Every Betrieb with Passung hoch and every architect who awards
+    contracts from B to Z was named in the qualification tables and then missing
+    from the profiles underneath.
+
+    The profiles now use the same tiers the qualification section ranks by, so
+    the two sections agree on who matters."""
+    from adwatch import report
+    from adwatch.db import SessionLocal
+    from adwatch.models import Company, CompanyEnrichment
+
+    s = SessionLocal()
+    # deliberately adversarial names: the best company sorts LAST alphabetically
+    seed = [("Zenit Cerramientos SL", "hoch", None, None, ["Panoramah"]),
+            ("Yebra Arquitectos", None, "hoch", "vergibt Aufträge", []),
+            ("Alfa Aluminios SL", "gering", None, None, []),
+            ("Beta Metalicas SL", "mittel", None, None, [])]
+    for name, fit, rel, role, brands in seed:
+        s.add(Company(name=name, country="ES", solarlux_fit=fit,
+                      solarlux_relevance=rel, decision_role=role,
+                      competitor_brands=brands, description=f"{name} Beschreibung"))
+    s.commit()
+    data = []
+    for c in s.query(Company).all():
+        s.add(CompanyEnrichment(company_id=c.id, status="enriched",
+                                fields={"description_de": f"{c.name} Beschreibung"}))
+        data.append({"company_id": c.id, "company": c.name,
+                     "total_active_ads": 0, "has_data": False})
+    s.commit()
+    s.close()
+
+    from reportlab.lib.styles import getSampleStyleSheet
+    story = report._profiles_story(data, None, getSampleStyleSheet(), limit=2)
+    text = " ".join(getattr(p, "text", "") for p in story)
+
+    zenit, yebra = text.find("Zenit"), text.find("Yebra")
+    alfa = text.find("Alfa Aluminios")
+    assert zenit != -1 and yebra != -1, "Passung hoch und Relevanz hoch muessen drin sein"
+    assert zenit < yebra, "Betrieb mit Passung hoch vor dem Buero"
+    assert alfa == -1 or alfa > yebra, \
+        "der alphabetisch erste, aber schlechteste Treffer darf den Platz nicht besetzen"
+    assert "nie am Alphabet" in text, "der Schnitt muss sich erklaeren"
+
+
 def test_a_company_is_not_fetched_twice_in_one_week(temp_db):
     """Measured 2026-08-11 over every ad fetch on record: 614 runs for only 300
     distinct company+source pairs, so 51% of all Apify spend bought a row that
