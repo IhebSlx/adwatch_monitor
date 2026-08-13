@@ -338,6 +338,16 @@ def _migrate(engine) -> None:
                               ("street", "VARCHAR(200)")]:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE crm_opportunities ADD COLUMN {name} {ddl}"))
+        # companies: Karten-Koordinaten (PLZ-Zentroid / Nominatim / manuell) —
+        # additive + nullable; NULL heißt schlicht "noch nicht geokodiert".
+        cols = _existing_columns(conn, "companies")
+        if cols:
+            for name, ddl in [
+                ("lat", "FLOAT"), ("lng", "FLOAT"),
+                ("geocode_precision", "VARCHAR(12)"), ("geocoded_at", "DATETIME"),
+            ]:
+                if name not in cols:
+                    conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
         # fetch_jobs: kind discriminator (fetch = ads, identity = page resolution only)
         cols = _existing_columns(conn, "fetch_jobs")
         if cols and "plan" not in cols:

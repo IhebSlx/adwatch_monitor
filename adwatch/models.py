@@ -55,6 +55,14 @@ class Company(Base):
     street: Mapped[str | None] = mapped_column(String(300), nullable=True)
     postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     city: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Karte: Koordinaten mit Präzisionsgrad. 'plz' = PLZ-Zentroid (GeoNames,
+    # offline, kostenlos — Stadt-genau), 'street' = Nominatim-Nachschärfung,
+    # 'manual' = von Hand gesetzt. Ein Pin trägt seine Präzision sichtbar —
+    # ungefähr muss ungefähr AUSSEHEN (dieselbe Regel wie belegt/KI-Chip).
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    geocode_precision: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    geocoded_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(80), nullable=True)
     email: Mapped[str | None] = mapped_column(String(300), nullable=True)
     fax: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -632,6 +640,25 @@ class CrmOpportunity(Base):
     quoted_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     quoted_count: Mapped[int] = mapped_column(Integer, default=0)
     sap_order_numbers: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+
+class PlzGeo(Base):
+    """PLZ -> Zentroid, aus den GeoNames-Postleitzahltabellen (CC-BY 4.0).
+
+    Eine Zeile je (Land, PLZ), Koordinate = Mittelwert über alle GeoNames-Orte
+    dieser PLZ. Damit ist die GESAMTE Firmenbasis sofort und kostenlos auf
+    Stadt-Genauigkeit pinnbar — ohne einen einzigen API-Aufruf. Straßengenau
+    (Nominatim, ~1 Anfrage/s) kommt später als eigener, fortsetzbarer Job und
+    nur für Firmen, bei denen die Präzision einen Unterschied macht."""
+    __tablename__ = "plz_geo"
+    __table_args__ = (UniqueConstraint("country", "plz", name="uq_plz_geo"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    country: Mapped[str] = mapped_column(String(2), index=True)
+    plz: Mapped[str] = mapped_column(String(20), index=True)
+    lat: Mapped[float] = mapped_column(Float)
+    lng: Mapped[float] = mapped_column(Float)
+    place: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 class CrmOrderEvent(Base):

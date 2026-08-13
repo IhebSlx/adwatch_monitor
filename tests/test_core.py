@@ -3955,6 +3955,58 @@ def test_the_backfill_closes_only_what_was_really_searched(temp_db):
     assert dataquality.close_searched_not_found(apply=False)["rows"] == 0
 
 
+def test_the_map_never_pins_a_private_household(temp_db):
+    """Die Karte zeigt Firmen. Private Endkunden sind Privatadressen — ein Pin
+    auf deren Wohnung ist genau die Sorte Leck, die die scope-Klausel
+    verhindern soll, und der Filter sitzt deshalb im SERVER, nicht im Frontend.
+
+    Außerdem festgenagelt: der Zentroid-Lauf überschreibt nie eine genauere
+    Koordinate ('street'/'manual'), die PLZ-Normalisierung lässt CRM- und
+    GeoNames-Schreibweise aufeinandertreffen (NL '1234 AB' -> '1234'), und der
+    Pin-Typ folgt dem Geld: wer je gekauft hat, ist Kunde, nicht Ziel."""
+    import datetime as dt
+    from adwatch import geo
+    from adwatch.models import Company, CrmOrderEvent, PlzGeo
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    s.add(PlzGeo(country="ES", plz="08036", lat=41.39, lng=2.15, place="Barcelona"))
+    s.add(PlzGeo(country="NL", plz="1234", lat=52.0, lng=4.3, place="Den Haag"))
+    s.add(Company(name="Kaeufer SL", country="ES", postal_code="08036", segment="Handel"))
+    s.add(Company(name="Estudio Arq", country="ES", postal_code="08036",
+                  segment="Architekten"))
+    s.add(Company(name="Privat E.", country="ES", postal_code="08036",
+                  segment="Private Endkunden"))
+    s.add(Company(name="NL Handel BV", country="NL", postal_code="1234 AB",
+                  segment="Handel"))
+    s.add(Company(name="Schon genau SL", country="ES", postal_code="08036",
+                  segment="Handel", lat=41.11111, lng=2.11111,
+                  geocode_precision="street"))
+    s.commit()
+    kid = s.scalar(select(Company.id).where(Company.name == "Kaeufer SL"))
+    s.add(CrmOrderEvent(company_id=kid, order_date=dt.date(2025, 1, 1), amount=3000))
+    s.commit()
+    s.close()
+
+    r = geo.assign_plz_centroids()
+    assert r["geocoded"] == 4, "vier ohne bessere Quelle — auch der Privatkunde darf KOORDINATEN haben"
+    assert r["kept_better"] == 1, "'street' wird nie durch einen Zentroid ersetzt"
+
+    s = temp_db.SessionLocal()
+    genau = s.scalar(select(Company).where(Company.name == "Schon genau SL"))
+    assert abs(genau.lat - 41.11111) < 1e-6, "die genauere Koordinate blieb stehen"
+    nl = s.scalar(select(Company).where(Company.name == "NL Handel BV"))
+    assert nl.lat == 52.0, "NL-PLZ '1234 AB' trifft die GeoNames-Zeile '1234'"
+    s.close()
+
+    es = geo.pins(filters={"country": ["ES"]})
+    names = {p["name"]: p for p in es["pins"]}
+    assert "Privat E." not in names, "Privatadressen erscheinen auf KEINER Karte"
+    assert names["Kaeufer SL"]["typ"] == "kunde", "wer je gekauft hat, ist Kunde"
+    assert names["Estudio Arq"]["typ"] == "architekt"
+    assert names["Schon genau SL"]["prec"] == "street"
+
+
 def test_pipeline_board_counts_the_chain_honestly(temp_db):
     """Das Board zeigt die Kette, die die App ohnehin erzwingt — und es muss
     dieselben Regeln sprechen wie der Rest des Codes: Private Endkunden sind

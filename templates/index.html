@@ -477,6 +477,24 @@
           </div>
         </div>
 
+        <!-- Liste | Karte: dieselben Firmen, derselbe Filter — nur die Darstellung
+             wechselt. Die Karte lädt Leaflet erst beim ersten Umschalten (lazy)
+             und holt ihre Pins über POST /api/map/pins mit dem AKTUELLEN
+             Explorer-Filter. Private Endkunden erscheinen nie (scope, Server). -->
+        <div class="view-toggle" id="custViewToggle">
+          <button class="btn btn-sm view-btn active" data-view="liste">☰ Liste</button>
+          <button class="btn btn-sm view-btn" data-view="karte">🗺 Karte</button>
+          <span id="custMapCount" class="muted" style="margin-left:10px"></span>
+        </div>
+        <div id="custMapWrap" class="hidden">
+          <div id="custMap"></div>
+          <div class="map-legend">
+            <span><i class="map-dot dot-kunde"></i> Kunde</span>
+            <span><i class="map-dot dot-architekt"></i> Architekt/Planer</span>
+            <span><i class="map-dot dot-interessent"></i> Interessent</span>
+            <span class="muted">Pin-Position = PLZ-Zentroid (stadtgenau)</span>
+          </div>
+        </div>
         <div class="table-wrap">
           <table id="customersTable" class="sortable">
             <thead><tr>
@@ -1077,6 +1095,14 @@
   <aside id="companyDrawer" class="company-drawer hidden" aria-hidden="true"></aside>
 </div>
 
+<!-- Leaflet lokal ausgeliefert (static/vendor) — kein CDN, die App bleibt
+     offline-fähig und kein Firmen-Datenverkehr berührt Dritte. Nur die
+     OSM-Kacheln selbst kommen von tile.openstreetmap.org. -->
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/vendor/leaflet/MarkerCluster.css">
+<link rel="stylesheet" href="/static/vendor/leaflet/MarkerCluster.Default.css">
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/vendor/leaflet/leaflet.markercluster.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

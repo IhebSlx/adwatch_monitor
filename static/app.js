@@ -901,6 +901,81 @@
       b.addEventListener("click", () => gotoTab(b.dataset.goto)));
   }
 
+  // ================= KARTE (Firmen: Liste | Karte) =================
+  // Airbnb-Muster: dieselben Firmen, derselbe Filter — Cluster statt Zeilen.
+  // Leaflet liegt lokal in static/vendor (kein CDN); nur die OSM-Kacheln
+  // kommen von tile.openstreetmap.org. Private Endkunden filtert der SERVER
+  // (scope) — ihre Adressen sind Privatwohnungen und gehören auf keine Karte.
+  let custMap = null, custClusters = null, custMapPins = [];
+  const MAP_TYPE_COLOR = { kunde: "#1c7c3c", architekt: "#8a5220", interessent: "#4f5ce5" };
+
+  function updateMapCount() {
+    if (!custMap) return;
+    const b = custMap.getBounds();
+    const n = custMapPins.reduce((a, p) => a + (b.contains([p.lat, p.lng]) ? 1 : 0), 0);
+    $("#custMapCount").textContent =
+      `Im Kartenausschnitt: ${n.toLocaleString("de-DE")} von ${custMapPins.length.toLocaleString("de-DE")} Firmen`;
+  }
+
+  async function loadCustMapPins() {
+    $("#custMapCount").textContent = "Lade Pins…";
+    let d;
+    try { d = await api("/api/map/pins", "POST", { filters: currentCustomerFilters() }); }
+    catch (e) { $("#custMapCount").textContent = `Fehler: ${e.message}`; return; }
+    custMapPins = d.pins;
+    custClusters.clearLayers();
+    custClusters.addLayers(d.pins.map(p => {
+      const m = L.circleMarker([p.lat, p.lng], {
+        radius: 6, weight: 1.5, color: "#fff",
+        fillColor: MAP_TYPE_COLOR[p.typ] || "#64708a",
+        // ungefähr muss ungefähr AUSSEHEN: PLZ-Zentroide leicht transparent
+        fillOpacity: p.prec === "plz" ? 0.7 : 0.95,
+      });
+      // der Popup-Link setzt nur den Hash — hashchange öffnet das Dossier,
+      // derselbe Weg wie eine in Teams geteilte URL
+      m.bindPopup(`<b>${esc(p.name)}</b><br>${esc(p.city || "")}<br>` +
+        `<span style="color:#64708a">${esc(p.typ)}${p.prec === "plz" ? " · Position: PLZ-Zentroid" : ""}</span><br>` +
+        `<a href="#/firma/${p.id}">Dossier öffnen →</a>`);
+      return m;
+    }));
+    // Bounds aus den DATEN, nicht aus der Cluster-Gruppe: chunkedLoading fügt
+    // Marker asynchron hinzu, getBounds() ist direkt nach addLayers noch leer
+    // und fitBounds wirft dann ("reading 'lat'") — gemessen beim ersten Test.
+    if (d.pins.length)
+      custMap.fitBounds(L.latLngBounds(d.pins.map(p => [p.lat, p.lng])).pad(0.08));
+    updateMapCount();
+  }
+
+  async function showCustMap() {
+    if (typeof L === "undefined") {
+      $("#custMapCount").textContent = "Kartenbibliothek nicht geladen (static/vendor fehlt?)";
+      return;
+    }
+    if (!custMap) {
+      custMap = L.map("custMap", { preferCanvas: true }).setView([49.5, 8.0], 5);
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende',
+        maxZoom: 19,
+      }).addTo(custMap);
+      custClusters = L.markerClusterGroup({ chunkedLoading: true });
+      custMap.addLayer(custClusters);
+      custMap.on("moveend zoomend", updateMapCount);
+    }
+    // der Container war eben noch display:none — Leaflet muss nachmessen
+    setTimeout(() => custMap.invalidateSize(), 0);
+    await loadCustMapPins();
+  }
+
+  $$("#custViewToggle .view-btn").forEach(b => b.addEventListener("click", async () => {
+    $$("#custViewToggle .view-btn").forEach(x => x.classList.toggle("active", x === b));
+    const karte = b.dataset.view === "karte";
+    $("#custMapWrap").classList.toggle("hidden", !karte);
+    $("#customersTable")?.closest(".table-wrap")?.classList.toggle("hidden", karte);
+    $("#custScrollSentinel")?.classList.toggle("hidden", karte);
+    if (karte) await showCustMap();
+    else $("#custMapCount").textContent = "";
+  }));
+
   function render() {
     renderTopbar();
     renderSignals();

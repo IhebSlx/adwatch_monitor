@@ -504,6 +504,20 @@ def pipeline_board_route(country: str | None = None):
     return pipeline.board(country)
 
 
+# --- Karte: Pins im Explorer-Filter. POST, weil das Filterobjekt dem des
+# --- Firmen-Explorers entspricht (customers._apply_filters) — der Filter
+# --- reist mit, es gibt keine zweite Filtersprache für die Karte.
+class MapPinsIn(BaseModel):
+    filters: dict | None = None
+    country: str | None = None
+
+
+@app.post("/api/map/pins")
+def map_pins_route(payload: MapPinsIn = MapPinsIn()):
+    from . import geo
+    return geo.pins(filters=payload.filters, country=payload.country)
+
+
 @app.get("/api/reports")
 def list_reports():
     from .report import list_reports as _list
