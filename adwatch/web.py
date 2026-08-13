@@ -562,6 +562,21 @@ def map_pins_route(payload: MapPinsIn = MapPinsIn()):
     return geo.pins(filters=payload.filters, country=payload.country)
 
 
+# --- IPP: Ideales Projekt-Profil + Triage der offenen Projekte -------------
+@app.get("/api/ipp")
+def ipp_profile_route(force: bool = False):
+    from .insights import ipp
+    p = dict(ipp.build(force=force))
+    p.pop("weights", None)   # intern — die Feature-Liste ist die lesbare Form
+    return p
+
+
+@app.get("/api/ipp/triage")
+def ipp_triage_route(limit: int = 50):
+    from .insights import ipp
+    return ipp.triage(limit=min(limit, 500))
+
+
 @app.get("/api/reports")
 def list_reports():
     from .report import list_reports as _list

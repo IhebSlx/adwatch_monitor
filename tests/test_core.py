@@ -3955,6 +3955,52 @@ def test_the_backfill_closes_only_what_was_really_searched(temp_db):
     assert dataquality.close_searched_not_found(apply=False)["rows"] == 0
 
 
+def test_ipp_scores_lift_not_popularity(temp_db):
+    """Die Lehre aus dem Firmen-ICP, auf Projekte übertragen: fit_for belohnte
+    die HÄUFIGSTE Ausprägung der Gewinner (Bauelementehandel: 36,5% der Gewinner,
+    Lift 1,03) und rankte damit exakt falsch herum. Das IPP muss Lift zahlen,
+    nicht Popularität — und unter MIN_SUPPORT Gewinnern ist eine Ausprägung
+    Anekdote und taucht gar nicht erst auf, egal wie perfekt ihre Quote ist."""
+    from adwatch.insights import ipp, projekte
+
+    # 100 entschiedene Projekte, Basisrate 20%: 'haeufig' tragen fast alle
+    # (Gewinner wie Verlierer), 'selten-gut' nur 12 — davon 9 Gewinner.
+    rows = []
+    for i in range(100):
+        won = i < 20
+        feats = {"haeufig"}
+        if (i < 9) or (77 <= i < 80):          # 9 Gewinner + 3 Verlierer
+            feats = {"haeufig", "selten-gut"}
+        if i == 0:
+            feats |= {"perfekt-aber-3x"}       # 100%-Quote, aber nur 1 Gewinner
+        rows.append(("k%d" % i, feats, projekte.WON if won else projekte.LOST,
+                     2024, None))
+
+    w = ipp._fit(rows)
+    assert "perfekt-aber-3x" not in w, "unter dem Boden zählt keine perfekte Quote"
+    assert "selten-gut" not in w, "9 Gewinner sind unter MIN_SUPPORT=10 — Anekdote"
+    assert abs(w["haeufig"]["lift"] - 1.0) < 0.05, \
+        "was jeder hat, sagt nichts — Lift ~1, nicht 'stark weil haeufig'"
+
+    # jetzt mit genug Support: 15 Gewinner von 20 Trägern -> Lift deutlich > 1,
+    # aber Laplace hält ihn UNTER der rohen Quote (75% / 20% = 3,75)
+    rows2 = []
+    for i in range(200):
+        won = i < 40
+        feats = {"basis"}
+        if (i < 15) or (190 <= i < 195):
+            feats = {"basis", "gut"}
+        rows2.append(("j%d" % i, feats, projekte.WON if won else projekte.LOST,
+                      2024, None))
+    w2 = ipp._fit(rows2)
+    raw = (15 / 20) / 0.2
+    assert 1.5 < w2["gut"]["lift"] < raw, \
+        "Laplace muss die kleine Stichprobe daempfen, nicht ausloeschen"
+
+    # der Score eines Projekts mit dem guten Merkmal schlaegt eines ohne
+    assert ipp._score({"basis", "gut"}, w2) > ipp._score({"basis"}, w2)
+
+
 def test_health_reports_the_three_lifelines(temp_db):
     """Für den Betrieb als Dienst: EIN HTTP-Blick muss sagen, ob die App lebt.
     Der Endpunkt prüft die drei Lebensadern (DB, Sicherung, CRM-Sync-Alter) und
