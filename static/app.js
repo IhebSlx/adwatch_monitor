@@ -1579,6 +1579,11 @@
     const savedTab = localStorage.getItem("adwatch.activeTab");
     if (savedTab && savedTab !== "dashboard") showTab(savedTab);
 
+    // Deep-Link beim Start: eine geteilte #/firma/123-URL öffnet das Dossier
+    // direkt — der Empfänger braucht keinen Klickpfad durch Tabs und Filter.
+    const dl = location.hash.match(/^#\/firma\/(\d+)$/);
+    if (dl) openCompanyDrawer(Number(dl[1]));
+
     $("#addCompanyForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const input = $("#newCompanyName");
@@ -3593,23 +3598,69 @@
     return `<div class="drawer-kv"><dt>${esc(label)}</dt><dd>${value || '<span class="muted">—</span>'}</dd></div>`;
   }
 
+  // ---- Deep-Link: #/firma/123 ist die Adresse des Dossiers -----------------
+  // Öffnen setzt den Hash, Schließen räumt ihn weg, der Zurück-Knopf des
+  // Browsers schließt. Eine in Teams geteilte URL landet damit ohne Klickpfad
+  // auf derselben Firma — das Dossier ist eine Seite, kein Zustand.
+  let drawerCompanyId = null;
+  const firmaHash = (id) => `#/firma/${id}`;
+
+  window.addEventListener("hashchange", () => {
+    const m = location.hash.match(/^#\/firma\/(\d+)$/);
+    if (m && Number(m[1]) !== drawerCompanyId) openCompanyDrawer(Number(m[1]));
+    else if (!m && drawerCompanyId != null) closeCompanyDrawer();
+  });
+
   function closeCompanyDrawer() {
+    drawerCompanyId = null;
     $("#companyDrawer").classList.add("hidden");
     $("#drawerBackdrop").classList.add("hidden");
+    // Hash aufräumen, ohne einen History-Eintrag anzuhängen — sonst braucht
+    // "zurück" nach dem Schließen zwei Klicks
+    if (/^#\/firma\//.test(location.hash))
+      history.replaceState(null, "", location.pathname + location.search);
+  }
+
+  // Wie die Website bewiesen wurde — in der Sprache des Nutzers, nicht des Codes.
+  const MATCHED_BY_LABEL = {
+    phone: "Telefon auf der Seite gefunden", plz_street: "PLZ + Straße stimmen",
+    plz_name: "PLZ + Name stimmen", domain_in_name: "Domain steckt im Firmennamen",
+    domain_plus_name: "Domain + Name stimmen", manual: "von Hand bestätigt",
+    sap: "aus SAP übernommen (unbewiesen)",
+  };
+  const IDENTITY_WEB_CHIP = {
+    verified:     ["idw-verified", "verifiziert"],
+    needs_review: ["idw-review", "Vorschlag offen — im Entscheidungen-Tab"],
+    not_found:    ["idw-notfound", "keine Website auffindbar (geprüft)"],
+    unreachable:  ["idw-notfound", "Website nicht erreichbar"],
+    conflict:     ["idw-conflict", "Konflikt — Seite gehört wem anderen"],
+    unverified:   ["idw-unknown", "unbewiesen (Altbestand)"],
+  };
+  function identityWebChip(status) {
+    const [cls, label] = IDENTITY_WEB_CHIP[status] || ["idw-unknown", "noch nicht geprüft"];
+    return `<span class="tag ${cls}">${esc(label)}</span>`;
   }
 
   // ---------------- enrichment (drawer section + review queue) ----------------
   function enrichFieldsHtml(e) {
     const f = e.fields || {};
     const prov = e.provenance || {};
-    // every value shows WHERE it came from — hover gives the source + the quote
+    // Jeder Wert trägt seinen Beweisgrad als Chip: „belegt" (Fakt von der
+    // Seite, Konfidenz >= 0,7) vs „KI-Einschätzung" (Ableitung, muss vor einer
+    // Ansprache geprüft werden). Hover zeigt Quelle + Zitat. Das ist dieselbe
+    // Unterscheidung, die der PDF-Bericht macht — eine Sprache, zwei Orte.
+    const provChip = (p) => {
+      if (!p) return "";
+      const belegt = (p.confidence ?? 0) >= 0.7;
+      return ` <span class="tag ${belegt ? "tag-belegt" : "tag-ki"}">${belegt ? "belegt" : "KI-Einschätzung"}</span>`;
+    };
     const kv = (label, value, key) => {
       if (value === undefined || value === null || value === "" ||
           (Array.isArray(value) && !value.length)) return "";
       const p = prov[key];
       const tip = p ? `${p.source}${p.confidence ? ` · ${Math.round(p.confidence * 100)}%` : ""}${p.evidence ? ` · „${p.evidence}"` : ""}` : "";
       const shown = Array.isArray(value) ? value.join(", ") : value;
-      return `<div class="drawer-kv"><dt>${esc(label)}</dt><dd${tip ? ` title="${esc(tip)}"` : ""}>${esc(String(shown))}${p ? ` <span class="tag">${esc(p.source)}</span>` : ""}</dd></div>`;
+      return `<div class="drawer-kv"><dt>${esc(label)}</dt><dd${tip ? ` title="${esc(tip)}"` : ""}>${esc(String(shown))}${provChip(p)}</dd></div>`;
     };
     const solarlux = f.mentions_solarlux === true
       ? `<span class="tag tag-saved">nennt Solarlux</span>`
@@ -3618,11 +3669,14 @@
       ? `<span class="tag tag-filtered">Wettbewerber: ${esc(f.competitor_brands.join(", "))}</span>` : "";
     const body = [
       kv("Beschreibung", f.description_de, "description_de"),
+      kv("Einschätzung", f.assessment_de, "assessment_de"),
       kv("Produkte", f.products, "products"),
+      kv("Projekt-Fokus", f.project_focus, "project_focus"),
       kv("Gegründet", f.founded_year, "founded_year"),
       kv("Größe", f.employee_hint, "employee_hint"),
       kv("Rechtsform", f.legal_form, "legal_form"),
       kv("Einsatzgebiet", f.service_area, "service_area"),
+      kv("Partner von", f.partner_of, "partner_of"),
     ].join("");
     return `${solarlux || comps ? `<p style="margin:0 0 8px">${solarlux} ${comps}</p>` : ""}
       ${body ? `<dl class="drawer-grid">${body}</dl>` : `<p class="hint">Noch keine Felder extrahiert.</p>`}
@@ -3683,14 +3737,16 @@
     const drawer = $("#companyDrawer");
     $("#drawerBackdrop").classList.remove("hidden");
     drawer.classList.remove("hidden");
-    drawer.innerHTML = `<div class="drawer-body"><p class="hint">Loading…</p></div>`;
+    drawer.innerHTML = `<div class="drawer-body"><p class="hint">Lädt…</p></div>`;
+    drawerCompanyId = id;
+    if (location.hash !== firmaHash(id)) location.hash = firmaHash(id);
 
     let detail = null;
     try { detail = await api(`/api/companies/${id}/detail`); } catch (e) { /* untracked is fine */ }
     // works from ANY tab — prefer the Explorer's loaded row (may not exist yet
     // when the drawer opens from the dashboard), else the API's copy
     const row = (CUST.lastRows || []).find(r => r.id === id) || detail?.company;
-    if (!row) { closeCompanyDrawer(); alert("Could not load this company."); return; }
+    if (!row) { closeCompanyDrawer(); alert("Firma konnte nicht geladen werden."); return; }
     const m = detail?.metric;
     const st = row.resolution_status;
 
@@ -3701,12 +3757,12 @@
       ? `<a class="link" href="${esc(/^https?:\/\//.test(row.website_domain) ? row.website_domain : "https://" + row.website_domain)}" target="_blank">${esc(row.website_domain)}</a>` : "";
 
     const adBlock = m && m.has_data ? `
-        ${drawerKv("Active ads", `<b>${m.total_active_ads}</b> (Meta ${m.meta_active_ads ?? 0} · Google ${m.google_active_ads ?? 0})`)}
-        ${drawerKv("New this week", m.new_ads ?? "—")}
+        ${drawerKv("Aktive Anzeigen", `<b>${m.total_active_ads}</b> (Meta ${m.meta_active_ads ?? 0} · Google ${m.google_active_ads ?? 0})`)}
+        ${drawerKv("Neu diese Woche", m.new_ads ?? "—")}
         ${drawerKv("Score", m.score != null ? Math.round(m.score) + "/100" : "—")}
-        ${drawerKv("Est. spend / wk", m.spend_low != null ? `${eur(m.spend_low)} – ${eur(m.spend_high)}` : "—")}
-        ${drawerKv("Products", esc((m.products || []).join(", ")))}`
-      : `<p class="hint">No ad data yet — run an <b>Ad lookup</b> on this company to fetch its ads.</p>`;
+        ${drawerKv("Gesch. Ausgaben/Wo.", m.spend_low != null ? `${eur(m.spend_low)} – ${eur(m.spend_high)}` : "—")}
+        ${drawerKv("Produkte", esc((m.products || []).join(", ")))}`
+      : `<p class="hint">Noch keine Anzeigen-Daten — per <b>Ad lookup</b> in Firmen abrufen. <span class="muted">Nie abgerufen heißt unbekannt, nicht inaktiv.</span></p>`;
 
     // the actual current ad copies (latest tracked week), newest first
     const weekAds = (detail?.week?.ads || []).filter(a => a.ad_text || a.ad_library_url);
@@ -3726,8 +3782,8 @@
     const cands = detail?.company?.candidates || [];
     const candHtml = cands.length ? `
         <div class="drawer-section">
-          <h3>Candidates — is one of these the right page?</h3>
-          <p class="hint" style="margin:0 0 10px">Ranked by the identity check. “Use” sets it as the verified page (protected from auto-changes).</p>
+          <h3>Kandidaten — ist eine davon die richtige Seite?</h3>
+          <p class="hint" style="margin:0 0 10px">Von der Identitätsprüfung gereiht. „Übernehmen" setzt die Seite als verifiziert (vor automatischen Änderungen geschützt).</p>
           ${cands.map((cand, i) => {
             const uri = cand.profile_uri || (cand.page_id ? fbPageUrl(cand.page_id) : "#");
             const sig = [
@@ -3745,11 +3801,11 @@
             return `<div class="candidate-item">
               <div style="min-width:0">
                 <a class="link" href="${esc(uri)}" target="_blank">${esc(cand.name || cand.page_id)}</a>
-                ${isCurrent ? `<span class="role-badge">current</span>` : ""}
+                ${isCurrent ? `<span class="role-badge">aktuell</span>` : ""}
                 <div class="page-meta">${esc(cand.category || "")}${cand.category ? " · " : ""}${sig}</div>
               </div>
               ${cand.page_id && !isCurrent
-                ? `<button class="btn btn-sm btn-primary drawer-use-cand" data-i="${i}">Use</button>` : ""}
+                ? `<button class="btn btn-sm btn-primary drawer-use-cand" data-i="${i}">Übernehmen</button>` : ""}
             </div>`;
           }).join("")}
         </div>` : "";
@@ -3764,38 +3820,49 @@
           <span class="muted">SAP ${esc(row.sap_number || "—")}</span>
         </div>
         <div class="drawer-head-actions">
-          ${isReviewable ? `<button class="btn btn-sm drawer-next-review" title="Jump to the next company needing review on this page">Next to review →</button>` : ""}
-          <button class="btn btn-ghost drawer-close" title="Close">✕</button>
+          <button class="btn btn-sm drawer-copylink" title="Link zu dieser Firma kopieren — öffnet das Dossier direkt">🔗 Link</button>
+          ${isReviewable ? `<button class="btn btn-sm drawer-next-review" title="Zur nächsten Firma springen, die eine Prüfung braucht">Nächste prüfen →</button>` : ""}
+          <button class="btn btn-ghost drawer-close" title="Schließen">✕</button>
         </div>
       </div>
       <div class="drawer-body">
         <div class="drawer-section">
+          <h3>Identität — Website</h3>
+          <dl class="drawer-grid">
+            ${drawerKv("Status", identityWebChip(row.identity_status))}
+            ${row.identity_matched_by ? drawerKv("Beweis", esc(MATCHED_BY_LABEL[row.identity_matched_by] || row.identity_matched_by)) : ""}
+            ${drawerKv("Website", website || `<span class="muted">—</span>`)}
+            ${row.website_source ? drawerKv("Quelle", esc(row.website_source)) : ""}
+          </dl>
+          <p class="hint">Eine Website gilt erst als „diese Firma", wenn ein harter Beweis vorliegt — Telefon, PLZ + Straße/Name oder Domain = Name. Alles darunter bleibt Vorschlag.</p>
+        </div>
+        <div class="drawer-section">
           <div class="drawer-section-head">
-            <h3>Identity — Meta page</h3>
-            <button id="drawerRecheckBtn" class="btn btn-sm" title="Re-run the identity check for this company (website + Google + AI)">↻ Recheck</button>
+            <h3>Identität — Meta-Seite</h3>
+            <button id="drawerRecheckBtn" class="btn btn-sm" title="Identitätsprüfung neu laufen lassen (Website + Google + KI)">↻ Neu prüfen</button>
           </div>
           <div class="drawer-idrow">${idFbCell(row)}</div>
           <div class="inline-form" style="margin-top:10px">
             <input type="text" id="drawerPageId" placeholder="Page ID" value="${esc(row.page_id || "")}" style="flex:1;min-width:110px">
             <input type="text" id="drawerPageName" placeholder="Page name" value="${esc(row.page_name || "")}" style="flex:1.4;min-width:130px">
             ${st === "locked"
-              ? `<button id="drawerUnlockBtn" class="btn btn-sm">Unlock</button>`
-              : `<button id="drawerLockBtn" class="btn btn-sm btn-primary" title="Save and freeze — never overwritten by automatic checks">🔒 Lock</button>`}
+              ? `<button id="drawerUnlockBtn" class="btn btn-sm">Entsperren</button>`
+              : `<button id="drawerLockBtn" class="btn btn-sm btn-primary" title="Speichern und einfrieren — automatische Prüfungen überschreiben nie">🔒 Sperren</button>`}
             ${(row.page_id || row.page_url)
-              ? `<button id="drawerUnlinkBtn" class="btn btn-sm btn-danger" title="Remove this wrong page — keeps the candidate list for review">✕ Unlink</button>` : ""}
+              ? `<button id="drawerUnlinkBtn" class="btn btn-sm btn-danger" title="Falsche Seite entfernen — die Kandidatenliste bleibt zur Prüfung erhalten">✕ Trennen</button>` : ""}
           </div>
-          <p class="hint">Locking freezes this page as verified — automatic identity checks will never overwrite it.</p>
+          <p class="hint">Sperren friert die Seite als verifiziert ein — automatische Prüfungen überschreiben sie nie.</p>
         </div>
         ${candHtml}
         ${dossierSection(detail?.dossier)}
         ${crmSection(detail?.company || row)}
         <div class="drawer-section">
-          <h3>Ad activity</h3>
+          <h3>Werbung</h3>
           ${adBlock}
         </div>
         ${weekAds.length ? `
         <div class="drawer-section">
-          <h3>Current ads (${weekAds.length})</h3>
+          <h3>Aktuelle Anzeigen (${weekAds.length})</h3>
           ${adListHtml}
         </div>` : ""}
         <div class="drawer-section">
@@ -3810,13 +3877,13 @@
         </div>
         <div class="drawer-section" id="drawerEnrichSection">
           <div class="drawer-section-head">
-            <h3>Firmeninfos (angereichert)</h3>
+            <h3>Steckbrief — von der eigenen Website</h3>
             <button id="drawerEnrichBtn" class="btn btn-sm" title="Website finden (falls fehlend) und Firmeninfos von der eigenen Website lesen">✨ Anreichern</button>
           </div>
-          <div id="drawerEnrichBody"><p class="hint">Lade…</p></div>
+          <div id="drawerEnrichBody"><p class="hint">Lädt…</p></div>
         </div>
         <div class="drawer-section">
-          <h3>Master data</h3>
+          <h3>Stammdaten</h3>
           <dl class="drawer-grid">
             ${drawerKv("KV", esc(row.kv))}
             ${drawerKv("Segment", esc(row.segment))}
@@ -3834,16 +3901,28 @@
           <div class="drawer-revs">${revRow}</div>
         </div>
         <div class="drawer-section">
-          <h3>Edit company</h3>
+          <h3>Historie</h3>
+          <dl class="drawer-grid">
+            ${drawerKv("Letzte Identitätsprüfung", row.identity_checked_at ? deDate(row.identity_checked_at) : `<span class="muted">nie</span>`)}
+            ${drawerKv("Letzter Anzeigen-Abruf", (m && m.week_start) ? deDate(m.week_start) : `<span class="muted">nie — unbekannt, nicht inaktiv</span>`)}
+          </dl>
+        </div>
+        <div class="drawer-section">
+          <h3>Firma bearbeiten</h3>
           <div class="inline-form">
             <input type="text" id="drawerName" value="${esc(row.name)}" style="flex:2;min-width:170px">
-            <input type="text" id="drawerDomain" placeholder="website domain" value="${esc(row.website_domain || "")}" style="flex:1.4;min-width:140px">
-            <button id="drawerSaveBtn" class="btn btn-sm">Save</button>
+            <input type="text" id="drawerDomain" placeholder="Website-Domain" value="${esc(row.website_domain || "")}" style="flex:1.4;min-width:140px">
+            <button id="drawerSaveBtn" class="btn btn-sm">Speichern</button>
           </div>
         </div>
       </div>`;
 
     $(".drawer-close", drawer).addEventListener("click", closeCompanyDrawer);
+    $(".drawer-copylink", drawer)?.addEventListener("click", async () => {
+      const url = location.origin + location.pathname + firmaHash(id);
+      try { await navigator.clipboard.writeText(url); toast("✓ Link kopiert — öffnet dieses Dossier direkt.", "info"); }
+      catch { prompt("Link zum Kopieren:", url); }   // Clipboard-API kann in http-Kontexten fehlen
+    });
     wireVcLinks(drawer, id);
     const refresh = async () => { await loadCustomers(); closeCompanyDrawer();
       openCompanyDrawer(id); };   // drawer no longer depends on the Explorer's page

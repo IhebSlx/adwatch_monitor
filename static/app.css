@@ -1080,3 +1080,15 @@ body.nav-collapsed .nav-badge {
   .pipe-bar { grid-column: 2; }
   .pipe-counts, .pipe-action { grid-column: 1 / -1; text-align: left; }
 }
+
+/* ===================== Phase 3: Dossier — Beweis-Chips ===================== */
+/* Website-Identität: der Status trägt seine Farbe, der Beweis steht daneben. */
+.idw-verified { background: #e6f6ec; color: #1c7c3c; }
+.idw-review   { background: #fdf0e3; color: #8a5220; }
+.idw-notfound { background: #f1f2f6; color: #64708a; }
+.idw-conflict { background: #fdecec; color: #b3261e; }
+.idw-unknown  { background: #f1f2f6; color: #64708a; }
+/* Steckbrief: belegt (Fakt von der Seite) vs KI-Einschätzung (Ableitung) —
+   dieselbe Unterscheidung wie im PDF-Bericht, eine Sprache an beiden Orten. */
+.tag-belegt { background: #e6f6ec; color: #1c7c3c; }
+.tag-ki     { background: #eef0fd; color: #3a44b5; }

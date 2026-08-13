@@ -200,7 +200,13 @@ def index():
     for name in ("app.js", "app.css"):
         v = int((config.ROOT / "static" / name).stat().st_mtime)
         html = html.replace(f"/static/{name}", f"/static/{name}?v={v}")
-    return html
+    # The ?v= trick only works if THIS response is never served stale: the
+    # version parameter lives in the HTML, so a cached index pins the old
+    # app.js no matter how fresh the file on disk is. Measured 2026-08-13:
+    # the page kept executing a 13-minutes-old app.js through two forced
+    # reloads because the HTML (and with it ?v=) came from browser cache.
+    # no-cache = revalidate every time, which is one cheap request.
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 # ---------------------------------------------------------------------------
