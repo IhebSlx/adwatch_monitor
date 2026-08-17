@@ -286,6 +286,62 @@ eine Wertgrenze.
 sollte daher nach **Erwartungswert** (Wahrscheinlichkeit × prognostizierte
 Größe) sortieren, nicht nach Wahrscheinlichkeit allein.
 
+## 10a. Partnerstufen (Gold-Partner) — niemals Merkmal, vermutlich Zielgröße
+
+**Als Merkmal verboten.** Eine Firma ist Gold-Partner, WEIL sie viel verkauft.
+Ein Modell, das die Stufe als Eingabe bekommt, sagt die Vergangenheit voraus —
+derselbe Fehler wie `kv` (Quotient 150×). Das gilt für alles daraus Abgeleitete:
+Rabattstufe, Vertragsart, Showroom-Zuschuss.
+
+**Als Zielgröße wahrscheinlich besser.** Was aus den 1.369 seit 2023 neu
+gewonnenen Händlern wirklich wurde:
+
+| Ergebnis | n | Anteil |
+|---|---:|---:|
+| **Strohfeuer** — ein Bestelljahr, < 2.000 € | **556** | 41 % |
+| ≥ 2 Bestelljahre | 409 | 30 % |
+| ≥ 2 Jahre und ≥ 10.000 € — echte Partner | 279 | 20 % |
+| ≥ 3 Jahre und ≥ 25.000 € — „Gold"-artig | **85** | 6 % |
+
+**Zwei von fünf „Gewinnen" sind Strohfeuer.** Das heutige ICP behandelt eine
+einmalige 101-€-Bestellung wie eine 72.000-€-Partnerschaft. Das ist unabhängig
+von jeder AUC die falsche Steuergröße.
+
+Die Umsatzkonzentration verschärft das: die besten **1 %** der Händler (34
+Firmen) tragen **36,1 %**, die besten 5 % (173 Firmen) **72,6 %** des
+Händlerumsatzes. Das Spiel besteht darin, die wenigen Großen zu finden.
+
+Gemessene Vorhersagbarkeit:
+
+| Zielgröße | Positive | AUC (95 %) | Geo-Holdout | Lift ob. Dezil |
+|---|---:|---|---|---:|
+| irgendeine Bestellung | 1.369 | 0,608 [0,593–0,624] | 0,600 | 1,47× |
+| **Gold-artig (3 J / 25 k)** | 85 | **0,686 [0,633–0,736]** | 0,648 [0,595–0,697] | **2,71×** |
+
+Die kreuzvalidierten Intervalle trennen sich knapp (0,624 gegen 0,633), die
+Geo-Holdout-Intervalle **überlappen** jedoch. Bei 85 Positiven ist das
+**ein Hinweis, kein Beleg** — und mehr wird hier nicht behauptet.
+
+Entscheidend: diese 85 sind ein Behelfsmaß, gebildet nur aus NEU gewonnenen
+Firmen, die eine harte Schwelle in 3,6 Jahren erreichen. Die **echte
+Gold-Liste enthält auch langjährige Partner** — vermutlich einige hundert
+Positive, womit die Frage sauber entscheidbar wäre.
+
+**Für Bestandspartner ist die Stufe die natürliche Schichtung:** „welcher
+Silber-Partner hat Gold-Potenzial" ist eine andere, gut gestellte Frage — dort
+gehört die Stufe als Segmentierung hin, nicht als Prädiktor ihrer selbst.
+
+**Offene Frage an den Vertrieb:** Wird Gold rein nach Umsatz vergeben oder auch
+nach qualitativen Kriterien (Schulungen, Showroom, Zertifizierung,
+Exklusivität)? Rein umsatzabgeleitet wäre es nur eine umbenannte Umsatzstufe
+ohne Zusatzinformation. Kodiert es Bindung und Fähigkeit, ist es die bessere
+Zielgröße — und die qualitativen Kriterien selbst wären hervorragende
+Anreicherungsmerkmale, nach denen sich auf der Website eines Interessenten
+suchen ließe.
+
+Das Feld liegt **nicht** im Spiegel (`partner_of` ist angereichert und meint
+Wettbewerbsmarken) und gehört zum Dataverse-Abzug (§11, Aufgabe 8).
+
 ## 11. Was das CRM über verlorene Ansprachen wirklich weiß
 
 | | Anzahl |
