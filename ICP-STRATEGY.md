@@ -342,6 +342,54 @@ suchen ließe.
 Das Feld liegt **nicht** im Spiegel (`partner_of` ist angereichert und meint
 Wettbewerbsmarken) und gehört zum Dataverse-Abzug (§11, Aufgabe 8).
 
+## 10b. Ein Modell je Filter? Gemessen: nein
+
+Naheliegende Idee: eigene ICPs je Land, je Produktfamilie, je Land × Produkt.
+Empirisch geprüft — gepoolt (Land als **Merkmal**) gegen getrennt (ein Modell
+**je** Land), identische Folds:
+
+| Land | n | Käufer | gepoolt | getrennt | Urteil |
+|---|---:|---:|---:|---:|---|
+| DE | 7.822 | 995 | 0,602 | 0,601 | gleich |
+| FR | 1.495 | 155 | 0,532 | 0,557 | getrennt +0,025 |
+| AT | 945 | 154 | 0,541 | 0,510 | **gepoolt +0,031** |
+| NL/ES/SE/DK/IT | 101–294 | 5–17 | — | — | zu wenige Positive |
+| **gesamt** | 11.319 | 1.369 | **0,611** | **0,607** | **gepoolt gewinnt** |
+
+**Die Regel dahinter:** Trennen lohnt nur, wenn sich die ZUSAMMENHÄNGE
+unterscheiden, nicht wenn sich die Basisraten unterscheiden. Dass Spanien
+weniger kauft als Deutschland, ist ein Unterschied in der Basisrate — dafür
+genügt EIN Parameter (das Merkmal `land`), während alle anderen Muster
+weiterhin aus allen 11.319 Zeilen lernen. Ein eigenes Modell zahlt sich erst
+aus, wenn etwa Fensterbauer in Deutschland gute, in Frankreich schlechte
+Interessenten wären. Das ist gemessen nicht der Fall.
+
+**Der Preis der Trennung ist nichtlinear:** rund 50 wirksame Parameter
+(One-Hot-Kategorien) und die übliche Regel von ≥ 10 Ereignissen je Parameter
+ergeben **~500 Positive je Zelle**. Deutschland hat 995, Frankreich 155,
+Österreich 154, Spanien 5. Land × Produktfamilie landet überall im
+einstelligen Bereich.
+
+**Die Produktdimension hat zusätzlich ein strukturelles Problem:** bei einem
+Interessenten wissen wir nicht, was er kaufen WÜRDE — die Produktfamilie ist
+erst nach dem Kauf beobachtbar. Deshalb:
+
+| Frage | machbar? |
+|---|---|
+| ICP je Produkt für **Interessenten** | nein — außer die Anreicherung liest es von der Website |
+| Produktfamilien im **Projekt-Profil** | **ja, bereits umgesetzt** (Schiebe-Dreh 1,60×, Wintergarten 0,60×) |
+| Cross-Selling im **Bestand** („wer kauft als Nächstes cero?") | ja, gut besetzt |
+
+**Empfehlung:** ein gepooltes Modell, Filter als Merkmale, und der Filter wirkt
+erst bei der ANZEIGE. „Spanien, Wintergarten" filtert die Liste; bewertet hat
+ein Modell, das auf allem trainiert wurde.
+
+Die Laplace-Glättung in `profiles.py` und `ipp.py`
+(`p = (won + 5·base) / (total + 5)`) ist genau die statistisch richtige
+Zwischenform: **partielles Pooling**. Eine kleine Zelle wird in dem Maß zur
+Gesamtrate hingezogen, in dem ihr Beleg fehlt — ein spanisches Untersegment mit
+12 Firmen darf nicht so laut sprechen wie ein deutsches mit 3.037.
+
 ## 11. Was das CRM über verlorene Ansprachen wirklich weiß
 
 | | Anzahl |
