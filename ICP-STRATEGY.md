@@ -243,12 +243,85 @@ Rang 3 besser als Rang 30. Bei AUC 0,60 ist er das nicht.
 1. **Ist „mindestens eine Bestellung" der richtige Erfolg?** Alternativ:
    Deckungsbeitrag, Wiederkaufrate, oder „wird Stammpartner" (≥ 3 Jahre aktiv).
    Die Zielgröße ist eine Geschäftsentscheidung, keine mathematische.
-2. **Was kostet ein Fehlversuch?** Ein Besuch, ein Anruf und eine
-   Messeeinladung haben sehr verschiedene Preise. Erst damit wird aus einer
-   Rangliste eine Kappungsgrenze („die obersten N").
-3. **Gibt es eine Liste bereits kontaktierter, aber nicht gewonnener Firmen?**
-   Das wären die wertvollsten Negativbeispiele überhaupt — heute sehen sie
-   im Datenbestand aus wie „nie versucht".
+2. **Was kostet welche Ansprache?** Siehe §10 — die Frage lautet nicht „lohnt
+   sich der Kontakt" (er lohnt sich fast immer), sondern „wer bekommt den
+   teuren Kontakt".
+3. ~~Gibt es eine Liste kontaktierter, aber nicht gewonnener Firmen?~~
+   **Beantwortet, siehe §11 — es gibt sie, teilweise.**
+
+## 10. Die Wirtschaftlichkeit — warum AUC 0,60 trotzdem Geld wert ist
+
+Wert einer neu gewonnenen Händlerbeziehung, gemessen an den 1.486 Firmen, die
+seit 2023 erstmals gekauft haben (Fenster 2023-01 bis 2026-08):
+
+| Kennzahl | Wert |
+|---|---:|
+| Median-Umsatz | 2.752 € |
+| **Mittelwert** | **18.357 €** |
+| 90. Perzentil | 41.138 € |
+| 95. Perzentil | 71.880 € |
+| Gesamtumsatz der Kohorte | 27,3 Mio. € |
+
+Rechenbeispiel über 100 Anrufe bei deutschen Händlern:
+
+| Auswahl | Trefferquote | erwartete Kunden | erwarteter Umsatz |
+|---|---:|---:|---:|
+| zufällig | 12,7 % | ~13 | ~239.000 € |
+| oberstes Modell-Dezil | 18,0 % | ~18 | ~330.000 € |
+
+Die Rangfolge ist damit rund **900 € zusätzlich erwarteter Umsatz je getätigtem
+Anruf** wert — auch bei „schwacher" AUC 0,60, weil der Gewinn je Treffer groß
+ist.
+
+**Die betriebswirtschaftliche Folgerung ist wichtiger als die Zahl:** bei
+18.357 € Durchschnittswert trägt sich fast jede Kontaktform. Es ist also
+falsch, die Liste hart abzuschneiden. Die Aufgabe der Rangfolge ist nicht zu
+entscheiden, **ob** man jemanden anspricht, sondern **wer die teure Ansprache
+bekommt** — Außendienstbesuch und Messeeinladung für das oberste Dezil,
+Serienmail für den Rest. Dafür wird der Preis je Kontaktform gebraucht, nicht
+eine Wertgrenze.
+
+**Verfeinerung, die aus der Schiefe folgt:** Mittelwert 18.357 € gegen Median
+2.752 € heißt, dass wenige große Partner die gesamte Kohorte tragen. Die Liste
+sollte daher nach **Erwartungswert** (Wahrscheinlichkeit × prognostizierte
+Größe) sortieren, nicht nach Wahrscheinlichkeit allein.
+
+## 11. Was das CRM über verlorene Ansprachen wirklich weiß
+
+| | Anzahl |
+|---|---:|
+| Händler mit ≥ 1 Verkaufschance, aber **nie** einer Bestellung | **2.421** |
+| davon mit mindestens einer ausdrücklich verlorenen VC | 1.943 |
+| Händler **ohne jede kommerzielle Spur** | 8.026 |
+
+Die 2.421 sind echte Negativbeispiele und werden bereits genutzt — sie sind die
+Grundgesamtheit der Funnel-Triage (§6), und genau deshalb erreicht die 0,753
+statt 0,60.
+
+**Aber die Verlustgründe verschieben die Bedeutung.** Für Händler, die nie
+Kunde wurden:
+
+| Grund | Anzahl |
+|---|---:|
+| Keine Baugenehmigung | 1.123 |
+| Kein Feedback vom Kunden | 881 |
+| Zu teuer | 555 |
+| Kunde hat den Auftrag nicht erhalten | 522 |
+| Wettbewerb | 211 |
+| Kein Interesse mehr | 193 |
+
+Das sind überwiegend **gestorbene Projekte, keine abgelehnten
+Partnerschaften**. Ein Bauvorhaben ohne Genehmigung sagt nichts darüber, ob
+diese Tischlerei ein guter Solarlux-Partner wäre. Nur „Zu teuer",
+„Wettbewerb" und „Kein Interesse mehr" (zusammen ~960) sind echte
+kommerzielle Absagen.
+
+Für die **8.026 Händler ohne jede Spur** lässt sich „nie angesprochen" nicht
+von „angesprochen und abgelehnt" unterscheiden. Auflösbar ist das: Dataverse
+führt `leads`, `phonecalls`, `tasks` und `appointments` mit jeweils ≥ 5.000
+Datensätzen — **keine davon ist bisher abgezogen**. Das ist der eigentliche
+Wert des Leads-Abzugs, und er ist größer als gedacht: er verwandelt einen Teil
+der 8.026 „unbekannt" in echte Negativbeispiele.
 
 ---
 
