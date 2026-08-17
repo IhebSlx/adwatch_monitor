@@ -3986,6 +3986,39 @@ def test_the_cold_icp_refuses_the_two_poisoned_features(temp_db):
         "'kein Untersegment' ist Herkunft, kein Merkmal"
 
 
+def test_a_warranty_credit_is_not_a_purchase(temp_db):
+    """14.049 der 91.992 Bestellereignisse stehen auf 0 EUR (Garantie, Muster,
+    Ersatz), und 486 Firmen haben AUSSCHLIESSLICH solche — die galten als Kunden.
+    Wer eine Garantiegutschrift als Erfolg zählt, trainiert das Modell darauf,
+    Reklamationen vorherzusagen. Gemessen: 95 von 1.369 'Käufern' waren keine,
+    und die Bereinigung bringt +0,012 AUC (0,617 -> 0,629).
+
+    Die Zielgröße verlangt daher mindestens EIN Ereignis mit Betrag > 0."""
+    import datetime as dt
+    from adwatch.insights import profiles
+    from adwatch.models import Company, CrmOrderEvent
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    s.add(Company(name="Echter Kaeufer", segment="Handel", sub_segment="Fensterbau",
+                  country="DE", postal_code="49074"))
+    s.add(Company(name="Nur Garantie", segment="Handel", sub_segment="Fensterbau",
+                  country="DE", postal_code="49074"))
+    s.commit()
+    ids = {c.name: c.id for c in s.query(Company).all()}
+    s.add(CrmOrderEvent(company_id=ids["Echter Kaeufer"],
+                        order_date=dt.date(2025, 6, 1), amount=4000.0))
+    s.add(CrmOrderEvent(company_id=ids["Nur Garantie"],
+                        order_date=dt.date(2025, 6, 1), amount=0.0))
+    s.commit()
+    s.close()
+
+    comps, pre, post, _vc = profiles._load(dt.date(2025, 1, 1), "DE")
+    assert post[ids["Echter Kaeufer"]]["paid"] == 1
+    assert post[ids["Nur Garantie"]]["n"] == 1, "die Bewegung existiert"
+    assert post[ids["Nur Garantie"]]["paid"] == 0, "aber sie ist kein Kauf"
+
+
 def test_the_at_risk_list_is_worth_calling(temp_db):
     """Die Kunden-Fortsetzung sortiert aufsteigend — die riskantesten zuerst.
     Ohne Wertgrenze besteht die Spitze aus Firmen mit EINER 40-Euro-Bestellung
