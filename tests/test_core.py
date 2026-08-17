@@ -3955,6 +3955,46 @@ def test_the_backfill_closes_only_what_was_really_searched(temp_db):
     assert dataquality.close_searched_not_found(apply=False)["rows"] == 0
 
 
+def test_the_cold_icp_refuses_the_two_poisoned_features(temp_db):
+    """Gemessen 2026-08-13 an der deutschen Händlerbasis, beide Male als STARKE
+    Prädiktoren aufgetaucht und beide Male Artefakt:
+
+    * Vertriebsweg 'Direktvertrieb': n=55, Kaufrate 54,5% gegen 13,5% Basis —
+      das beschreibt unsere Beziehung zur Firma, nicht die Firma.
+    * Untersegment leer: n=209, Kaufrate 42,6% — Import-Herkunft. Und es ist die
+      gefährliche Richtung: eine im Internet neu gefundene Firma hat EBENFALLS
+      kein Untersegment und bekäme aus einem Grund, der nicht überträgt, eine
+      hohe Punktzahl. Genau das würde die Zwillingssuche vergiften.
+
+    Die Merkmalsfunktion darf beides nicht kennen."""
+    from adwatch.insights import profiles
+    from adwatch.models import Company
+
+    c = Company(name="Musterfenster GmbH", segment="Handel",
+                sub_segment="Fensterbau", country="DE", postal_code="49074",
+                sales_channel="Direktvertrieb", website_domain="x.example")
+    f = profiles._features_cold(c)
+    assert not any("Direktvertrieb" in x or "vertriebsweg" in x.lower() for x in f), \
+        "der Vertriebsweg beschreibt die Beziehung, nicht die Firma"
+    assert "branche:Fensterbau" in f and "region:DE49" in f
+
+    # ohne Untersegment darf KEIN Branchenmerkmal entstehen — auch kein 'leer'
+    c2 = Company(name="Ohne Untersegment", segment="Handel", country="DE",
+                 postal_code="49074")
+    f2 = profiles._features_cold(c2)
+    assert not any(x.startswith("branche:") for x in f2), \
+        "'kein Untersegment' ist Herkunft, kein Merkmal"
+
+
+def test_the_at_risk_list_is_worth_calling(temp_db):
+    """Die Kunden-Fortsetzung sortiert aufsteigend — die riskantesten zuerst.
+    Ohne Wertgrenze besteht die Spitze aus Firmen mit EINER 40-Euro-Bestellung
+    vor drei Jahren: mathematisch korrekt, betriebswirtschaftlich wertlos.
+    Dieselbe 2.000-Euro-Schwelle wie im Bericht trennt Rettbares von Rauschen."""
+    from adwatch.insights import profiles
+    assert profiles.MATERIAL_EUR == 2000
+
+
 def test_ipp_scores_lift_not_popularity(temp_db):
     """Die Lehre aus dem Firmen-ICP, auf Projekte übertragen: fit_for belohnte
     die HÄUFIGSTE Ausprägung der Gewinner (Bauelementehandel: 36,5% der Gewinner,

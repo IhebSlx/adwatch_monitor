@@ -1,0 +1,267 @@
+# ICP-Strategie — was messbar geht, was nicht, und warum
+
+Stand 2026-08-13. Alle Zahlen sind gemessen und mit dem Code in
+`scratchpad/a1..a5` bzw. `adwatch/insights/` reproduzierbar. Wo eine Zahl
+geschätzt ist, steht es dabei.
+
+---
+
+## 0. Die Kurzfassung für die Geschäftsführung
+
+Es gibt **nicht ein ICP, sondern vier Entscheidungen** mit sehr
+unterschiedlicher Vorhersagbarkeit. Sie in einen Topf zu werfen war der
+eigentliche Fehler der bisherigen Versuche.
+
+| Entscheidung | Frage | Güte (AUC) | Nutzbar? |
+|---|---|---|---|
+| **Projekt-Profil (IPP)** | Welches offene Objekt gewinnen wir? | Lift **13,7×** | **Ja, ausgeliefert** |
+| **Funnel-Triage** | Wer im Trichter wird Kunde? | **0,753** | **Ja, sofort** |
+| **Kunden-Fortsetzung** | Wer kauft weiter / bricht ab? | **0,797** | **Ja, sofort** |
+| **Kalt-Akquise-ICP** | Welche fremde Firma ist ein guter Partner? | **0,59–0,60** | Nur als Vorsortierung |
+
+Der rote Faden: **Verhaltensdaten schlagen Stammdaten um +0,14 bis +0,16 AUC** —
+und zwar in jedem einzelnen Fall. Die Kalt-Akquise ist genau der Fall, in dem
+wir keine Verhaltensdaten haben. Das ist kein Modellproblem und kein
+Datenmengenproblem, sondern ein Merkmalsproblem — mit einem konkreten,
+billigen Ausweg (§6).
+
+---
+
+## 1. Erste Korrektur: die Basisrate war falsch
+
+Jede frühere ICP-Analyse startete mit „87 % der Händler kaufen ohnehin, es gibt
+kaum Negativbeispiele". Diese Zahl stammt aus dem alten 4.618-Zeilen-Export —
+also aus einer Population, die **selbst schon nach Kundenstatus gefiltert war**
+(sie enthielt die Firmen im Anzeigen-Monitoring, und das waren die aktiven
+Partner). Auf der vollständigen Basis:
+
+| Segment | n | Käufer | Basisrate |
+|---|---:|---:|---:|
+| Verarbeiter | 7.615 | 2.683 | **35,2 %** |
+| Handel | 7.848 | 2.333 | **29,7 %** |
+| Baudienstleister | 5.020 | 463 | 9,2 % |
+| Architekten | 20.722 | 94 | **0,5 %** |
+
+Händler + Verarbeiter zusammen: **32,4 %** (5.016 von 15.463), Deutschland
+36,8 %. Das ist eine gesunde Basisrate — bei 32 % trägt eine Ja/Nein-Frage rund
+0,9 Bit Information; bei 87 % wären es 0,55. **Die Annahme „zu wenig
+Negativbeispiele" war schlicht falsch.** Die Frage ist damit statistisch
+wohlgestellt, und ein schwaches Ergebnis muss eine andere Ursache haben.
+
+Nebenbei bestätigt: Architekten kaufen praktisch nie (0,5 %). Sie gehören nicht
+in ein Kunden-ICP, sondern in das Projekt-Profil — als Beteiligte, nicht als
+Käufer.
+
+## 2. Zweite Korrektur: die Merkmale waren vergiftet
+
+Ein Merkmal ist nur brauchbar, wenn es für die **gesamte** Population existiert.
+Sonst lernt das Modell „hat Merkmal → kauft", was in Wahrheit „wir haben die
+angereichert, an die wir ohnehin verkaufen" bedeutet. Gemessen als
+*Verfügbarkeitsquotient* = Füllgrad(Käufer) / Füllgrad(Nicht-Käufer),
+Deutschland, Händler + Verarbeiter:
+
+| Merkmal | Füllgrad gesamt | Quotient | Urteil |
+|---|---:|---:|---|
+| `kv` (zuständiger Solarlux-Mitarbeiter) | 16,9 % | **150×** | unbrauchbar |
+| `products`, `description`, `service_area` … | 6–9 % | **200–220×** | unbrauchbar |
+| `founded_year`, `legal_form`, `employee_hint` | 1–6 % | **145–216×** | unbrauchbar |
+| `quote_count > 0` | 32,0 % | 3,4× | nur zeitlich gefiltert |
+| Segment, Untersegment, PLZ, Ort, Land | 98–100 % | **1,00** | brauchbar |
+| Website / E-Mail / Telefon vorhanden | 48–98 % | 1,02–1,09 | brauchbar |
+
+**Ein Kundenverantwortlicher wird zugeteilt, WEIL jemand Kunde ist.** Ein
+Modell, das `kv` benutzt, sagt die Vergangenheit voraus und keine Zukunft.
+Dasselbe gilt für jedes Anreicherungsfeld in Deutschland: angereichert wurde
+bisher fast nur, wer schon kauft.
+
+Damit bleibt für eine fremde Firma genau das übrig, was auch ein Fremder über
+sie wüsste: **Branche (Untersegment), Region (PLZ), Land, Erreichbarkeit.**
+
+## 3. Zwei versteckte Fallen, gefunden und entfernt
+
+Die Verfügbarkeitsprüfung findet fehlende Werte. Sie findet **nicht**, wenn ein
+*vorhandener Wert* nachträglich gesetzt wird. Zwei Fälle, beide zunächst als
+starke Prädiktoren aufgetaucht:
+
+**`Vertriebsweg = Direktvertrieb`** — n = 55, Kaufrate 54,5 % gegen 13,5 %
+Basis. Das ist keine Eigenschaft der Firma, sondern eine Beschreibung unserer
+Beziehung zu ihr („wir beliefern sie direkt"). Merkmal entfernt.
+
+**`Untersegment = leer`** — n = 209, Kaufrate **42,6 %** gegen 13,5 %. 189 davon
+sind Handel. Das ist Import-Herkunft, nicht Betriebswirklichkeit — und es ist die
+gefährliche Richtung: eine im Internet neu gefundene Firma hat **ebenfalls** kein
+Untersegment und bekäme aus einem nicht übertragbaren Grund eine hohe Punktzahl.
+Genau das würde die spätere Zwillingssuche vergiften. Zeilen entfernt.
+
+Der Preis der Ehrlichkeit: AUC fällt von 0,623 auf **0,598**. Diese 0,025 waren
+Artefakt.
+
+## 4. Was der Kalt-ICP wirklich kann
+
+Aufbau: Stichtag 2023-01-01, Population = Händler/Verarbeiter **ohne jede
+Bestellung 2019–2022**, Zielgröße = mindestens eine Bestellung 2023-01-01 bis
+2026-08-05. Nur die Merkmale aus §2. 5-fache Kreuzvalidierung, plus ein
+**geografischer Holdout** (GroupKFold über PLZ-Zonen: das Modell sieht die
+Testregion nie, kann also keine Region auswendig lernen).
+
+| Population | n | Positive | AUC | Geo-Holdout | Top-Dezil |
+|---|---:|---:|---:|---:|---:|
+| Deutschland | 7.822 | 995 | **0,598** | 0,588 | 1,40× |
+| Alle Länder | 11.319 | 1.369 | **0,635** | 0,620 | 2,00× |
+| Replikation, Stichtag 2024 | 10.045 | 877 | **0,590** | — | — |
+
+Die Replikation an einem unabhängigen Stichtag liefert praktisch dieselbe Zahl —
+die Schätzung ist stabil, nicht zufällig.
+
+**Was das Modell inhaltlich sagt** (beobachtete Kaufraten, Deutschland):
+
+| Untersegment | n | Kaufrate |
+|---|---:|---:|
+| Fensterbau | 648 | 15,4 % |
+| Glaser | 296 | 14,9 % |
+| Tischler / Schreiner / Zimmerer | 1.517 | 13,9 % |
+| Metallbau / Schlosser | 1.447 | 13,6 % |
+| Bauelementehandel | 3.037 | 10,8 % |
+| Baustoffhandel | 159 | **6,3 %** |
+
+Das ist plausibel und brauchbar — ein Fensterbauer ist 2,4-mal so
+wahrscheinlich Kunde wie ein Baustoffhändler. Aber die gesamte Spannweite der
+verfügbaren Merkmale beträgt eben nur 6 % bis 15 %. **Mehr Information steckt
+nicht in Branche und Postleitzahl.**
+
+## 5. Warum es nicht an der Datenmenge liegt (der entscheidende Test)
+
+Zwei unabhängige Belege:
+
+**Lernkurve** — AUC gegen Trainingsgröße, Test auf festgehaltenen 25 %:
+
+| Trainingszeilen | 848 | 1.697 | 2.971 | 4.244 | 5.942 | 7.215 | 8.489 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| AUC | 0,565 | 0,577 | 0,583 | 0,584 | 0,592 | 0,600 | **0,605** |
+
+Zehnfache Datenmenge bringt +0,04; der letzte Zuwachs beträgt +0,005. Die Kurve
+ist praktisch flach. **Zehntausend weitere Firmen würden das Ergebnis nicht
+verändern.**
+
+**Zielgrößen-Variation** — dieselben Merkmale, drei verschiedene Zielgrößen:
+
+| Zielgröße | Positive | AUC |
+|---|---:|---:|
+| irgendeine Bestellung | 1.369 | 0,608 |
+| materieller Auftrag (≥ 2.000 €) | 731 | **0,624** |
+| oberstes Umsatzquartil | 319 | 0,598 |
+
+Alle drei liegen innerhalb von 0,03. **Auch eine andere Fragestellung hebt die
+Decke nicht.** Decke = Merkmalsinformation.
+
+## 6. Der Gegenbeweis: wo Verhaltensdaten vorliegen, funktioniert es
+
+Dieselben Firmen, dieselbe Methode — nur mit Verhaltensdaten:
+
+**Funnel-Triage** (Stichtag 2024, Firmen ohne Bestellung, aber mit mindestens
+einer Verkaufschance 2023; n = 916, Basis 14,6 %):
+
+| Merkmalssatz | AUC | Top-Dezil |
+|---|---:|---:|
+| nur Stammdaten | 0,606 | 1,20× |
+| **+ Trichter-Historie** | **0,753** | **3,83×** |
+| + Trichter **ohne** „gewonnene VC" | **0,753** | 3,83× |
+
+Die letzte Zeile ist der Integritätstest: das Signal stammt **nicht** aus der
+Buchhaltungs-Tatsache „hat schon eine VC gewonnen" (das wäre fast mechanisch),
+sondern aus der Intensität des Kontakts — Anzahl, Werte, Rollen. Ohne dieses
+Merkmal ist das Modell sogar minimal besser.
+
+**Kunden-Fortsetzung** (bestehende Kunden, n = 3.506, Basis 51,1 %):
+
+| Merkmalssatz | AUC |
+|---|---:|
+| nur Stammdaten | 0,636 |
+| **+ eigene Kaufhistorie (RFM)** | **0,797** |
+
+Dezile der Kaufwahrscheinlichkeit: 18 % · 26 % · 29 % · 34 % · 37 % · 50 % ·
+56 % · 79 % · 86 % · **98 %**. Das unterste Fünftel ist die Abbruch-Liste.
+
+**Projekt-Profil (IPP)** — Lift oberstes/unterstes Dezil **13,67×**, Gewinnquote
+3 % → 39 %, 8 von 9 Stufen monoton (`adwatch/insights/ipp.py`).
+
+Drei Fälle, drei Male derselbe Befund: **Verhalten schlägt Stammdaten um
++0,14 bis +0,16 AUC.**
+
+## 7. Die Konsequenz — und der Versuch, der sie prüft
+
+Für eine fremde Firma gibt es genau eine Quelle beobachtbaren Verhaltens: **ihre
+eigene Website und ihre Werbung.** Genau das erzeugt die Anreicherungs-Pipeline
+— sie ist gebaut, geprüft und in Spanien im Populationsmaßstab gelaufen
+(1.601 von 1.758 Firmen, 6.629 Feldwerte, rund 1,43 € für 358 Firmen ≈
+**0,004 € pro Firma**).
+
+In Deutschland ist sie bisher fast nur auf Kunden gelaufen — daher der
+Quotient von 200 aus §2. Läuft sie auf **allen** Händlern, verschwindet die
+Verzerrung per Konstruktion: angereichert wird dann jeder, Käufer wie
+Nicht-Käufer.
+
+**Die Frage, wie viel das bringt, lässt sich mit den heutigen Daten nicht
+beantworten** — in Deutschland sind ganze ~7 angereicherte Nicht-Käufer
+vorhanden, in Spanien gibt es nur 20 Händler-Käufer. Beides zu wenig. Sie muss
+also gemessen werden, und zwar vorher:
+
+> **Pilotversuch.** Zufallsstichprobe von 600 deutschen Händlern/Verarbeitern,
+> geschichtet nach Ausgang (300 Käufer / 300 Nicht-Käufer), **alle** anreichern.
+> Dann AUC(Stammdaten) gegen AUC(Stammdaten + Anreicherung) auf denselben
+> Zeilen. Kosten ≈ **2,40 €**, Laufzeit ≈ 3–4 Stunden.
+>
+> Trennschärfe (Hanley-McNeil, gepaartes Design): 600 Zeilen erkennen einen
+> AUC-Zuwachs von **0,05** — genau die Schwelle, ab der sich die Entscheidung
+> ändert. 200 Zeilen könnten nur 0,09 erkennen und wären zu grob.
+>
+> Entscheidungsregel, **vorab** festgelegt: ΔAUC ≥ 0,05 → gesamte deutsche
+> Händlerbasis anreichern (10.985 Firmen ≈ 44 €). ΔAUC < 0,05 → Kalt-ICP bleibt
+> dauerhaft eine Vorsortierung, und die Akquise stützt sich auf Funnel und
+> Projekte.
+
+Der Pilot ist der einzige ehrliche Weg. Die gesamte Basis sofort anzureichern
+wäre zwar auch billig, würde aber die Frage nie beantworten, weil danach kein
+unangereicherter Vergleich mehr existiert.
+
+## 8. Was heute ausgeliefert werden sollte
+
+1. **IPP** (fertig) — Triage der 10.349 offenen Objekte.
+2. **Funnel-Triage** — Top-Dezil 3,83×. Die Liste, die der Innendienst
+   tatsächlich abtelefonieren kann.
+3. **Kunden-Fortsetzung** — unterstes Fünftel = Abbruchgefahr, oberstes = sicher.
+4. **Kalt-ICP** als *Priorität*, nicht als Rangliste: ein Fensterbauer in einer
+   guten Region ist ein besserer Erstkontakt als ein Baustoffhändler. Mit
+   ausgewiesener Güte (AUC 0,60) und dem ausdrücklichen Hinweis, dass die
+   Reihenfolge innerhalb der Liste wenig bedeutet.
+
+Was **nicht** ausgeliefert werden sollte: ein Kalt-ICP, der so tut, als sei
+Rang 3 besser als Rang 30. Bei AUC 0,60 ist er das nicht.
+
+## 9. Offene Fragen an den Vertrieb
+
+1. **Ist „mindestens eine Bestellung" der richtige Erfolg?** Alternativ:
+   Deckungsbeitrag, Wiederkaufrate, oder „wird Stammpartner" (≥ 3 Jahre aktiv).
+   Die Zielgröße ist eine Geschäftsentscheidung, keine mathematische.
+2. **Was kostet ein Fehlversuch?** Ein Besuch, ein Anruf und eine
+   Messeeinladung haben sehr verschiedene Preise. Erst damit wird aus einer
+   Rangliste eine Kappungsgrenze („die obersten N").
+3. **Gibt es eine Liste bereits kontaktierter, aber nicht gewonnener Firmen?**
+   Das wären die wertvollsten Negativbeispiele überhaupt — heute sehen sie
+   im Datenbestand aus wie „nie versucht".
+
+---
+
+### Methodische Festlegungen
+
+* Ausgeschlossen: Private Endkunden, Wettbewerber-Standorte, Intercompany
+  (`adwatch/scope.py`) — vor jeder Zählung, nicht danach.
+* Alle Merkmale sind strikt vor dem Stichtag berechnet; Zielgrößen strikt danach.
+* Jede AUC mit 95-%-Bootstrap-Intervall (2.000 Ziehungen).
+* Jedes Modell gegen eine Grundlinie geprüft (Segment allein: AUC 0,515).
+* Geografischer Holdout, wo Regionen als Merkmal auftreten.
+* Bekannte, nicht behebbare Einschränkung: Der Datenspiegel enthält **kein
+  Anlagedatum der Firmenstammsätze**. Firmen, die erst 2024 ins CRM kamen,
+  erscheinen als „hat 2019–2022 nicht gekauft". Das erzeugt Rauschen in der
+  Negativklasse und drückt die gemessene Basisrate — es erzeugt **kein**
+  falsches Signal. Behebbar durch einen `createdon`-Abzug aus Dataverse.
