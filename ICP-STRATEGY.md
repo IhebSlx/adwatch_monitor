@@ -286,6 +286,79 @@ eine Wertgrenze.
 sollte daher nach **Erwartungswert** (Wahrscheinlichkeit × prognostizierte
 Größe) sortieren, nicht nach Wahrscheinlichkeit allein.
 
+## 7a. ERGEBNIS des Anreicherungs-Experiments (2026-08-17)
+
+Durchgeführt wie in §7 vorregistriert: 600 deutsche Händler, 300/300 gezogen mit
+festem Startwert, **alle** angereichert (Job 58, 600/600, 39 Fehlversuche =
+nicht erreichbare Websites). Etiketten nach der bereinigten Regel neu berechnet
+(mind. ein Ereignis > 0 €) → 272 Käufer / 328 Nicht-Käufer. 428 der 600 Firmen
+lieferten Anreicherungsfelder, 41 hatten keine auffindbare Website.
+
+Gepaarter Vergleich auf **denselben Zeilen und denselben Folds**:
+
+| Merkmalssatz | GBM | Logit |
+|---|---:|---:|
+| A Stammdaten | 0,569 | 0,588 |
+| B* + Anreicherung, **streng** (ohne Solarlux-Bezug) | 0,569 | **0,619** |
+| B + Anreicherung, alle Felder | 0,569 | 0,619 |
+
+**ΔAUC gegenüber Stammdaten, gepaarter Bootstrap (4.000 Ziehungen):**
+
+| Vergleich | Δ | 95-%-Intervall |
+|---|---:|---|
+| B* streng, GBM | +0,001 | −0,045 … +0,048 |
+| B* streng, Logit | **+0,032** | **−0,005 … +0,068** |
+
+**Urteil nach der vorab festgelegten Regel: ΔAUC = +0,031 < +0,050 →
+die gesamte deutsche Händlerbasis wird NICHT angereichert.**
+
+Drei Dinge sind an diesem Ergebnis wichtiger als die Zahl selbst:
+
+1. **Das Intervall enthält die Null.** Es gibt keinen Beleg für einen Gewinn —
+   und ebenso wenig einen Beleg, dass der Gewinn null ist. Die Stichprobe war
+   auf 0,05 ausgelegt; ein echter Effekt von 0,03 wäre hier nicht sicher
+   nachweisbar gewesen und läge ohnehin unter der Entscheidungsschwelle.
+2. **Die befürchtete Rückwärtswissen-Falle war empirisch keine.** Streng und
+   vollständig liefern identisch 0,619 — `mentions_solarlux` trug nichts bei.
+   Die methodische Sorge war berechtigt, das Problem existierte nicht.
+3. **Das Verfahren zählt, nicht das Ergebnis.** Wäre die Regel erst nach dem
+   Blick auf die Zahlen formuliert worden, hätte man aus +0,032 eine
+   Erfolgsmeldung machen können. Genau deshalb stand sie vorher fest.
+
+**Inhaltlich interessant, aber nur ein Hinweis** (die Gesamtwirkung ist nicht
+belegt, also sind es auch die Einzelkoeffizienten nicht):
+
+| Merkmal | Koeffizient |
+|---|---:|
+| **montiert selbst** | **+0,371** |
+| **eigene Fertigung** | **−0,210** |
+| gegründet (Alter) | +0,147 |
+| Website vorhanden | +0,098 |
+
+Das ist betriebswirtschaftlich stimmig: **ein Betrieb, der montiert, muss Systeme
+einkaufen; ein Betrieb mit eigener Fertigung baut sie selbst.** Wenn sich diese
+Richtung an einer größeren Stichprobe bestätigt, ist „montiert, fertigt aber
+nicht selbst" das schärfste Einzelkriterium, das wir für Kaltakquise haben.
+
+### Was daraus folgt
+
+Der Befund engt die Empfehlung ein, er kippt sie nicht: **beschreibende Merkmale
+(was eine Firma IST) helfen kaum; verhaltensbezogene (was zwischen uns und ihr
+geschehen ist) helfen stark** — Trichter +0,147, Kaufhistorie +0,161, gegen
++0,03 für die Anreicherung. Das ist derselbe Befund wie in §6, jetzt auch von der
+anderen Seite bestätigt.
+
+**Die Anreicherung bleibt trotzdem wertvoll — nur nicht für diese Frage.** Sie
+trägt den spanischen Bericht, die Identitätsprüfung, die Qualifizierung („was
+macht diese Firma eigentlich") und ist die einzig mögliche Datenquelle für die
+Zwillingssuche. Nicht gerechtfertigt ist allein, sie zu bezahlen, *um die
+Kalt-Rangfolge zu verbessern*.
+
+**Nächster Hebel ist damit nicht mehr die Anreicherung, sondern der
+Dataverse-Abzug** (§11): Leads und Aktivitäten sind VERHALTENSdaten — wen haben
+wir angesprochen, wer hat abgelehnt — und Verhalten ist gemessen das Einzige,
+was diese Modelle wirklich bewegt.
+
 ## 10a. Partnerstufen (Gold-Partner) — niemals Merkmal, vermutlich Zielgröße
 
 **Als Merkmal verboten.** Eine Firma ist Gold-Partner, WEIL sie viel verkauft.
