@@ -901,6 +901,142 @@
       b.addEventListener("click", () => gotoTab(b.dataset.goto)));
   }
 
+  // ================= ZIELKUNDEN — die vier validierten Profile =================
+  // Jede Ansicht trägt ihre GEMESSENE Güte sichtbar mit. Das ist keine
+  // Kosmetik: eine AUC von 0,60 (Kalt-Akquise) darf nicht aussehen wie eine von
+  // 0,80 (Bestand), sonst liest der Nutzer eine Rangfolge, die es nicht gibt.
+  let profileLoaded = false, profileKind = "ipp";
+  function ensureProfilesLoaded() { if (!profileLoaded) loadProfile("ipp"); }
+
+  const QUAL_CLASS = (auc) => auc >= 0.70 ? "qual-stark" : auc >= 0.65 ? "qual-mittel" : "qual-schwach";
+
+  async function loadProfile(kind) {
+    profileKind = kind;
+    const box = $("#profileBody");
+    box.innerHTML = `<p class="hint">Lädt…</p>`;
+    $("#profileQuality").textContent = "";
+    try {
+      if (kind === "ipp") return renderIpp(await api("/api/ipp"),
+                                           await api("/api/ipp/triage?limit=40"));
+      const d = await api(`/api/profiles/${kind}?limit=60`);
+      profileLoaded = true;
+      if (kind === "kalt") return renderKalt(d);
+      if (kind === "funnel") return renderFunnel(d);
+      if (kind === "bestand") return renderBestand(d);
+    } catch (e) {
+      box.innerHTML = `<p class="hint status-error">Fehler: ${esc(e.message)}</p>`;
+    }
+  }
+
+  function qualityBadge(label, value, verdict) {
+    return `<span class="qual-badge ${QUAL_CLASS(value)}">${esc(label)} ${value.toFixed(3)}</span>`
+         + `<span class="muted"> · ${esc(verdict)}</span>`;
+  }
+
+  function renderIpp(p, t) {
+    profileLoaded = true;
+    const dec = p.test.deciles.map(d => d.win_rate);
+    $("#profileQuality").innerHTML = qualityBadge("Lift",
+      p.test.lift_top_vs_bottom, p.ranks ? "rankt — belastbare Reihenfolge" : "rankt nicht");
+    $("#profileBody").innerHTML = `
+      <p class="hint"><b>Welches offene Objekt gewinnen wir?</b> Trainiert auf Projekten vor
+        ${p.train.until + 1}, geprüft auf den späteren — ein Modell, das seine eigene Zukunft nicht
+        kennt. Gewinnquote je Punktzahl-Dezil:</p>
+      <div class="decile-bars">${dec.map((r, i) => `
+        <div class="decile" title="Dezil ${i + 1}: ${(r * 100).toFixed(0)}% gewonnen">
+          <div class="decile-fill" style="height:${Math.max(r / Math.max(...dec) * 100, 3)}%"></div>
+          <span>${(r * 100).toFixed(0)}%</span></div>`).join("")}</div>
+      <p class="hint">Basisrate ${(p.base_rate * 100).toFixed(1)} % · ${p.test.n.toLocaleString("de-DE")}
+        Projekte im Test · ${p.test.monotone_steps}/9 Stufen monoton steigend</p>
+      <h3 style="margin-top:18px">Die stärksten Merkmale</h3>
+      <table class="data-table"><thead><tr><th>Merkmal</th><th class="num">Lift</th>
+        <th class="num">Gewinnquote</th><th class="num">Projekte</th></tr></thead><tbody>
+        ${p.features.slice(0, 8).map(f => `<tr><td>${esc(f.feature)}</td>
+          <td class="num"><b>${f.lift.toFixed(2)}×</b></td>
+          <td class="num">${(f.rate * 100).toFixed(0)}%</td>
+          <td class="num">${f.total.toLocaleString("de-DE")}</td></tr>`).join("")}
+        ${p.features.slice(-3).map(f => `<tr class="feat-neg"><td>${esc(f.feature)}</td>
+          <td class="num">${f.lift.toFixed(2)}×</td>
+          <td class="num">${(f.rate * 100).toFixed(0)}%</td>
+          <td class="num">${f.total.toLocaleString("de-DE")}</td></tr>`).join("")}
+      </tbody></table>
+      <h3 style="margin-top:18px">Offene Projekte, gereiht (${t.open_total.toLocaleString("de-DE")} gesamt)</h3>
+      <table class="data-table"><thead><tr><th>Objekt</th><th>Ort</th>
+        <th class="num">Wert</th><th>Warum</th></tr></thead><tbody>
+        ${t.rows.map(r => `<tr>
+          <td><b>${esc((r.name || "—").slice(0, 54))}</b></td>
+          <td>${esc(r.city || "")}</td>
+          <td class="num">${r.estimated_value ? eur(r.estimated_value) : "—"}</td>
+          <td class="sub">${r.why.map(w => `${esc(w.feature)} <b>${w.lift}×</b>`).join(" · ")}</td>
+        </tr>`).join("")}</tbody></table>`;
+  }
+
+  function renderFunnel(d) {
+    $("#profileQuality").innerHTML = qualityBadge("AUC", d.quality.auc, d.quality.verdict);
+    $("#profileBody").innerHTML = `
+      <p class="hint"><b>Wer im Trichter wird Kunde?</b> Firmen mit Verkaufschance, aber noch ohne
+        Bestellung. Oberstes Dezil ${d.quality.top_decile_lift}× der Basisrate
+        (${(d.base_rate * 100).toFixed(1)} %). Das Signal ist die Kontaktintensität — ohne das
+        Merkmal „hat schon gewonnen" ist die Güte unverändert.</p>
+      <table class="data-table"><thead><tr><th>Firma</th><th>Ort</th><th>Branche</th>
+        <th class="num">VCs</th><th class="num">Wert</th><th>Warum</th></tr></thead><tbody>
+        ${d.rows.map(r => `<tr data-cid="${r.company_id}" style="cursor:pointer">
+          <td><b>${esc(r.name || "—")}</b></td><td>${esc(r.city || "")}</td>
+          <td class="sub">${esc(r.sub_segment || "")}</td>
+          <td class="num">${r.vc_n}${r.vc_open ? ` <span class="sub">(${r.vc_open} offen)</span>` : ""}</td>
+          <td class="num">${r.vc_value ? eur(r.vc_value) : "—"}</td>
+          <td class="sub">${r.why.map(w => `${esc(w.feature)} <b>${w.lift}×</b>`).join(" · ")}</td>
+        </tr>`).join("")}</tbody></table>`;
+    wireProfileRows();
+  }
+
+  function renderBestand(d) {
+    $("#profileQuality").innerHTML = qualityBadge("AUC", d.quality.auc, d.quality.verdict);
+    $("#profileBody").innerHTML = `
+      <p class="hint"><b>Wer kauft weiter — und wer bricht ab?</b> Aufsteigend sortiert: die
+        <b>riskantesten zuerst</b>. ${esc(d.hinweis)}
+        ${d.ausgeblendet ? `<br><span class="muted">${d.ausgeblendet.toLocaleString("de-DE")}
+        Kleinstkunden ausgeblendet — unter der Wertgrenze lohnt die Rückholung den Anruf nicht.</span>` : ""}</p>
+      <table class="data-table"><thead><tr><th>Firma</th><th>Ort</th>
+        <th class="num">Bestellungen</th><th class="num">Bestandsumsatz</th>
+        <th class="num">letzte Bestellung</th></tr></thead><tbody>
+        ${d.at_risk.map(r => `<tr data-cid="${r.company_id}" style="cursor:pointer">
+          <td><b>${esc(r.name || "—")}</b></td><td>${esc(r.city || "")}</td>
+          <td class="num">${r.orders}</td><td class="num">${eur(r.revenue)}</td>
+          <td class="num">vor ${Math.round(r.days_since_last / 30)} Mon.</td>
+        </tr>`).join("")}</tbody></table>`;
+    wireProfileRows();
+  }
+
+  function renderKalt(d) {
+    $("#profileQuality").innerHTML = qualityBadge("AUC", d.quality.auc, d.quality.verdict);
+    $("#profileBody").innerHTML = `
+      <div class="icp-plain" style="border-left-color:#8a5220">
+        <b>Vorsortierung, keine Rangliste.</b> ${esc(d.hinweis)} Ein Fensterbauer ist ein besserer
+        Erstkontakt als ein Baustoffhändler — aber Rang 3 ist nicht besser als Rang 30.
+      </div>
+      <p class="hint">Grundgesamtheit ${d.n.toLocaleString("de-DE")} Händler ohne bisherige
+        Bestellung (${d.country}), Basisrate ${(d.base_rate * 100).toFixed(1)} %. Gemessene
+        Kaufquote je Branche:</p>
+      <table class="data-table"><thead><tr><th>Branche</th><th class="num">Lift</th>
+        <th class="num">Kaufquote</th><th class="num">Firmen</th></tr></thead><tbody>
+        ${d.branchen.map(b => `<tr${b.lift < 1 ? ' class="feat-neg"' : ""}>
+          <td>${esc(b.branche)}</td><td class="num"><b>${b.lift.toFixed(2)}×</b></td>
+          <td class="num">${(b.rate * 100).toFixed(1)}%</td>
+          <td class="num">${b.n.toLocaleString("de-DE")}</td></tr>`).join("")}
+      </tbody></table>`;
+  }
+
+  function wireProfileRows() {
+    $$("#profileBody tr[data-cid]").forEach(tr => tr.addEventListener("click", () =>
+      openCompanyDrawer(Number(tr.dataset.cid))));
+  }
+
+  $$("#profileSwitch .prof-btn").forEach(b => b.addEventListener("click", () => {
+    $$("#profileSwitch .prof-btn").forEach(x => x.classList.toggle("active", x === b));
+    loadProfile(b.dataset.prof);
+  }));
+
   // ================= KARTE (Firmen: Liste | Karte) =================
   // Airbnb-Muster: dieselben Firmen, derselbe Filter — Cluster statt Zeilen.
   // Leaflet liegt lokal in static/vendor (kein CDN); nur die OSM-Kacheln
@@ -1661,7 +1797,7 @@
       if (name === "chancen") ensureChancenLoaded();
       if (name === "pruefen") ensurePruefenLoaded();
       if (name === "objekte") ensureObjekteLoaded();
-      if (name === "profil") loadIcpStatus();
+      if (name === "profil") { ensureProfilesLoaded(); loadIcpStatus(); }
       if (name === "reports") {
         // If a Companies filter is active, default the report to use it — so
         // "generate a report for the filtered companies" just works without

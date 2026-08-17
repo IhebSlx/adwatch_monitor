@@ -577,6 +577,21 @@ def ipp_triage_route(limit: int = 50):
     return ipp.triage(limit=min(limit, 500))
 
 
+# --- Die drei firmenbezogenen Profile (insights/profiles.py). Jede Antwort
+# --- trägt ihre GEMESSENE Güte mit, damit die Oberfläche eine schwache
+# --- Rangfolge nicht wie eine starke aussehen lassen kann.
+@app.get("/api/profiles/{kind}")
+def profiles_route(kind: str, country: str | None = None, limit: int = 100):
+    from .insights import profiles
+    if kind == "kalt":
+        return profiles.cold_icp(country=country or "DE")
+    if kind == "funnel":
+        return profiles.funnel_triage(limit=min(limit, 500), country=country)
+    if kind == "bestand":
+        return profiles.continuation(limit=min(limit, 500), country=country)
+    raise HTTPException(404, "Unbekanntes Profil — kalt | funnel | bestand")
+
+
 @app.get("/api/reports")
 def list_reports():
     from .report import list_reports as _list

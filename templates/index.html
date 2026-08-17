@@ -673,10 +673,33 @@
     <!-- ================= TAB: Profil (ICP) ================= -->
     <section id="tab-profil" class="tab-panel">
       <header class="page-head">
-        <h1>ICP — Ideales Kundenprofil</h1>
-        <p>Was haben unsere Kunden gemeinsam? Und welche Firmen, die noch <b>nicht</b> bei uns
-          kaufen, sehen genauso aus?</p>
+        <h1>Zielkunden — vier Fragen, vier Güten</h1>
+        <p>Es gibt nicht <i>ein</i> ICP. Vier Entscheidungen, jede mit ihrer <b>gemessenen</b>
+          Trennschärfe — Methodik und Zahlen in <code>ICP-STRATEGY.md</code>.</p>
       </header>
+
+      <!-- Die vier validierten Profile. Jedes trägt seine gemessene Güte
+           sichtbar: eine AUC von 0,60 darf nicht aussehen wie eine von 0,80,
+           sonst wird Rauschen als Rangfolge verkauft. -->
+      <div class="card">
+        <div class="profile-switch" id="profileSwitch">
+          <button class="btn btn-sm prof-btn active" data-prof="ipp">Projekte (IPP)</button>
+          <button class="btn btn-sm prof-btn" data-prof="funnel">Trichter</button>
+          <button class="btn btn-sm prof-btn" data-prof="bestand">Bestand</button>
+          <button class="btn btn-sm prof-btn" data-prof="kalt">Kalt-Akquise</button>
+          <span class="spacer"></span>
+          <span id="profileQuality" class="muted"></span>
+        </div>
+        <div id="profileBody"><p class="hint">Lädt…</p></div>
+      </div>
+
+      <details class="card">
+        <summary style="cursor:pointer;font-weight:600">Älteres Merkmals-Profil (Häufigkeiten statt Lift)</summary>
+        <p class="hint" style="margin-top:10px">Diese Ansicht zählt, was Kunden <b>häufig</b>
+          gemeinsam haben. Das ist nicht dasselbe wie „was Kunden von Nicht-Kunden
+          <b>unterscheidet</b>": Bauelementehandel trägt 36,5 % der Käufer, hat aber Lift 1,03 —
+          häufig, weil überall häufig. Die vier Profile oben rechnen deshalb mit Lift.
+          Hier belassen, weil die Fit-Spalte im Firmen-Tab daran hängt.</p>
 
       <div class="card">
         <h2>So funktioniert es — in drei Schritten</h2>
@@ -727,6 +750,7 @@
         <h2>Aktueller Stand</h2>
         <div id="icpStatus"><p class="hint">Lade…</p></div>
       </div>
+      </details>
     </section>
 
     <section id="tab-reports" class="tab-panel">
