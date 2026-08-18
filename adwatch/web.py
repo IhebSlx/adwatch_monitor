@@ -580,6 +580,71 @@ def ipp_triage_route(limit: int = 50):
 # --- Die drei firmenbezogenen Profile (insights/profiles.py). Jede Antwort
 # --- trägt ihre GEMESSENE Güte mit, damit die Oberfläche eine schwache
 # --- Rangfolge nicht wie eine starke aussehen lassen kann.
+# --- Arbeitslisten mit Kontrollgruppe (adwatch/outcomes.py). Der Zweck ist
+# --- nicht Dokumentation, sondern Messbarkeit: ohne Kontrollgruppe lässt sich
+# --- die Wirkung einer Liste nicht von der Basisrate unterscheiden.
+class ListCreateIn(BaseModel):
+    name: str
+    source: str = "manuell"
+    rows: list[dict]                      # [{company_id, score}]
+    holdout_share: float = 0.15
+    filters: dict | None = None
+    created_by: str | None = None
+    note: str | None = None
+
+
+class OutcomeIn(BaseModel):
+    outcome: str | None = None
+    channel: str | None = None
+    note: str | None = None
+    contacted: bool = True
+
+
+@app.get("/api/lists")
+def lists_route():
+    from . import outcomes
+    return {"lists": outcomes.list_lists(), "outcomes": outcomes.OUTCOMES,
+            "channels": outcomes.CHANNELS}
+
+
+@app.post("/api/lists")
+def create_list_route(payload: ListCreateIn):
+    from . import outcomes
+    try:
+        return outcomes.create_list(
+            payload.name, payload.source, payload.rows,
+            holdout_share=payload.holdout_share, filters=payload.filters,
+            created_by=payload.created_by, note=payload.note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/lists/{list_id}")
+def list_entries_route(list_id: int, arm: str | None = None, open_only: bool = False):
+    from . import outcomes
+    return {"entries": outcomes.entries(list_id, arm=arm, open_only=open_only)}
+
+
+@app.get("/api/lists/{list_id}/wirkung")
+def list_effect_route(list_id: int):
+    from . import outcomes
+    try:
+        return outcomes.measure(list_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/lists/entries/{entry_id}")
+def record_outcome_route(entry_id: int, payload: OutcomeIn):
+    from . import outcomes
+    try:
+        return outcomes.record(entry_id, outcome=payload.outcome,
+                               channel=payload.channel, note=payload.note,
+                               contacted=payload.contacted)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/profiles/{kind}")
 def profiles_route(kind: str, country: str | None = None, limit: int = 100):
     from .insights import profiles

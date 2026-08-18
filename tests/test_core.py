@@ -4402,3 +4402,93 @@ def test_a_resumed_fetch_job_continues_at_the_right_company(temp_db):
     assert units == stored, "der gespeicherte Plan bleibt unveraendert"
     # cursor 2 into the ORIGINAL plan -> the remaining two are companies 3 and 4
     assert units[again["completed"]:] == [(ids[2], "meta"), (ids[3], "meta")]
+
+
+def test_a_worked_list_without_a_control_group_measures_nothing(temp_db):
+    """Der Kern des Ganzen. 11,3 % der deutschen Händler kaufen auch ohne jeden
+    Anruf — wer eine abgearbeitete Liste ohne Vergleichsgruppe auswertet,
+    schreibt sich die Basisrate als Erfolg gut.
+
+    Festgenagelt wird deshalb: (1) die Kontrollgruppe entsteht beim ANLEGEN und
+    ist über die Rangfolge geschichtet, damit sie nicht zufällig die halbe Spitze
+    verschluckt; (2) ein Kontakteintrag auf einer Kontroll-Firma wird ABGEWIESEN,
+    nicht still gespeichert; (3) ohne Kontrollgruppe liefert die Messung `None`
+    statt einer 0, die wie "gemessen, keine Wirkung" aussähe."""
+    import datetime as dt
+    import pytest
+    from adwatch import outcomes
+    from adwatch.models import Company, CrmOrderEvent
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    for i in range(40):
+        s.add(Company(name=f"Firma {i:02d}", segment="Handel",
+                      sub_segment="Fensterbau", country="DE", postal_code="49074"))
+    s.commit()
+    ids = list(s.scalars(select(Company.id).order_by(Company.id)))
+    s.close()
+
+    rows = [{"company_id": cid, "score": 1.0 - i / 100} for i, cid in enumerate(ids)]
+    lst = outcomes.create_list("Testliste", "funnel", rows,
+                               holdout_share=0.2, seed=42)
+    assert lst["n"] == 40
+    assert lst["n_kontrolle"] == 8, "20 % von 40"
+    assert lst["n_ziel"] == 32
+
+    # geschichtet: in JEDEM Zehnerblock sitzen genau 2 Kontrollen — eine rein
+    # zufällige Ziehung könnte 8 davon in die Top-10 legen
+    ent = outcomes.entries(lst["id"])
+    for start in (0, 10, 20, 30):
+        block = ent[start:start + 10]
+        assert sum(1 for e in block if e["arm"] == "kontrolle") == 2, \
+            f"Block ab Rang {start+1} ist nicht geschichtet"
+
+    ziel = next(e for e in ent if e["arm"] == "ziel")
+    kontrolle = next(e for e in ent if e["arm"] == "kontrolle")
+
+    outcomes.record(ziel["entry_id"], outcome="angebot", channel="telefon")
+    with pytest.raises(ValueError) as err:
+        outcomes.record(kontrolle["entry_id"], outcome="angebot", channel="telefon")
+    assert "Kontrollgruppe" in str(err.value)
+
+    # gemessen wird am HARTEN Ausgang, nicht am eingetragenen Ergebnis
+    s = temp_db.SessionLocal()
+    s.add(CrmOrderEvent(company_id=ziel["company_id"],
+                        order_date=dt.date.today(), amount=5000.0))
+    s.commit(); s.close()
+    m = outcomes.measure(lst["id"], since=dt.date.today() - dt.timedelta(days=1))
+    assert m["ziel"]["kaeufer"] == 1
+    assert m["kontrolle"]["kaeufer"] == 0
+    assert m["uplift"] is not None
+    assert m["aussagekraeftig"] is False, "8 Kontrollen sind zu wenig fuer eine Aussage"
+
+    # eine Liste GANZ ohne Kontrollgruppe darf keinen Uplift behaupten
+    blind = outcomes.create_list("Ohne Kontrolle", "kalt", rows,
+                                 holdout_share=0.0, seed=42)
+    mb = outcomes.measure(blind["id"])
+    assert mb["kontrolle"]["n"] == 0
+    assert mb["uplift"] is None, "ohne Vergleichsgruppe ist Wirkung nicht definiert"
+
+
+def test_a_zero_euro_order_does_not_count_as_list_success(temp_db):
+    """Dieselbe 0-Euro-Regel wie in den Profilen: eine Garantiegutschrift nach
+    einem Anruf ist kein Erfolg der Liste."""
+    import datetime as dt
+    from adwatch import outcomes
+    from adwatch.models import Company, CrmOrderEvent
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    for i in range(20):
+        s.add(Company(name=f"F{i}", segment="Handel", sub_segment="Glaser",
+                      country="DE", postal_code="49074"))
+    s.commit()
+    ids = list(s.scalars(select(Company.id).order_by(Company.id)))
+    s.add(CrmOrderEvent(company_id=ids[0], order_date=dt.date.today(), amount=0.0))
+    s.commit(); s.close()
+
+    lst = outcomes.create_list("Null-Euro", "kalt",
+                               [{"company_id": c, "score": 0.5} for c in ids],
+                               holdout_share=0.0, seed=1)
+    m = outcomes.measure(lst["id"], since=dt.date.today() - dt.timedelta(days=1))
+    assert m["ziel"]["kaeufer"] == 0, "eine 0-Euro-Bewegung ist kein Kauf"

@@ -815,3 +815,59 @@ class CrmOpportunityProduct(Base):
     family: Mapped[str] = mapped_column(String(120), index=True)
     positions: Mapped[int] = mapped_column(Integer, default=0)
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class TargetList(Base):
+    """Eine ausgespielte Arbeitsliste — mit ihrer Kontrollgruppe.
+
+    Das ist der Grund, warum es diese Tabelle überhaupt gibt. Eine Rangliste
+    abzuarbeiten und hinterher die Abschlüsse zu zählen, misst nichts: die
+    obersten Firmen hätten teilweise ohnehin gekauft. Gemessen an der Basisrate
+    kaufen 11,3 % der deutschen Händler auch ohne jeden Anruf.
+
+    Was wirklich interessiert, ist nicht die Kaufwahrscheinlichkeit, sondern die
+    REAKTION AUF ANSPRACHE (Ascarza 2018: Zielsteuerung nach Neigung ist
+    messbar schlechter als nach Reaktionsfähigkeit). Und Reaktion ist nur gegen
+    eine Kontrollgruppe messbar.
+
+    Deshalb wird bei der Erzeugung einer Liste ein zufälliger Anteil als
+    `holdout` markiert und ausdrücklich NICHT angesprochen. Die Zuteilung
+    geschieht EINMAL, beim Anlegen, und ist unveränderlich — eine nachträglich
+    verschobene Kontrollgruppe ist keine mehr.
+    """
+    __tablename__ = "target_lists"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    source: Mapped[str] = mapped_column(String(40))     # funnel | bestand | kalt | ipp | manuell
+    filters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    holdout_share: Mapped[float] = mapped_column(Float, default=0.15)
+    seed: Mapped[int] = mapped_column(Integer, default=0)   # macht die Ziehung nachvollziehbar
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TargetListEntry(Base):
+    """Eine Firma auf einer Arbeitsliste, ihr Arm und ihr Ausgang.
+
+    `score_at_creation` wird eingefroren: das Modell ändert sich, die Frage
+    „hat die Rangfolge von damals funktioniert" darf sich nicht mit ihm ändern.
+    """
+    __tablename__ = "target_list_entries"
+    __table_args__ = (UniqueConstraint("list_id", "company_id",
+                                       name="uq_list_company"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    list_id: Mapped[int] = mapped_column(ForeignKey("target_lists.id"), index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    score_at_creation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 'ziel' = ansprechen, 'kontrolle' = bewusst NICHT ansprechen
+    arm: Mapped[str] = mapped_column(String(10), default="ziel", index=True)
+
+    contacted_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    channel: Mapped[str | None] = mapped_column(String(30), nullable=True)   # telefon|mail|besuch|messe
+    outcome: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    outcome_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
