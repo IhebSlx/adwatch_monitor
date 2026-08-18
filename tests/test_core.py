@@ -4537,3 +4537,34 @@ def test_discovery_matches_known_companies_two_ways(temp_db):
 
     # Rechtsform und Umlaute dürfen den Vergleich nicht sprengen
     assert discover._norm_name("Müller & Söhne GmbH") == discover._norm_name("Mueller & Soehne")
+
+
+def test_an_empty_dataverse_filter_never_leaves_the_app(temp_db):
+    """Gemessen 2026-08-18: drei Testabfragen ohne Filter, drei fehlgeschlagene
+    Flow-Läufe, HTTP 502 NoResponse beim Aufrufer. Der Konnektor lehnt einen
+    leeren $filter ab — und weil die Aktion scheitert, erreicht der Lauf die
+    Response nie, sodass der Fehler wie ein Netzwerkproblem aussieht statt wie
+    ein Eingabefehler.
+
+    Aufgefallen war es jahrelang nicht, weil jeder echte Aufruf einen Filter
+    trug (`modifiedon gt ...`). Die erste ungefilterte Abfrage stolperte darüber.
+    Die Vorgabe wird deshalb HIER gesetzt, an der einzigen Stelle, durch die
+    jeder Flow-Aufruf läuft."""
+    from adwatch import flows
+
+    # leer, fehlend, nur Leerzeichen -> alle bekommen die Vorgabe
+    for payload in ({"entity": "leads", "select": "leadid", "filter": ""},
+                    {"entity": "leads", "select": "leadid"},
+                    {"entity": "leads", "select": "leadid", "filter": "   "}):
+        out = flows._guard_payload("crm_query", payload)
+        assert out["filter"] == flows._DEFAULT_DATAVERSE_FILTER
+        assert out["entity"] == "leads", "der Rest bleibt unangetastet"
+
+    # ein echter Filter wird NIE überschrieben
+    real = {"entity": "accounts", "select": "accountid",
+            "filter": "modifiedon gt 2026-01-01T00:00:00Z"}
+    assert flows._guard_payload("crm_query", real)["filter"] == real["filter"]
+
+    # andere Rollen bleiben unberührt — die Vorgabe ist Dataverse-spezifisch
+    mail = {"recipient": "x@y.de"}
+    assert flows._guard_payload("report_email", mail) == mail

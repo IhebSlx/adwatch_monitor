@@ -64,6 +64,33 @@ def missing_message(role: str) -> str:
             f"URL unter Einstellungen → {key} eintragen.")
 
 
+# Ein Dataverse-Aufruf ohne Filter ist kein "alle Zeilen", sondern ein Fehler:
+# der Konnektor antwortet mit
+#   BadRequest — The value for OData query '$filter' cannot be empty.
+# und weil die Aktion dann scheitert, erreicht der Lauf die Response nie; der
+# Aufrufer sieht bloß HTTP 502 NoResponse und sucht den Fehler an der falschen
+# Stelle. Gemessen 2026-08-18: drei Testabfragen, drei fehlgeschlagene Läufe,
+# eine halbe Stunde Fehlersuche im Flow — der Fehler saß hier.
+#
+# Aufgefallen ist es nie, weil jeder echte Aufruf bisher einen Filter trug
+# (`modifiedon gt ...` beim Delta-Sync). Erst die erste ungefilterte Abfrage
+# stolperte darüber.
+#
+# `statecode eq 0` = aktive Datensätze. Als Voreinstellung fachlich richtig:
+# inaktive Firmen, abgeschlossene Leads und stornierte Aktivitäten gehören in
+# keine Auswertung, in der sie nicht ausdrücklich verlangt wurden.
+_DEFAULT_DATAVERSE_FILTER = "statecode eq 0"
+
+
+def _guard_payload(role: str, payload: dict) -> dict:
+    if role != "crm_query" or not isinstance(payload, dict):
+        return payload
+    if str(payload.get("filter") or "").strip():
+        return payload
+    log.info("flow[crm_query] leerer Filter -> Vorgabe '%s'", _DEFAULT_DATAVERSE_FILTER)
+    return {**payload, "filter": _DEFAULT_DATAVERSE_FILTER}
+
+
 def post(role: str, payload: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """POST to the flow behind `role` and return its parsed JSON body ({} if the
     flow answers with no body, which a fire-and-forget flow legitimately does).
@@ -75,6 +102,8 @@ def post(role: str, payload: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
     url = url_for(role)
     if not url:
         raise RuntimeError(missing_message(role))
+
+    payload = _guard_payload(role, payload)
 
     # never log the URL itself: it is a bearer secret, anyone holding it can
     # trigger the flow
