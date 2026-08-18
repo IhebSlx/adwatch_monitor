@@ -4492,3 +4492,48 @@ def test_a_zero_euro_order_does_not_count_as_list_success(temp_db):
                                holdout_share=0.0, seed=1)
     m = outcomes.measure(lst["id"], since=dt.date.today() - dt.timedelta(days=1))
     assert m["ziel"]["kaeufer"] == 0, "eine 0-Euro-Bewegung ist kein Kauf"
+
+
+def test_discovery_matches_known_companies_two_ways(temp_db):
+    """Der Abgleich entscheidet über das Ergebnis des ganzen Versuchs. Nur über
+    die Domain zu prüfen würde 'neu' systematisch überschätzen: von 10.998
+    deutschen Händlern haben bloß 5.463 (49 %) überhaupt eine Domain hinterlegt.
+    Deshalb zusätzlich Name+Ort — und deshalb wird das Ergebnis als SPANNE
+    berichtet, nicht als eine Zahl."""
+    from adwatch import discover
+    from adwatch.models import Company
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    s.add(Company(name="Mustermann Fensterbau GmbH", city="Osnabrück",
+                  country="DE", website_domain="mustermann-fenster.de",
+                  segment="Verarbeiter"))
+    s.add(Company(name="Sonnenschein Glaserei", city="Münster", country="DE",
+                  segment="Verarbeiter"))          # KEINE Domain hinterlegt
+    s.commit()
+    ids = {c.name: c.id for c in s.query(Company).all()}
+    s.close()
+
+    by_domain, by_city = discover._known_index()
+
+    # Weg 1: harte Domain
+    cid, how = discover._match_known(
+        {"domain": "mustermann-fenster.de", "title": "Irgendein Titel"},
+        by_domain, by_city)
+    assert cid == ids["Mustermann Fensterbau GmbH"] and how == "domain"
+
+    # Weg 2: Name + Ort, für die Hälfte des Bestands ohne Domain
+    cid2, how2 = discover._match_known(
+        {"domain": "sonnenschein-glas.de",
+         "title": "Sonnenschein Glaserei — Ihr Glaser in Münster"},
+        by_domain, by_city)
+    assert cid2 == ids["Sonnenschein Glaserei"] and how2 == "name_ort"
+
+    # eine wirklich fremde Firma bleibt neu
+    cid3, _ = discover._match_known(
+        {"domain": "voellig-fremd.de", "title": "Völlig Fremd GmbH, Kiel"},
+        by_domain, by_city)
+    assert cid3 is None
+
+    # Rechtsform und Umlaute dürfen den Vergleich nicht sprengen
+    assert discover._norm_name("Müller & Söhne GmbH") == discover._norm_name("Mueller & Soehne")

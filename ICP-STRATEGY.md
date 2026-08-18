@@ -515,3 +515,60 @@ der 8.026 „unbekannt" in echte Negativbeispiele.
   erscheinen als „hat 2019–2022 nicht gekauft". Das erzeugt Rauschen in der
   Negativklasse und drückt die gemessene Basisrate — es erzeugt **kein**
   falsches Signal. Behebbar durch einen `createdon`-Abzug aus Dataverse.
+
+## 12. Beschaffung — gibt es überhaupt Firmen, die wir nicht kennen?
+
+Die Zwillingssuche scheitert oder gelingt nicht am Bewerten, sondern am FINDEN.
+Gemessen 2026-08-18: **Website-Merkmale allein erreichen AUC 0,595** und damit
+etwas mehr als die CRM-Stammdaten (0,583) — einen Fremden zu bewerten ist also
+möglich. Die offene Frage war, ob sich Fremde überhaupt beschaffen lassen.
+
+### Warum Suchmaschine und nicht Wettbewerber-Verzeichnis
+
+Geprüft wurden drei Quellen, bevor eine gewählt wurde:
+
+| Quelle | Befund |
+|---|---|
+| **Cortizo** | robots.txt verbietet `/instaladores/desplegar/` ausdrücklich — Verzeichnis tabu |
+| **Schüco** | Partnersuche ist ein JavaScript-Formular hinter undokumentierter Schnittstelle |
+| **Suchmaschine (Serper)** | bereits bezahlt, skaliert über Gewerke und Regionen |
+
+Dazu ein grundsätzliches Argument: ein Wettbewerber-Verzeichnis liefert nur,
+was der Wettbewerber gerade veröffentlicht, und kann morgen weg sein.
+
+### Pilot (12 Abfragen, 4 Städte × 3 Gewerke)
+
+| | |
+|---|---:|
+| gefundene Firmen | 77 |
+| über Domain als bekannt erkannt | 14 |
+| über Name+Ort als bekannt erkannt | 2 |
+| **zunächst als neu gezählt** | **61 (79 %)** |
+
+**Diese 79 % waren zu optimistisch, und zwar aus einem messbaren Grund:** von
+10.998 deutschen Händlern haben nur **5.463 (49 %)** überhaupt eine Domain
+hinterlegt. Über die Domain ist also nur die Hälfte des Bestands auffindbar.
+
+Gegenprobe mit unscharfem Namensvergleich gegen alle 48.239 Firmennamen: 22 der
+61 „neuen" haben einen möglichen Treffer. Ein Teil davon sind allerdings
+Fehlalarme des Vergleichs (`braun-fensterbau.de` gegen eine Firma namens
+„Braun"; `glaserei.org` gegen „Tischlerei Glaserei Carsten M."), weil kurze
+oder gattungsartige Namenskerne bei Token-Vergleichen leicht 100 % erreichen.
+
+**Ehrliches Ergebnis: zwischen 50 % und 79 % wirklich neu.** Die Untergrenze
+stammt aus dem übervorsichtigen Namensvergleich, die Obergrenze aus dem
+Domain-Abgleich allein. Genauer geht es ohne Handprüfung nicht.
+
+**Auch die Untergrenze trägt die Entscheidung:** die Hälfte dessen, was eine
+einfache Suche findet, steht nicht im CRM. Der Kanal existiert.
+
+### Was daraus folgt
+
+Der nächste Schritt ist NICHT, mehr zu suchen, sondern die Gefundenen durch die
+vorhandene Kette zu schicken — Identität prüfen, anreichern, gegen das
+Gewinner-Profil bewerten — und die Besten als **Arbeitsliste mit
+Kontrollgruppe** auszuspielen (§ `adwatch/outcomes.py`). Erst dann ist
+messbar, ob ein aus dem Internet beschaffter Kontakt tatsächlich Kunde wird.
+
+Offen und ausdrücklich unbewiesen bleibt: ob diese Firmen GUTE Interessenten
+sind. Gefunden ≠ geeignet. Das entscheidet erst die Kontrollgruppe.
