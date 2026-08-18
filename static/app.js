@@ -856,7 +856,12 @@
     const rows = [
       pipeRow("Bestand", null,
         `<b>${deN(st.bestand.total)}</b> Firmen · ${deN(st.bestand.mit_website)} mit Website · ` +
-        `${deN(st.bestand.kaeufer)} Käufer`,
+        `${deN(st.bestand.kaeufer)} Käufer` +
+        // Herkunft sichtbar: sonst wächst der Bestand über Nacht und niemand
+        // weiß, ob das CRM gewachsen ist oder wir selbst gesucht haben.
+        (st.bestand.selbst_gefunden
+          ? ` <span class="muted">(${deN(st.bestand.aus_crm)} aus CRM, ` +
+            `${deN(st.bestand.selbst_gefunden)} selbst gefunden)</span>` : ""),
         ""),
       pipeRow("Identität", pct(idV.verified),
         `<b>${deN(idV.verified)}</b> verifiziert · ` +

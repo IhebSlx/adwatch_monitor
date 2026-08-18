@@ -60,6 +60,15 @@ def market_status(s, cc: str) -> dict:
     sc = _scope_clause(cc)
 
     total = s.scalar(select(func.count(Company.id)).where(sc)) or 0
+    # Selbst gefundene Betriebe (discover.py) zählen mit — sie sind echte Firmen
+    # dieses Marktes —, aber ihre Herkunft muss sichtbar bleiben. Sonst wächst
+    # der Bestand über Nacht um 304 Zeilen und niemand weiß, woher.
+    # `coalesce` ist nötig, nicht Kosmetik: `lead_source NOT LIKE ...` liefert
+    # bei NULL weder wahr noch falsch, sondern NULL — die Prüfung fiel damit
+    # still auf null Zeilen zurück, als sie zum ersten Mal geschrieben wurde.
+    entdeckt = s.scalar(
+        select(func.count(Company.id)).where(
+            sc, func.coalesce(Company.lead_source, "").like("entdeckung%"))) or 0
     with_site = s.scalar(select(func.count(Company.id))
                          .where(sc, Company.website_domain.is_not(None),
                                 Company.website_domain != "")) or 0
@@ -154,7 +163,8 @@ def market_status(s, cc: str) -> dict:
     from .. import config
     return {
         "country": cc, "label": _COUNTRY_LABEL.get(cc, cc),
-        "bestand": {"total": total, "mit_website": with_site, "kaeufer": buyers},
+        "bestand": {"total": total, "mit_website": with_site, "kaeufer": buyers,
+                    "aus_crm": total - entdeckt, "selbst_gefunden": entdeckt},
         "identitaet": {
             "verified": ident.get("verified", 0),
             "offen": ident.get("needs_review", 0),
