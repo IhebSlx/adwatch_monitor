@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import re
+import time
 
 from sqlalchemy import select
 
@@ -36,6 +37,11 @@ from .models import Company, CrmEmail, CrmOpportunity
 log = logging.getLogger("adwatch.crm_emails")
 
 PAGE_CAP = 5000          # harte Grenze des Flows
+# Nicht die Zeilenzahl begrenzt uns, sondern die Antwortgroesse: E-Mail-Rumpfe
+# sind HTML. Eine Woche (~2.800 Zeilen, ~23 MB) laeuft gemessen sauber durch,
+# ein Monat kippte den Flow mit HTTP 504.
+MAX_SPAN_DAYS = 7
+_PAUSE_S = 0.5           # Hoeflichkeitspause zwischen Abrufen
 _LOOKUP_ANN = "_regardingobjectid_value@Microsoft.Dynamics.CRM.lookuplogicalname"
 
 SELECT = ("activityid,_regardingobjectid_value,createdon,senton,directioncode,"
@@ -77,9 +83,11 @@ def _rows(body) -> list[dict]:
 def _fetch(start: dt.date, end: dt.date) -> list[dict]:
     flt = (f"createdon ge {start.isoformat()}T00:00:00Z and "
            f"createdon lt {end.isoformat()}T00:00:00Z")
-    return _rows(flows.post("crm_query", {"entity": "emails", "select": SELECT,
-                                          "filter": flt, "top": PAGE_CAP},
-                            timeout=120))
+    out = _rows(flows.post("crm_query", {"entity": "emails", "select": SELECT,
+                                         "filter": flt, "top": PAGE_CAP},
+                           timeout=180))
+    time.sleep(_PAUSE_S)
+    return out
 
 
 def _walk(start: dt.date, end: dt.date, out: list[dict], depth: int = 0) -> None:
@@ -87,12 +95,28 @@ def _walk(start: dt.date, end: dt.date, out: list[dict], depth: int = 0) -> None
 
     Der Deckel ist nicht von echten 5.000 Zeilen zu unterscheiden, also wird bei
     Gleichstand IMMER geteilt. Lieber eine Abfrage zu viel als ein stilles Loch.
+
+    WICHTIG — von KLEIN nach groß, nicht umgekehrt: der erste Entwurf fragte ein
+    ganzes Jahr an und halbierte erst bei Deckel-Treffer. Das scheiterte
+    vollständig (HTTP 504, danach abgerissene Verbindungen), weil nicht die
+    ZEILENZAHL das Problem ist, sondern die ANTWORTGRÖSSE — E-Mail-Rümpfe sind
+    HTML, ein Jahr wären Hunderte Megabyte in einer Antwort. Ein Fenster wird
+    deshalb nie größer als MAX_SPAN_DAYS angefragt; die gemessene Probewoche
+    (2.834 Zeilen, rund 23 MB) lief problemlos.
     """
+    span = (end - start).days
+    if span > MAX_SPAN_DAYS:
+        cur = start
+        while cur < end:
+            nxt = min(cur + dt.timedelta(days=MAX_SPAN_DAYS), end)
+            _walk(cur, nxt, out, depth + 1)
+            cur = nxt
+        return
+
     got = _fetch(start, end)
     if len(got) < PAGE_CAP:
         out.extend(got)
         return
-    span = (end - start).days
     if span <= 1:
         # Selbst ein Tag ist voll — hier ist ohne Sortierung/Skiptoken nichts
         # mehr zu holen. Das wird LAUT vermerkt, nicht verschwiegen.
