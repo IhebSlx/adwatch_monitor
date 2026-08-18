@@ -1153,3 +1153,13 @@ tr.feat-neg td { color: #8a5220; }
 .decile-fill { width: 100%; background: var(--accent-grad); border-radius: 3px 3px 0 0; }
 .decile span { font-size: 10px; color: var(--muted); margin-top: 3px;
                font-variant-numeric: tabular-nums; }
+
+/* ============ Listen: Ziel gegen Kontrolle ============ */
+/* Die Kontrollgruppe bleibt SICHTBAR, aber deutlich gesperrt — versteckt
+   würde sie über einen anderen Weg doch angerufen, und dann ist die Wirkung
+   der Liste nicht mehr messbar. */
+tr.arm-kontrolle { background: repeating-linear-gradient(
+    45deg, transparent, transparent 8px,
+    color-mix(in srgb, var(--muted) 6%, transparent) 8px,
+    color-mix(in srgb, var(--muted) 6%, transparent) 16px); }
+tr.arm-kontrolle td { color: var(--muted); }

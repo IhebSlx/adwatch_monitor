@@ -41,6 +41,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"/></svg>
         Pipeline
       </button>
+      <button class="tab" data-tab="listen" data-label="Listen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+        Listen
+      </button>
       <button class="tab" data-tab="pruefen" data-label="Entscheidungen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         Entscheidungen
@@ -218,6 +222,30 @@
          Anreicherung vor Anzeigen, 30 Käufer vor einem ICP-Modell), endlich
          sichtbar: pro Stufe Zählerstand, ehrliche Lücke, nächster Schritt.
          Befüllt von loadPipeline() aus GET /api/pipeline. -->
+    <!-- ================= TAB: Listen ================= -->
+    <!-- Wo eine Liste tatsächlich abgearbeitet wird. Die Kontrollgruppe ist
+         SICHTBAR und gesperrt — sie zu verstecken wäre bequemer und würde dazu
+         führen, dass jemand sie auf einem anderen Weg doch anruft. -->
+    <section id="tab-listen" class="tab-panel">
+      <header class="page-head">
+        <h1>Listen — abarbeiten und messbar machen</h1>
+        <p>Jede Liste trägt eine <b>Kontrollgruppe</b>, die bewusst nicht angesprochen wird.
+          Ohne sie lässt sich die Wirkung der Liste nicht von der Basisrate unterscheiden —
+          11,3 % der Händler kaufen auch ohne Anruf.</p>
+      </header>
+      <div class="card">
+        <div class="filter-bar">
+          <select id="listenPicker" style="min-width:320px"></select>
+          <label class="muted" style="display:inline-flex;align-items:center;gap:6px">
+            <input type="checkbox" id="listenOffen"> nur offene
+          </label>
+          <span class="spacer"></span>
+          <span id="listenWirkung" class="muted"></span>
+        </div>
+        <div id="listenBody"><p class="hint">Lädt…</p></div>
+      </div>
+    </section>
+
     <section id="tab-pipeline" class="tab-panel">
       <header class="page-head">
         <h1>Pipeline</h1>
