@@ -645,6 +645,15 @@ def record_outcome_route(entry_id: int, payload: OutcomeIn):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/companies/{cid}/emails")
+def company_emails_route(cid: int, limit: int = 40):
+    """Der angehängte Schriftverkehr einer Firma — die Projektakte, nicht das
+    Postfach. Nur Anrisse; der vollständige Verlauf bleibt im CRM."""
+    from . import crm_emails
+    return {"emails": crm_emails.for_company(cid, limit=min(limit, 200)),
+            "features": (crm_emails.features([cid]) or {}).get(cid) or {}}
+
+
 @app.get("/api/profiles/{kind}")
 def profiles_route(kind: str, country: str | None = None, limit: int = 100):
     from .insights import profiles

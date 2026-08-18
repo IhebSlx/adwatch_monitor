@@ -4172,6 +4172,46 @@
     </div>`;
   }
 
+  // Schriftverkehr im Dossier. Nur Anrisse — die Akte soll lesbar sein, nicht
+  // die Seite fluten; der vollstaendige Verlauf lebt im CRM, wo er hingehoert.
+  // Eingehende Mails sind hervorgehoben: "die Firma meldet sich bei UNS" ist
+  // Nachfrage und damit ein anderes Signal als unser eigener Aufwand.
+  async function loadDrawerMails(id) {
+    const box = $("#drawerMailBody");
+    if (!box) return;
+    let d;
+    try { d = await api(`/api/companies/${id}/emails?limit=40`); }
+    catch (e) { box.innerHTML = `<p class="hint status-error">${esc(e.message)}</p>`; return; }
+    const f = d.features || {};
+    if (!d.emails.length) {
+      box.innerHTML = `<p class="hint">Kein angehaengter Schriftverkehr.
+        <span class="muted">Abruf umfasst bisher 2023+.</span></p>`;
+      return;
+    }
+    box.innerHTML = `
+      <p class="hint">
+        <b>${deN(f.mails)}</b> Mails · <b>${deN(f.eingehend)}</b> eingehend
+        (${((f.eingehend_anteil || 0) * 100).toFixed(0)} %) ·
+        letzte vor ${f.tage_seit_letzter ?? "?"} Tagen ·
+        Verlauf ueber ${deN(f.dauer_tage)} Tage
+        <br><span class="muted">Eingehend heisst: die Firma hat sich bei uns
+        gemeldet — Nachfrage, nicht Vertriebsaufwand.</span>
+      </p>
+      ${d.emails.map(m => `
+        <div class="mail-item ${m.richtung === "eingehend" ? "mail-in" : ""}">
+          <div class="mail-head">
+            <span class="qual-badge ${m.richtung === "eingehend" ? "qual-stark" : "qual-mittel"}">
+              ${m.richtung === "eingehend" ? "eingehend" : "ausgehend"}</span>
+            <b>${esc(m.betreff || "(ohne Betreff)")}</b>
+            <span class="spacer"></span>
+            <span class="muted">${m.datum ? esc(deDate(m.datum)) : ""}</span>
+          </div>
+          <div class="mail-text">${esc(m.anriss || "")}${m.zeichen > 400 ? " …" : ""}</div>
+        </div>`).join("")}
+      ${d.emails.length >= 40 ? `<p class="hint">Nur die 40 neuesten. Der
+        vollstaendige Verlauf steht im CRM.</p>` : ""}`;
+  }
+
   async function loadDrawerEnrichment(id) {
     const box = $("#drawerEnrichBody");
     if (!box) return;
@@ -4340,6 +4380,10 @@
           </dl>
           <div id="drawerFitBreakdown"></div>
         </div>
+        <div class="drawer-section" id="drawerMailSection">
+          <h3>Schriftverkehr (Projektakte)</h3>
+          <div id="drawerMailBody"><p class="hint">Lädt…</p></div>
+        </div>
         <div class="drawer-section" id="drawerEnrichSection">
           <div class="drawer-section-head">
             <h3>Steckbrief — von der eigenen Website</h3>
@@ -4455,6 +4499,7 @@
 
     // Enrichment: load this company's enriched facts, and allow a manual re-run.
     loadDrawerEnrichment(id);
+    loadDrawerMails(id);
     $("#drawerEnrichBtn", drawer)?.addEventListener("click", async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true; btn.textContent = "Anreichern…";

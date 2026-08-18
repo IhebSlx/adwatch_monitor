@@ -1163,3 +1163,13 @@ tr.arm-kontrolle { background: repeating-linear-gradient(
     color-mix(in srgb, var(--muted) 6%, transparent) 8px,
     color-mix(in srgb, var(--muted) 6%, transparent) 16px); }
 tr.arm-kontrolle td { color: var(--muted); }
+
+/* ============ Schriftverkehr im Dossier ============ */
+.mail-item { border-left: 3px solid var(--border); padding: 7px 0 7px 10px;
+             margin: 8px 0; font-size: 12.5px; }
+/* Eingehende Mails sind das seltenere und wertvollere Ereignis — Nachfrage
+   statt Aufwand. Sie bekommen deshalb die betonte Kante. */
+.mail-item.mail-in { border-left-color: #1c7c3c; background: #f6fbf7; }
+.mail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.mail-text { color: var(--ink-soft); line-height: 1.5; white-space: pre-wrap;
+             max-height: 6.5em; overflow: hidden; }
