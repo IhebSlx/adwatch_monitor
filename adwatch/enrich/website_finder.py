@@ -41,6 +41,19 @@ _DIRECTORY_HINTS = (
     "werliefertwas", "kompass.com", "herold.", "infobel", "yellowmap", "cybo.",
     "ortsdienst", "unternehmen24", "firmenkontor", "bizim.", "dnb.com",
     "wogibtes", "branchen-info", "meinprospekt", "kaufda",
+    # Portale, die bei der Entdeckungs-Suche (discover.py) durchrutschten und
+    # erst per Handprüfung auffielen — beide standen bereits auf einer
+    # Anrufliste: weshoplocal.de ("Die 10 Besten für ᐅ Glaserei in Bielefeld")
+    # und glaser.nrw. Sie ranken gut für "<Gewerk> <Stadt>", also genau für die
+    # Abfrage, mit der wir Betriebe suchen. Die Muster sind bewusst breit:
+    # "shoplocal", "die-besten" und Gewerk-als-Domain sind Portal-Signaturen.
+    "weshoplocal", "shoplocal", "die-besten", "diebesten", "top10", "top-10",
+    "handwerkerportal", "handwerker-vergleich", "vergleich.", "-vergleich",
+    "glaser.nrw", "fensterbau.org", "glaserei.org", "tischler.org",
+    # Bindestrich-Schreibweisen: "myhammer" stand bereits oben in der Liste,
+    # die echte Domain heisst aber my-hammer.de und rutschte deshalb durch.
+    # Wer ein Portal per Teilstring sperrt, muss beide Schreibweisen nennen.
+    "my-hammer", "-portal.", "portal.de", "gelbe-seiten", "check-24",
     # --- Spain / Iberia -----------------------------------------------------
     # This list was built during GERMAN testing and every entry above is a German
     # portal, so the Spanish equivalents ranked straight through it. Measured on
