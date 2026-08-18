@@ -38,7 +38,17 @@ ACCESS_USER = os.getenv("ADWATCH_ACCESS_USER", "adwatch").strip() or "adwatch"
 
 # ---- Backups --------------------------------------------------------------
 BACKUP_DIR = Path(os.getenv("ADWATCH_BACKUP_DIR", "").strip() or (DATA_DIR / "backups"))
-BACKUP_KEEP = int(os.getenv("ADWATCH_BACKUP_KEEP", "14"))   # rotated daily copies to retain
+# Von 14 auf 7 gesenkt, als die E-Mail-Korrespondenz dazukam. Gerechnet, nicht
+# geschätzt: die Datenbank wächst von 212 MB auf rund 1,3 GB, 14 Kopien wären
+# also ~18 GB Plattenplatz für ein Werkzeug, das auf einem Arbeitsplatzrechner
+# läuft.
+#
+# Sieben Tage sind hier vertretbar, weil der teuerste Teil des Bestands NICHT
+# in den E-Mails steckt: die sind ein Spiegel des CRM und jederzeit neu
+# abrufbar. Unersetzlich sind bezahlte Anreicherung, geprüfte Identitäten und
+# menschliche Entscheidungen — und die ändern sich langsam genug, dass eine
+# Woche Rückgriff reicht. Wer mehr will, setzt ADWATCH_BACKUP_KEEP.
+BACKUP_KEEP = int(os.getenv("ADWATCH_BACKUP_KEEP", "7"))   # rotated daily copies to retain
 
 # ---------------------------------------------------------------------------
 # In-app–customisable settings (the Settings tab). Each is resolved live at

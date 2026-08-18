@@ -572,3 +572,54 @@ messbar, ob ein aus dem Internet beschaffter Kontakt tatsächlich Kunde wird.
 
 Offen und ausdrücklich unbewiesen bleibt: ob diese Firmen GUTE Interessenten
 sind. Gefunden ≠ geeignet. Das entscheidet erst die Kontrollgruppe.
+
+## 13. Korrespondenz — das stärkste Merkmal, das wir je gemessen haben (und wofür es nichts taugt)
+
+Angehängte E-Mails aus dem CRM, Stichtag 2025-01-01, Merkmale strikt davor,
+Zielgröße Bestellung ab 2025 (Betrag > 0). Abruf lief zum Messzeitpunkt noch,
+also nur 1.363 von 14.825 Firmen hatten überhaupt Korrespondenz im Fenster.
+
+| Merkmalssatz | AUC | oberstes Dezil |
+|---|---:|---:|
+| nur Stammdaten | 0,656 | 1,87× |
+| **+ Korrespondenz** | **0,727** | **3,41×** |
+
+**ΔAUC = +0,071** — mehr als das Doppelte dessen, was die Anreicherung brachte
+(+0,03, unter ihrer Schwelle gescheitert).
+
+### Die zwei Gegenproben, die das Ergebnis erst brauchbar machen
+
+**A. Ist es nur „hat überhaupt Kontakt"?** Nur Firmen MIT Korrespondenz, das
+Vorhandensein-Flag also konstant und außerstande, etwas zu tragen:
+
+| | AUC |
+|---|---:|
+| nur Stammdaten | 0,672 |
+| + Korrespondenz-Details | **0,760** |
+
+**+0,088.** Es sind also tatsächlich die EIGENSCHAFTEN der Korrespondenz —
+Menge, Richtung, Aktualität, Dauer —, nicht bloß ihre Existenz.
+
+**B. Hilft es bei der Kaltakquise?** Firmen ohne jede Vorbestellung:
+
+| | AUC |
+|---|---:|
+| nur Stammdaten | 0,620 |
+| + Korrespondenz | 0,624 |
+
+**+0,003. Nichts.** Und das ist keine Enttäuschung, sondern Logik: eine Firma,
+mit der wir nie gesprochen haben, hat keine Korrespondenz. Das Merkmal ist per
+Konstruktion leer, wo es am nötigsten wäre.
+
+### Was daraus folgt
+
+Damit ist das Muster des ganzen Projekts zum dritten Mal bestätigt, jetzt mit
+dem deutlichsten Beleg: **Verhaltensdaten sind mächtig, existieren aber nur für
+Firmen, mit denen bereits eine Beziehung besteht.**
+
+* **Trichter- und Bestandsmodelle**: hier gehört die Korrespondenz hinein, und
+  sie ist dort das stärkste Einzelmerkmal, das je gemessen wurde (+0,088).
+* **Kalt-ICP**: unverändert bei ~0,62. Kein Abruf und kein Modell ändert das,
+  weil die Information über eine fremde Firma schlicht nicht existiert.
+
+Der E-Mail-Abruf hat sich also gelohnt — für die richtige Frage.

@@ -226,3 +226,86 @@ def stats() -> dict:
     return {"total": total, "mit_firma": linked, "firmen": firms,
             "nach_bezug": by_type, "nach_richtung": by_dir,
             "textzeichen": int(chars)}
+
+
+# ---------------------------------------------------------------------------
+# Merkmale aus der Korrespondenz — der eigentliche Zweck des Abrufs
+# ---------------------------------------------------------------------------
+# Gemessen 2026-08: beschreibende Merkmale (was eine Firma IST) bringen +0,03
+# AUC, verhaltensbezogene (was zwischen uns und ihr GESCHEHEN ist) +0,14 bis
+# +0,16. Korrespondenz ist Verhalten in Reinform.
+#
+# Das schärfste Feld ist die RICHTUNG. Eine eingehende Mail heißt: die Firma
+# meldet sich bei UNS. Das ist Nachfrage, nicht Vertriebsaufwand — und der
+# Unterschied ist genau der, den ein Neigungsmodell sonst verwechselt. In der
+# Probewoche waren 45 % eingehend (die frühere Stichprobe zeigte 1,3 %, weil sie
+# auf abgeschlossene Mails gefiltert war — ein Beispiel dafür, wie ein Filter
+# ein Merkmal wertlos aussehen lassen kann).
+#
+# ALLE Merkmale sind stichtagsfähig: `until` schneidet hart ab, damit ein Modell
+# nie Korrespondenz sieht, die nach dem vorhergesagten Ereignis entstand.
+
+def features(company_ids: list[int] | None = None,
+             until: dt.date | None = None) -> dict[int, dict]:
+    """Korrespondenz-Merkmale je Firma, strikt vor `until`."""
+    from sqlalchemy import and_ as _and
+
+    with SessionLocal() as s:
+        stmt = select(CrmEmail.company_id, CrmEmail.direction, CrmEmail.created_on,
+                      CrmEmail.body_text).where(CrmEmail.company_id.is_not(None))
+        if until:
+            stmt = stmt.where(CrmEmail.created_on < dt.datetime.combine(
+                until, dt.time.min))
+        if company_ids:
+            stmt = stmt.where(CrmEmail.company_id.in_(company_ids))
+        rows = list(s.execute(stmt))
+
+    ref = dt.datetime.combine(until, dt.time.min) if until else dt.datetime.utcnow()
+    agg: dict[int, dict] = {}
+    for cid, direction, created, body in rows:
+        a = agg.setdefault(cid, {"mails": 0, "eingehend": 0, "ausgehend": 0,
+                                 "letzte": None, "erste": None, "zeichen": 0})
+        a["mails"] += 1
+        a["eingehend" if direction == "eingehend" else "ausgehend"] += 1
+        a["zeichen"] += len(body or "")
+        if created:
+            a["letzte"] = created if a["letzte"] is None else max(a["letzte"], created)
+            a["erste"] = created if a["erste"] is None else min(a["erste"], created)
+
+    out: dict[int, dict] = {}
+    for cid, a in agg.items():
+        n = a["mails"]
+        out[cid] = {
+            "mails": n,
+            "eingehend": a["eingehend"],
+            "ausgehend": a["ausgehend"],
+            # Anteil statt Anzahl: eine kleine Firma mit 2 von 3 eingehenden
+            # Mails ist interessanter als ein Großkunde mit 5 von 400.
+            "eingehend_anteil": round(a["eingehend"] / n, 3) if n else 0.0,
+            "hat_eingehend": 1 if a["eingehend"] else 0,
+            "tage_seit_letzter": ((ref - a["letzte"]).days
+                                  if a["letzte"] else None),
+            "dauer_tage": ((a["letzte"] - a["erste"]).days
+                           if a["letzte"] and a["erste"] else 0),
+            "zeichen_schnitt": round(a["zeichen"] / n) if n else 0,
+        }
+    return out
+
+
+def for_company(company_id: int, limit: int = 50) -> list[dict]:
+    """Der Schriftverkehr einer Firma, neueste zuerst — für das Dossier.
+
+    Der Text wird auf einen Anriss gekürzt: die Akte soll im Dossier lesbar
+    sein, nicht die Seite fluten. Wer den ganzen Verlauf braucht, hat ihn im
+    CRM, wo er hingehört."""
+    with SessionLocal() as s:
+        rows = s.execute(
+            select(CrmEmail).where(CrmEmail.company_id == company_id)
+            .order_by(CrmEmail.created_on.desc()).limit(limit)).scalars().all()
+        return [{
+            "id": e.id, "betreff": e.subject, "richtung": e.direction,
+            "datum": e.created_on.isoformat() if e.created_on else None,
+            "bezug": e.regarding_type,
+            "anriss": (e.body_text or "")[:400],
+            "zeichen": len(e.body_text or ""),
+        } for e in rows]
