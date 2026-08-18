@@ -2829,6 +2829,15 @@
         </table>
       </div>
 
+      <div class="drawer-section" id="objMailSection">
+        <div class="drawer-section-head">
+          <h3>Schriftverkehr zum Objekt</h3>
+          <button id="objMailAnalyse" class="btn btn-sm"
+            title="Liest den Verkehr dieses Objekts EINMAL mit einem Sprachmodell und speichert das Ergebnis (Bruchteil eines Cents)">✨ Auswerten</button>
+        </div>
+        <div id="objMailFindings"></div>
+        <div id="objMailBody"><p class="hint">Lädt…</p></div>
+      </div>
       <div class="drawer-section">
         <h3>Verlauf (${(d.timeline || []).length} Verkaufschancen)</h3>
         <table class="data-table" style="font-size:12.5px">
@@ -2850,6 +2859,80 @@
     // a firm in the Objekt jumps straight to its own drawer
     $$("tr[data-firma]", body).forEach(tr =>
       tr.addEventListener("click", () => openCompanyDrawer(Number(tr.dataset.firma))));
+    loadObjektMails(pid);
+  }
+
+  // Schriftverkehr eines Objekts: ANZEIGEN kostet nichts und passiert immer.
+  // AUSWERTEN passiert nur auf Klick — 450.000 Mails durch ein Sprachmodell zu
+  // schicken waere dreistellig, und die Frage stellt sich nur bei Objekten, die
+  // jemand tatsaechlich ansieht. Das Ergebnis wird gespeichert.
+  async function loadObjektMails(pid) {
+    const box = $("#objMailBody");
+    if (!box) return;
+    let d;
+    try { d = await api(`/api/projekte/${encodeURIComponent(pid)}/emails?limit=60`); }
+    catch (e) { box.innerHTML = `<p class="hint status-error">${esc(e.message)}</p>`; return; }
+    const btn = $("#objMailAnalyse");
+    if (!d.emails.length) {
+      box.innerHTML = `<p class="hint">Kein Schriftverkehr zu diesem Objekt.
+        <span class="muted">Der Abruf umfasst bisher 2023+, und rund 19 % der in
+        Mails genannten Verkaufschancen liegen ausserhalb unseres Spiegels.</span></p>`;
+      if (btn) btn.disabled = true;
+      return;
+    }
+    box.innerHTML = `
+      <p class="hint"><b>${deN(d.mails)}</b> Mails · <b>${deN(d.eingehend)}</b> eingehend
+        · ueber ${d.guids} Verkaufschance(n)${d.mails > d.emails.length
+          ? ` · gezeigt: die ${d.emails.length} neuesten` : ""}</p>
+      ${d.emails.map(m => `
+        <div class="mail-item ${m.richtung === "eingehend" ? "mail-in" : ""}">
+          <div class="mail-head">
+            <span class="qual-badge ${m.richtung === "eingehend" ? "qual-stark" : "qual-mittel"}">
+              ${m.richtung === "eingehend" ? "eingehend" : "ausgehend"}</span>
+            <b>${esc(m.betreff || "(ohne Betreff)")}</b>
+            <span class="spacer"></span>
+            <span class="muted">${m.datum ? esc(deDate(m.datum)) : ""}</span>
+          </div>
+          <div class="mail-text">${esc(m.anriss || "")}${m.zeichen > 600 ? " …" : ""}</div>
+        </div>`).join("")}`;
+    if (btn && !btn.dataset.wired) {
+      btn.addEventListener("click", () => analyseObjektMails(pid));
+      btn.dataset.wired = "1";
+    }
+  }
+
+  async function analyseObjektMails(pid) {
+    const btn = $("#objMailAnalyse"), out = $("#objMailFindings");
+    btn.disabled = true; btn.textContent = "Wertet aus…";
+    try {
+      const r = await api(`/api/projekte/${encodeURIComponent(pid)}/emails/auswerten`, "POST", {});
+      const f = r.findings || {};
+      const list = (a) => (a && a.length) ? a.map(esc).join(" · ") : "—";
+      out.innerHTML = `
+        <div class="icp-plain">
+          <b>Aus dem Schriftverkehr gelesen</b>
+          <span class="muted">— ${r.mails_used} von ${r.mails_total ?? r.mails_used} Mails,
+          ${r.cached ? "gespeichertes Ergebnis" : "neu ausgewertet"}, ${esc(r.model || "")}</span>
+          <dl class="drawer-grid" style="margin-top:8px">
+            ${drawerKv("Kernursache", f.kernursache ? `<b>${esc(f.kernursache)}</b>` : "—")}
+            ${drawerKv("Beleg", f.belege && f.belege.kernursache ? `<i>„${esc(f.belege.kernursache)}"</i>` : "—")}
+            ${drawerKv("Wettbewerber", list(f.wettbewerber))}
+            ${drawerKv("Einwände", list(f.einwaende))}
+            ${drawerKv("Wer verstummte", esc(f.wer_verstummte || "—"))}
+            ${drawerKv("Produkte", list(f.produkte))}
+            ${drawerKv("Offen geblieben", esc(f.naechster_schritt_offen || "—"))}
+            ${drawerKv("Stimmung", esc(f.stimmung || "—"))}
+          </dl>
+          <p class="hint" style="margin:6px 0 0">Abgeleitet, nicht belegt — das
+            Modell darf nur wiedergeben, was im Text steht, und antwortet sonst
+            mit „—". Vor einer Ansprache trotzdem selbst lesen.</p>
+        </div>`;
+      btn.textContent = "✨ Neu auswerten";
+    } catch (e) {
+      out.innerHTML = `<p class="hint status-error">${esc(e.message)}</p>`;
+      btn.textContent = "✨ Auswerten";
+    }
+    btn.disabled = false;
   }
 
   function ensureObjekteLoaded() {

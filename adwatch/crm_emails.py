@@ -28,7 +28,7 @@ import logging
 import re
 import time
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from . import flows
 from .db import SessionLocal
@@ -309,3 +309,148 @@ def for_company(company_id: int, limit: int = 50) -> list[dict]:
             "anriss": (e.body_text or "")[:400],
             "zeichen": len(e.body_text or ""),
         } for e in rows]
+
+
+# ---------------------------------------------------------------------------
+# Korrespondenz eines OBJEKTS — anzeigen immer, auswerten nur auf Klick
+# ---------------------------------------------------------------------------
+
+def _project_guids(project_id: str) -> list[str]:
+    """Die Verkaufschancen-Guids eines Objekts. Ein Objekt ist eine Gruppe von
+    VCs (`sl_primary_opportunityid`), die Mails hängen an den einzelnen VCs —
+    also muss über die Gruppe gesammelt werden, nicht über eine ID."""
+    from sqlalchemy import or_
+    with SessionLocal() as s:
+        rows = list(s.scalars(
+            select(CrmOpportunity.opportunity_guid).where(
+                or_(CrmOpportunity.project_id == project_id,
+                    CrmOpportunity.opportunity_guid == project_id))))
+    return [g.lower() for g in rows if g]
+
+
+def for_project(project_id: str, limit: int = 100) -> dict:
+    """Der Schriftverkehr eines Objekts, neueste zuerst. Reine Anzeige — hier
+    wird nichts gedeutet und nichts bezahlt."""
+    guids = _project_guids(project_id)
+    if not guids:
+        return {"emails": [], "mails": 0, "eingehend": 0, "guids": 0}
+    with SessionLocal() as s:
+        rows = s.execute(
+            select(CrmEmail).where(func.lower(CrmEmail.regarding_id).in_(guids))
+            .order_by(CrmEmail.created_on.desc()).limit(limit)).scalars().all()
+        total = s.scalar(select(func.count(CrmEmail.id))
+                         .where(func.lower(CrmEmail.regarding_id).in_(guids))) or 0
+        ein = s.scalar(select(func.count(CrmEmail.id))
+                       .where(func.lower(CrmEmail.regarding_id).in_(guids),
+                              CrmEmail.direction == "eingehend")) or 0
+    return {"mails": total, "eingehend": ein, "guids": len(guids),
+            "emails": [{
+                "id": e.id, "betreff": e.subject, "richtung": e.direction,
+                "datum": e.created_on.isoformat() if e.created_on else None,
+                "anriss": (e.body_text or "")[:600],
+                "zeichen": len(e.body_text or ""),
+            } for e in rows]}
+
+
+_ANALYSE_PROMPT = """Du liest den E-Mail-Verkehr zu EINEM Bauprojekt der Firma
+Solarlux (Glas-Faltwände, Wintergärten, Schiebesysteme, Terrassendächer).
+
+Beantworte AUSSCHLIESSLICH, was im Text steht. Wenn etwas nicht drinsteht,
+schreibe null — nicht raten, nicht ergänzen, nicht plausibel machen. Eine
+erfundene Begründung ist schlimmer als keine.
+
+Gib NUR dieses JSON zurück:
+{
+ "kernursache": "in einem Satz: woran hing dieses Projekt wirklich? oder null",
+ "wettbewerber": ["genannte Fremdmarken, wörtlich"],
+ "einwaende": ["Preis|Termin|Technik|Genehmigung|Zustaendigkeit|Sonstiges — nur belegte"],
+ "wer_verstummte": "kunde|haendler|architekt|solarlux|niemand|null",
+ "produkte": ["besprochene Produktarten"],
+ "naechster_schritt_offen": "was laut Text noch offen blieb, oder null",
+ "stimmung": "positiv|neutral|angespannt|null",
+ "belege": {"kernursache": "wörtliches Zitat, max 25 Wörter, oder null"}
+}
+Der Verkehr, älteste zuerst:
+
+"""
+
+
+def analyse_project(project_id: str, max_chars: int = 12000,
+                    force: bool = False) -> dict:
+    """Die Korrespondenz EINES Objekts auswerten — nur wenn jemand danach fragt.
+
+    Das Ergebnis wird gespeichert; ein zweiter Aufruf liefert es zurück, statt
+    erneut zu bezahlen (`force=True` erzwingt eine Neuauswertung). Genommen wird
+    der ÄLTESTE Teil des Verkehrs zuerst: der Anfang eines Projekts enthält die
+    Anfrage und die Rahmenbedingungen, das Ende oft nur noch Terminabstimmung.
+    """
+    from . import config
+    from .models import ProjectMailAnalysis
+
+    with SessionLocal() as s:
+        prev = s.scalar(select(ProjectMailAnalysis)
+                        .where(ProjectMailAnalysis.project_id == project_id))
+        if prev and prev.findings and not force:
+            return {"cached": True, "mails_used": prev.mails_used,
+                    "chars_used": prev.chars_used, "model": prev.model,
+                    "analysed_at": prev.analysed_at.isoformat(),
+                    "findings": prev.findings}
+
+    guids = _project_guids(project_id)
+    if not guids:
+        raise ValueError("Kein Objekt mit dieser Kennung gefunden.")
+    with SessionLocal() as s:
+        rows = s.execute(
+            select(CrmEmail).where(func.lower(CrmEmail.regarding_id).in_(guids))
+            .order_by(CrmEmail.created_on.asc())).scalars().all()
+    if not rows:
+        raise ValueError("Zu diesem Objekt liegt kein Schriftverkehr vor.")
+
+    parts, used, chars = [], 0, 0
+    for e in rows:
+        t = (e.body_text or "").strip()
+        if not t:
+            continue
+        block = (f"--- {e.created_on:%Y-%m-%d} · {e.direction} · "
+                 f"{(e.subject or '')[:120]}\n{t[:2500]}\n")
+        if chars + len(block) > max_chars:
+            break
+        parts.append(block)
+        chars += len(block)
+        used += 1
+    if not parts:
+        raise ValueError("Der Schriftverkehr enthält keinen lesbaren Text.")
+
+    if not config.ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY fehlt — ohne Schlüssel keine Auswertung.")
+    from anthropic import Anthropic
+    model = config.ANTHROPIC_MODEL
+    client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    msg = client.messages.create(
+        model=model, max_tokens=1200,
+        messages=[{"role": "user", "content": _ANALYSE_PROMPT + "".join(parts)}])
+    raw = "".join(b.text for b in msg.content
+                  if getattr(b, "type", None) == "text").strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    if getattr(msg, "stop_reason", None) == "max_tokens":
+        raise ValueError("Antwort wurde bei max_tokens abgeschnitten — Schema "
+                         "kürzen oder max_tokens erhöhen.")
+    import json as _json
+    try:
+        findings = _json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Antwort war kein lesbares JSON: {exc}") from exc
+
+    with SessionLocal() as s:
+        row = s.scalar(select(ProjectMailAnalysis)
+                       .where(ProjectMailAnalysis.project_id == project_id))
+        if row is None:
+            row = ProjectMailAnalysis(project_id=project_id)
+            s.add(row)
+        row.mails_used, row.chars_used = used, chars
+        row.findings, row.model = findings, model
+        row.analysed_at, row.error = dt.datetime.utcnow(), None
+        s.commit()
+    return {"cached": False, "mails_used": used, "chars_used": chars,
+            "model": model, "analysed_at": dt.datetime.utcnow().isoformat(),
+            "findings": findings, "mails_total": len(rows)}

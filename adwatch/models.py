@@ -912,3 +912,29 @@ class CrmEmail(Base):
     body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     body_raw_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
+class ProjectMailAnalysis(Base):
+    """Auf Klick erzeugte Auswertung der Korrespondenz EINES Objekts.
+
+    Bewusst auf Abruf und nicht als Lauf über alles: 450.000 E-Mails durch ein
+    Sprachmodell zu schicken kostet dreistellig, und niemand braucht die
+    Auswertung für Objekte, die keiner ansieht. Wer ein Objekt öffnet und die
+    Frage hat, drückt den Knopf — und zahlt einen Bruchteil eines Cents.
+
+    Das Ergebnis wird gespeichert, damit ein zweiter Blick nichts kostet, und
+    trägt `model` und `analysed_at`: eine Ableitung ohne Zeitstempel und Modell
+    ist in einem halben Jahr nicht mehr einzuordnen.
+    """
+    __tablename__ = "project_mail_analyses"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_project_mail_analysis"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    mails_used: Mapped[int] = mapped_column(Integer, default=0)
+    chars_used: Mapped[int] = mapped_column(Integer, default=0)
+    # Die Ableitung selbst: Wettbewerber, Einwände, wer verstummte, Kernursache.
+    findings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    analysed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)

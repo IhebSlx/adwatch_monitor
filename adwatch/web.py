@@ -645,6 +645,28 @@ def record_outcome_route(entry_id: int, payload: OutcomeIn):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/projekte/{pid}/emails")
+def project_emails_route(pid: str, limit: int = 60):
+    """Der Schriftverkehr eines Objekts — reine Anzeige, kostet nichts."""
+    from . import crm_emails
+    return crm_emails.for_project(pid, limit=min(limit, 300))
+
+
+@app.post("/api/projekte/{pid}/emails/auswerten")
+def project_emails_analyse_route(pid: str, force: bool = False):
+    """Auswertung AUF KLICK für genau dieses Objekt. Bewusst kein Lauf über
+    alles: 450.000 Mails durch ein Sprachmodell zu schicken kostet dreistellig,
+    und die Frage stellt sich nur bei Objekten, die jemand ansieht. Das Ergebnis
+    wird gespeichert, ein zweiter Blick kostet nichts."""
+    from . import crm_emails
+    try:
+        return crm_emails.analyse_project(pid, force=force)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
 @app.get("/api/companies/{cid}/emails")
 def company_emails_route(cid: int, limit: int = 40):
     """Der angehängte Schriftverkehr einer Firma — die Projektakte, nicht das
