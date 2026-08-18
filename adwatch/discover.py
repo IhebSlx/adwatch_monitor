@@ -134,3 +134,79 @@ def discover(cities: list[str], trades: list[str] | None = None,
         "matched_by_name": sum(1 for r in rows if r["matched_by"] == "name_ort"),
         "rows": rows,
     }
+
+
+def persist(rows: list[dict], lead_source: str, country: str = "DE") -> dict:
+    """Neue Kandidaten als Firmen anlegen — mit sichtbarer Herkunft.
+
+    Dieselbe Konvention wie die spanische Marktliste (`lead_source =
+    'marktanalyse_es_2026_08'`, kein `crm_id`): so bleibt jederzeit
+    unterscheidbar, was aus dem CRM stammt und was wir selbst gefunden haben.
+    `monitored = False`, damit kein Anzeigen-Abruf automatisch Geld ausgibt.
+
+    Angelegt wird NUR, was noch nicht bekannt ist (`is_new`) und noch keine
+    Firma mit derselben Domain hat — der Abgleich läuft ein zweites Mal gegen
+    die Datenbank, weil zwischen Suche und Anlegen Zeit vergangen sein kann.
+
+    Der Name aus dem Suchtreffer-Titel ist ein VORSCHLAG, keine belegte
+    Firmierung — die Anreicherung ersetzt ihn später aus dem Impressum. Er ist
+    außerdem oft gar kein Name: der erste Versuch scheiterte an der
+    UNIQUE-Bedingung auf `companies.name`, weil eine Seite schlicht
+    „Wintergärten" im Titel trug und eine Firma dieses Namens bereits existierte.
+    Deshalb gilt: ein Titel wird nur übernommen, wenn er lang genug und nicht
+    bloß ein Gattungswort ist, und die Domain hängt sich an, sobald der Name
+    schon vergeben wäre. Die Domain ist hier die einzige verlässlich eindeutige
+    Angabe.
+    """
+    made, skipped = [], 0
+    with SessionLocal() as s:
+        have = {registrable(normalize_domain(d) or d)
+                for (d,) in s.execute(select(Company.website_domain))
+                if d}
+        names = {(n or "").strip().lower() for (n,) in s.execute(select(Company.name))}
+        for r in rows:
+            if not r.get("is_new"):
+                skipped += 1
+                continue
+            reg = registrable(r["domain"]) or r["domain"]
+            if not reg or reg in have or _is_directory(reg):
+                skipped += 1
+                continue
+            name = _proposed_name(r.get("title"), reg, names)
+            c = Company(name=name[:200], website_domain=reg,
+                        city=r.get("city"), country=country.upper(),
+                        lead_source=lead_source, monitored=False,
+                        segment=None, sub_segment=None)
+            s.add(c)
+            have.add(reg)
+            names.add(name.strip().lower())
+            made.append(c)
+        s.commit()
+        out = [{"id": c.id, "name": c.name, "domain": c.website_domain} for c in made]
+    return {"created": len(out), "skipped": skipped, "lead_source": lead_source,
+            "companies": out}
+
+
+# Titel, die keine Firmierung sind, sondern das Gewerk oder ein Werbespruch.
+_GENERIC_TITLE = re.compile(
+    r"^(fenster|fensterbau|glaserei|glas|wintergarten|wintergärten|wintergaerten|"
+    r"tischlerei|metallbau|schreinerei|haustüren|türen|startseite|home|"
+    r"willkommen|impressum|kontakt)\b", re.I)
+
+
+def _proposed_name(title: str | None, domain: str, taken: set[str]) -> str:
+    """Ein Anzeigename, der eindeutig ist und nicht mehr behauptet, als er weiß.
+
+    Reihenfolge: brauchbarer Titel → Titel plus Domain (wenn der Name schon
+    vergeben ist) → nur die Domain. Der Zusatz ist kein Schönheitsfehler: er
+    macht sichtbar, dass die Firmierung noch nicht belegt ist.
+    """
+    t = (title or "").split("|")[0].split("—")[0].split(" - ")[0].strip(" -–·,")
+    if len(t) < 4 or _GENERIC_TITLE.match(t):
+        t = ""
+    if t and t.strip().lower() not in taken:
+        return t
+    combined = f"{t} ({domain})" if t else domain
+    if combined.strip().lower() not in taken:
+        return combined
+    return f"{domain} #{abs(hash(domain)) % 10000}"
