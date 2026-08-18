@@ -871,3 +871,44 @@ class TargetListEntry(Base):
     outcome: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     outcome_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class CrmEmail(Base):
+    """Eine im CRM an einen Datensatz ANGEHÄNGTE E-Mail — der Verlauf, den
+    Kolleginnen und Kollegen bewusst zum Projekt gelegt haben.
+
+    Warum das hier steht und nicht in einem Nebenprojekt: strukturierte Felder
+    sagen DASS ein Objekt verloren ging (`lost_reason` kennt zehn Codes), die
+    angehängte Korrespondenz sagt WARUM. Gemessen 2026-08-18 an einer Stichprobe
+    von 300: alle 300 hängen an einem Datensatz — 150 an einer Verkaufschance,
+    99 an einer Firma, 43 an einem Angebot, 8 an einem Lead. Es ist also
+    Projektakte, nicht Postfach.
+
+    `body_text` ist der von HTML befreite Text. Das ist keine Kürzung: gemessen
+    sind nur 12–24 % der Rohbytes Inhalt, der Rest ist Formatierung und
+    Signatur-Markup. `body_raw_chars` hält fest, wie viel Rohlänge dahinterstand,
+    damit später niemand rätselt, ob etwas verloren ging.
+
+    `direction` ist das wertvollste Feld: EINGEHEND heißt, die Firma hat sich bei
+    UNS gemeldet — das ist Nachfrage, nicht Vertriebsaufwand. In der Stichprobe
+    waren 4 von 300 eingehend, also selten und damit potenziell trennscharf.
+    """
+    __tablename__ = "crm_emails"
+    __table_args__ = (UniqueConstraint("activity_id", name="uq_crm_email_activity"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    activity_id: Mapped[str] = mapped_column(String(40), index=True)
+    # woran die Mail hängt, im Original: opportunity | account | lead | ax_sap_quote
+    regarding_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    regarding_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    # aufgelöst auf unsere Firma — über account direkt, über opportunity indirekt
+    company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"),
+                                                   nullable=True, index=True)
+    created_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    sent_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    direction: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    statecode: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subject: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_raw_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
