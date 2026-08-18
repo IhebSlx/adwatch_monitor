@@ -104,7 +104,14 @@ def market_status(s, cc: str) -> dict:
         .where(sc, WeeklyCompanyMetric.total_active_ads > 0)) or 0
 
     # ---- Käufer / Qualifizierung / ICP-Boden -------------------------------
-    buyers_sq = select(CrmOrderEvent.company_id).distinct().subquery()
+    # Ein Kunde ist, wer mindestens einmal einen ECHTEN Betrag bezahlt hat.
+    # 14.049 der 91.992 Bewegungen stehen auf 0 EUR (Garantie, Muster, Ersatz),
+    # 486 Firmen haben ausschließlich solche. Ohne diese Bedingung galten sie
+    # als Kunden — und `is_buyer` schließt Kunden aus der Qualifizierung aus,
+    # also verschwand eine Firma mit einer einzigen Garantiegutschrift aus der
+    # Zielliste. Dieselbe Regel wie in insights/profiles.py.
+    buyers_sq = (select(CrmOrderEvent.company_id).distinct()
+                 .where(CrmOrderEvent.amount > 0).subquery())
     is_buyer = Company.id.in_(select(buyers_sq.c.company_id))
     buyers = s.scalar(select(func.count(Company.id)).where(sc, is_buyer)) or 0
     material = s.scalar(

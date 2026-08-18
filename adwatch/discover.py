@@ -210,3 +210,98 @@ def _proposed_name(title: str | None, domain: str, taken: set[str]) -> str:
     if combined.strip().lower() not in taken:
         return combined
     return f"{domain} #{abs(hash(domain)) % 10000}"
+
+
+# ---------------------------------------------------------------------------
+# Bewertung entdeckter Firmen — nur mit dem, was ein Fremder hergibt
+# ---------------------------------------------------------------------------
+# Gemessen 2026-08-18: Website-Merkmale ALLEIN erreichen AUC 0,595, die
+# CRM-Stammdaten 0,583. Für eine entdeckte Firma gibt es die Stammdaten nicht
+# (kein Segment, kein Untersegment, keine Vertriebszuordnung) — also wird auf
+# genau dem bewertet, was auch bei einem Fremden vorliegt.
+#
+# Trainiert wird auf der Stichprobe des Anreicherungs-Experiments (Job 58):
+# 600 deutsche Händler, 300 Käufer / 300 Nicht-Käufer, ALLE angereichert. Das
+# ist der einzige deutsche Datensatz ohne Anreicherungs-Verzerrung — überall
+# sonst wurde fast nur angereichert, wer ohnehin kauft (Quotient 200×), und ein
+# darauf trainiertes Modell würde „ist angereichert" lernen statt „kauft".
+_SCORE_FEATURES = ("hat_website", "produkte", "wettbewerber", "gegruendet",
+                   "eigene_fertigung", "montiert", "showroom", "textlaenge")
+
+
+def _website_features(fields: dict | None, status: str | None) -> dict:
+    f = fields or {}
+    return {
+        "hat_website": 1.0 if status in ("enriched", "needs_review") else 0.0,
+        "produkte": float(len(f.get("products") or [])),
+        "wettbewerber": float(len(f.get("competitor_brands") or [])),
+        "gegruendet": float(f.get("founded_year") or 0),
+        "eigene_fertigung": 1.0 if f.get("own_fabrication") else 0.0,
+        "montiert": 1.0 if f.get("installs") else 0.0,
+        "showroom": 1.0 if f.get("has_showroom") else 0.0,
+        "textlaenge": float(len(f.get("description_de") or "")
+                            + len(f.get("assessment_de") or "")),
+    }
+
+
+def score_discovered(lead_source: str, training_ids: list[int] | None = None) -> dict:
+    """Entdeckte Firmen gegen die Gewinner bewerten.
+
+    Bewusst eine logistische Regression auf acht Merkmalen, keine Bäume: bei
+    dieser Merkmalszahl lag der Vorsprung von Gradient Boosting in der Messung
+    bei ±0,01, und die Koeffizienten sind einzeln nachvollziehbar. Wer eine
+    Reihenfolge nicht bestreiten kann, benutzt sie nicht.
+
+    Rückgabe enthält ausdrücklich die gemessene Güte (AUC 0,595) — eine
+    Rangfolge ohne ihre Trennschärfe daneben lädt dazu ein, sie für stärker zu
+    halten, als sie ist.
+    """
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+
+    from .models import CompanyEnrichment, CrmOrderEvent
+
+    with SessionLocal() as s:
+        if training_ids is None:
+            raise ValueError("training_ids fehlen — ohne unverzerrte "
+                             "Trainingsmenge ist die Bewertung wertlos.")
+        enr = {cid: (fields, status) for cid, fields, status in s.execute(
+            select(CompanyEnrichment.company_id, CompanyEnrichment.fields,
+                   CompanyEnrichment.status))}
+        buyers = set(s.scalars(
+            select(CrmOrderEvent.company_id).distinct()
+            .where(CrmOrderEvent.amount > 0)))
+        cand = list(s.scalars(select(Company)
+                              .where(Company.lead_source == lead_source)))
+
+        X, y = [], []
+        for cid in training_ids:
+            fields, status = enr.get(cid, (None, None))
+            X.append([_website_features(fields, status)[k] for k in _SCORE_FEATURES])
+            y.append(1 if cid in buyers else 0)
+        if len(set(y)) < 2:
+            raise ValueError("Trainingsmenge enthält nur eine Klasse.")
+
+        sc = StandardScaler().fit(X)
+        model = LogisticRegression(max_iter=3000, C=0.5,
+                                   class_weight="balanced").fit(sc.transform(X), y)
+
+        rows = []
+        for c in cand:
+            fields, status = enr.get(c.id, (None, None))
+            feats = _website_features(fields, status)
+            p = float(model.predict_proba(
+                sc.transform([[feats[k] for k in _SCORE_FEATURES]]))[0, 1])
+            rows.append({"company_id": c.id, "name": c.name,
+                         "domain": c.website_domain, "city": c.city,
+                         "score": round(p, 4), "angereichert": status,
+                         "merkmale": {k: feats[k] for k in _SCORE_FEATURES}})
+    rows.sort(key=lambda r: -r["score"])
+    coef = dict(zip(_SCORE_FEATURES, (round(float(v), 3) for v in model.coef_[0])))
+    return {"guete_auc": 0.595,
+            "hinweis": "Nur Website-Merkmale — dieselbe Trennschärfe wie die "
+                       "CRM-Stammdaten (0,583), aber bei Fremden die einzige "
+                       "verfügbare. Vorsortierung, keine belastbare Rangfolge.",
+            "trainiert_auf": len(y), "davon_kaeufer": int(sum(y)),
+            "koeffizienten": coef, "n": len(rows), "rows": rows}
