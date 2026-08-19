@@ -228,6 +228,59 @@ def stats() -> dict:
             "textzeichen": int(chars)}
 
 
+def coverage(start: dt.date, end: dt.date, thin_factor: float = 0.3) -> dict:
+    """Welche Monate aus [start, end) tatsächlich Daten haben.
+
+    WARUM ES DAS GIBT: der Erstabruf 2026-08-18 hat 7 von 41 Monaten (17 %) am
+    Flow-Timeout verloren und ist trotzdem sauber durchgelaufen — die Schleife
+    fängt einen Fehler ab und macht weiter, damit ein schlechter Monat keinen
+    Vier-Stunden-Lauf killt. Das Ergebnis SAH damit vollständig aus, während
+    rund 65.000 Mails fehlten. Ein „fertig" ohne diese Prüfung ist wertlos.
+
+    Zwei Ausfallarten, beide gemessen:
+
+    * FEHLEND — kein einziger Datensatz. `sync()` schreibt einen commit je
+      Monat, ein Monat steht also entweder ganz da oder gar nicht. Deshalb
+      genügt die Anwesenheitsprüfung, ohne einen Fortschritt mitzuschreiben,
+      der nach einem Absturz lügen könnte.
+    * DÜNN — Zeilen vorhanden, aber deutlich unter dem Median. So sieht ein
+      Teilabruf aus (2026-05 stand mit 2.834 statt ~9.500 in der Datenbank,
+      Rest eines Testlaufs) und ist über Anwesenheit allein NICHT zu finden.
+
+    Der laufende Monat wird von der Dünn-Prüfung ausgenommen — der ist zu Recht
+    unvollständig.
+    """
+    from sqlalchemy import func
+
+    def month_starts(a: dt.date, b: dt.date):
+        cur = a.replace(day=1)
+        while cur < b:
+            yield cur
+            cur = (cur + dt.timedelta(days=32)).replace(day=1)
+
+    with SessionLocal() as s:
+        rows = s.execute(
+            select(func.strftime("%Y-%m", CrmEmail.created_on),
+                   func.count(CrmEmail.id))
+            .group_by(func.strftime("%Y-%m", CrmEmail.created_on))).all()
+    counts = {m: c for m, c in rows if m}
+
+    wanted = [f"{m:%Y-%m}" for m in month_starts(start, end)]
+    present = [m for m in wanted if counts.get(m)]
+    missing = [m for m in wanted if not counts.get(m)]
+
+    laufend = f"{dt.date.today():%Y-%m}"
+    vals = sorted(counts[m] for m in present if m != laufend)
+    median = vals[len(vals) // 2] if vals else 0
+    thin = [m for m in present
+            if m != laufend and median and counts[m] < median * thin_factor]
+
+    return {"monate_erwartet": len(wanted), "monate_vorhanden": len(present),
+            "fehlend": missing, "duenn": thin, "median_pro_monat": median,
+            "vollstaendig": not missing and not thin,
+            "je_monat": {m: counts.get(m, 0) for m in wanted}}
+
+
 # ---------------------------------------------------------------------------
 # Merkmale aus der Korrespondenz — der eigentliche Zweck des Abrufs
 # ---------------------------------------------------------------------------

@@ -4568,3 +4568,61 @@ def test_an_empty_dataverse_filter_never_leaves_the_app(temp_db):
     # andere Rollen bleiben unberührt — die Vorgabe ist Dataverse-spezifisch
     mail = {"recipient": "x@y.de"}
     assert flows._guard_payload("report_email", mail) == mail
+
+
+# ---------------------------------------------------------------------------
+# Ein "fertig" ohne Abdeckungsprüfung ist wertlos
+# ---------------------------------------------------------------------------
+
+def test_email_coverage_findet_luecken_und_teilmonate(temp_db):
+    """`coverage()` muss die zwei gemessenen Ausfallarten des E-Mail-Abrufs
+    finden — und zwar BEIDE.
+
+    Der Erstabruf am 2026-08-18 verlor 7 von 41 Monaten am Flow-Timeout und lief
+    trotzdem sauber durch: die Schleife fängt Fehler ab, damit ein schlechter
+    Monat keinen Vier-Stunden-Lauf killt. Das Ergebnis SAH vollständig aus,
+    während rund 65.000 Mails fehlten.
+
+    Der zweite Fall ist der tückischere: 2026-05 stand mit 2.834 statt ~9.500
+    Zeilen in der Datenbank, Rest eines Testlaufs. Über Anwesenheit allein ist
+    das NICHT zu finden — der Monat ist da, nur eben zu einem Drittel.
+    """
+    import datetime as dt
+    from adwatch import crm_emails
+    from adwatch.models import CrmEmail
+
+    def add(s, monat: str, n: int):
+        for i in range(n):
+            s.add(CrmEmail(activity_id=f"{monat}-{i}",
+                           created_on=dt.datetime.fromisoformat(f"{monat}-05T09:00:00")))
+
+    s = temp_db.SessionLocal()
+    add(s, "2024-01", 100)
+    add(s, "2024-02", 100)
+    # 2024-03 fehlt komplett — Flow-Timeout
+    add(s, "2024-04", 100)
+    add(s, "2024-05", 5)        # Teilabruf: da, aber weit unter dem Median
+    s.commit(); s.close()
+
+    cov = crm_emails.coverage(dt.date(2024, 1, 1), dt.date(2024, 6, 1))
+
+    assert cov["monate_erwartet"] == 5
+    assert cov["fehlend"] == ["2024-03"], "der komplett fehlende Monat"
+    assert cov["duenn"] == ["2024-05"], "der Teilmonat, den Anwesenheit übersieht"
+    assert cov["median_pro_monat"] == 100
+    assert cov["vollstaendig"] is False
+
+    # Ein lückenloser Zeitraum darf nicht fälschlich Alarm schlagen.
+    ok = crm_emails.coverage(dt.date(2024, 1, 1), dt.date(2024, 3, 1))
+    assert ok["fehlend"] == [] and ok["duenn"] == []
+    assert ok["vollstaendig"] is True
+
+    # Der laufende Monat ist ZU RECHT unvollständig und darf nie als "dünn"
+    # gemeldet werden — sonst ist die Prüfung jeden Tag rot.
+    s = temp_db.SessionLocal()
+    heute = dt.date.today()
+    add(s, f"{heute:%Y-%m}", 1)
+    s.commit(); s.close()
+    lauf = crm_emails.coverage(heute.replace(day=1),
+                               (heute.replace(day=1) + dt.timedelta(days=32)).replace(day=1))
+    assert lauf["duenn"] == [], "der laufende Monat wird ausgenommen"

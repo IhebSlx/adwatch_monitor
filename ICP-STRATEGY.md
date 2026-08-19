@@ -575,51 +575,107 @@ sind. Gefunden ≠ geeignet. Das entscheidet erst die Kontrollgruppe.
 
 ## 13. Korrespondenz — das stärkste Merkmal, das wir je gemessen haben (und wofür es nichts taugt)
 
-Angehängte E-Mails aus dem CRM, Stichtag 2025-01-01, Merkmale strikt davor,
-Zielgröße Bestellung ab 2025 (Betrag > 0). Abruf lief zum Messzeitpunkt noch,
-also nur 1.363 von 14.825 Firmen hatten überhaupt Korrespondenz im Fenster.
+**Neu gemessen am 2026-08-19 auf vollem Bestand.** Die erste Messung lief,
+während der Abruf noch arbeitete: 1.363 Firmen hatten Korrespondenz im Fenster
+(die Erstmessung nannte 14.825 als Grundmenge; die heutige Händler-Abgrenzung
+ergibt 15.463 — nicht identisch, aber die Grundlinie stimmt auf 0,001 überein,
+die Bevölkerung ist also dieselbe bis auf Bestandsänderungen). Jetzt sind es 3.687 vor dem Stichtag (438.979 Mails insgesamt,
+44 von 44 Monaten lückenlos). Methode unverändert, damit die Zahlen vergleichbar
+bleiben: Stichtag 2025-01-01, Merkmale strikt davor, Zielgröße Bestellung ab
+2025 mit Betrag > 0, gepaarte 5-fach-Kreuzvalidierung auf identischen Folds,
+GBM und Logit, gepaarter Bootstrap auf die Differenz.
 
-| Merkmalssatz | AUC | oberstes Dezil |
+**Bevölkerung: nur Handel + Verarbeiter (15.463).** Der erste Lauf dieser
+Wiederholung ging über alle 46.789 Firmen und gab eine Grundlinie von 0,853 aus
+reinen Stammdaten — unglaubwürdig hoch. Der Grund war keine Leckage, sondern die
+Bevölkerung: 20.722 Architekten bestellen praktisch nie, also trennt `segment`
+allein schon fast alles. Das Modell beantwortete „Architekt oder Händler?", nicht
+„welcher Händler kauft?". Auf Händler eingegrenzt liegt die Grundlinie bei
+**0,655** gegen die 0,656 der Erstmessung — die Bevölkerung stimmt damit.
+
+### A. Bringt Korrespondenz etwas über Stammdaten hinaus?
+
+| Merkmalssatz | AUC | oberstes Dezil | Lift |
+|---|---:|---:|---:|
+| nur Stammdaten | 0,655 | 22,5 % | 1,74× |
+| **+ Korrespondenz** | **0,781** | **55,8 %** | **4,31×** |
+
+**ΔAUC = +0,126** [95 %-KI +0,114 … +0,138], Logit +0,127. Erstmessung: +0,071.
+
+### B. Ist es mehr als „hat überhaupt Kontakt"?
+
+Nur Firmen MIT Korrespondenz — das Vorhandensein-Flag ist konstant und kann
+nichts tragen:
+
+| Merkmalssatz | AUC | oberstes Dezil | Lift |
+|---|---:|---:|---:|
+| nur Stammdaten | 0,660 | 53,2 % | 1,73× |
+| **+ Korrespondenz-Details** | **0,811** | **83,2 %** | **2,71×** |
+
+**ΔAUC = +0,151** [+0,132 … +0,170], Logit +0,144. Erstmessung: +0,088.
+
+Das ist das stärkste Einzelmerkmal, das in diesem Projekt gemessen wurde — und
+mit vollem Bestand fast doppelt so stark wie beim ersten Versuch. Im obersten
+Dezil kaufen **83 von 100** Firmen.
+
+### C. Hilft es bei der Kaltakquise?
+
+Firmen ohne jede Vorbestellung (11.147):
+
+| Merkmalssatz | AUC |
+|---|---:|
+| nur Stammdaten | 0,654 |
+| + Korrespondenz | 0,676 |
+
+**+0,022** [+0,010 … +0,033]. Statistisch von Null unterscheidbar, praktisch
+belanglos — und der kleine Rest hat eine banale Ursache: „keine Vorbestellung"
+heißt nicht „nie gesprochen". Ein Teil dieser Firmen steht in Korrespondenz,
+ohne je bestellt zu haben; von dort kommt der Vorsprung. Für eine Firma, mit der
+wir nie geredet haben, ist das Merkmal **per Konstruktion leer**.
+
+### Die Gegenprobe, die das Ergebnis erst brauchbar macht: ist es nur „da läuft gerade was"?
+
+Die entscheidende Frage für die Verwendung. Wenn der Vorsprung an der
+Aktualität hängt, erkennt das Modell laufende Vorgänge — nützlich für
+Trichter-Triage, unbrauchbar für „welcher schlafende Händler ist weckbar".
+Zerlegt, auf denselben 3.687 Firmen:
+
+| Merkmalssatz | AUC | ΔAUC |
 |---|---:|---:|
-| nur Stammdaten | 0,656 | 1,87× |
-| **+ Korrespondenz** | **0,727** | **3,41×** |
+| Stammdaten | 0,660 | — |
+| + nur Menge/Richtung, **ohne** Aktualität | 0,806 | **+0,146** |
+| + nur Aktualität (Tage seit letzter Mail) | 0,766 | +0,106 |
+| + alles | 0,811 | +0,151 |
 
-**ΔAUC = +0,071** — mehr als das Doppelte dessen, was die Anreicherung brachte
-(+0,03, unter ihrer Schwelle gescheitert).
+**Menge und Richtung allein tragen +0,146 der +0,151.** Der Befund überlebt also
+ohne jede Aktualitätsinformation — es ist nicht bloß „da läuft gerade ein
+Geschäft". Die beiden Blöcke überlappen stark (0,146 + 0,106 ≫ 0,151), was zu
+erwarten war: wer viel schreibt, hat auch kürzlich geschrieben.
 
-### Die zwei Gegenproben, die das Ergebnis erst brauchbar machen
+Ein Anteil laufender Vorgänge steckt trotzdem darin, und zwar messbar:
 
-**A. Ist es nur „hat überhaupt Kontakt"?** Nur Firmen MIT Korrespondenz, das
-Vorhandensein-Flag also konstant und außerstande, etwas zu tragen:
+| letzte Mail vor dem Stichtag | Käufer | Nicht-Käufer |
+|---|---:|---:|
+| ≤ 30 Tage | 35,2 % | 9,4 % |
+| ≤ 90 Tage | 56,5 % | 23,0 % |
+| ≤ 180 Tage | 72,0 % | 38,0 % |
+| ≤ 365 Tage | 88,5 % | 63,9 % |
 
-| | AUC |
-|---|---:|
-| nur Stammdaten | 0,672 |
-| + Korrespondenz-Details | **0,760** |
-
-**+0,088.** Es sind also tatsächlich die EIGENSCHAFTEN der Korrespondenz —
-Menge, Richtung, Aktualität, Dauer —, nicht bloß ihre Existenz.
-
-**B. Hilft es bei der Kaltakquise?** Firmen ohne jede Vorbestellung:
-
-| | AUC |
-|---|---:|
-| nur Stammdaten | 0,620 |
-| + Korrespondenz | 0,624 |
-
-**+0,003. Nichts.** Und das ist keine Enttäuschung, sondern Logik: eine Firma,
-mit der wir nie gesprochen haben, hat keine Korrespondenz. Das Merkmal ist per
-Konstruktion leer, wo es am nötigsten wäre.
+Käufer sind also 3,7-mal häufiger im letzten Monat vor dem Stichtag in
+Korrespondenz. Wer die Zahl als „Aufwachpotenzial" verkauft, überschätzt sie;
+wer sie als Trichter-Priorisierung nutzt, hat das beste Werkzeug im Haus.
 
 ### Was daraus folgt
 
-Damit ist das Muster des ganzen Projekts zum dritten Mal bestätigt, jetzt mit
-dem deutlichsten Beleg: **Verhaltensdaten sind mächtig, existieren aber nur für
-Firmen, mit denen bereits eine Beziehung besteht.**
+Das Muster des ganzen Projekts, jetzt zum vierten Mal und am deutlichsten:
+**Verhaltensdaten sind mächtig, existieren aber nur für Firmen, mit denen bereits
+eine Beziehung besteht.**
 
 * **Trichter- und Bestandsmodelle**: hier gehört die Korrespondenz hinein, und
-  sie ist dort das stärkste Einzelmerkmal, das je gemessen wurde (+0,088).
-* **Kalt-ICP**: unverändert bei ~0,62. Kein Abruf und kein Modell ändert das,
-  weil die Information über eine fremde Firma schlicht nicht existiert.
+  sie ist dort mit Abstand das stärkste Merkmal (+0,151, oberstes Dezil 83 %).
+* **Kalt-ICP**: unverändert bei ~0,65. Kein weiterer Abruf ändert das, weil die
+  Information über eine fremde Firma schlicht nicht existiert.
 
-Der E-Mail-Abruf hat sich also gelohnt — für die richtige Frage.
+Der E-Mail-Abruf hat sich also gelohnt — für die richtige Frage. Und der
+Vollabruf hat sich zusätzlich gelohnt: dieselbe Messung auf 2,7-mal so vielen
+Firmen mit Mail gab fast den doppelten Effekt.
