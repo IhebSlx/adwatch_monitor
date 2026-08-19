@@ -573,7 +573,13 @@ messbar, ob ein aus dem Internet beschaffter Kontakt tatsächlich Kunde wird.
 Offen und ausdrücklich unbewiesen bleibt: ob diese Firmen GUTE Interessenten
 sind. Gefunden ≠ geeignet. Das entscheidet erst die Kontrollgruppe.
 
-## 13. Korrespondenz — das stärkste Merkmal, das wir je gemessen haben (und wofür es nichts taugt)
+## 13. Korrespondenz — stark gegen Stammdaten, überflüssig neben der Auftragshistorie
+
+> **Achtung, dieser Abschnitt korrigiert sich am Ende selbst.** Die Zahlen unten
+> (+0,126 / +0,151) sind gegen eine Grundlinie aus reinen Stammdaten gemessen und
+> stimmen. Sie sind trotzdem irreführend, weil die ausgelieferten Modelle die
+> Auftragshistorie längst nutzen. Der Nachtrag am Ende hat die Messung wiederholt
+> und die Korrespondenz daraufhin NICHT ausgeliefert.
 
 **Neu gemessen am 2026-08-19 auf vollem Bestand.** Die erste Messung lief,
 während der Abruf noch arbeitete: 1.363 Firmen hatten Korrespondenz im Fenster
@@ -679,3 +685,53 @@ eine Beziehung besteht.**
 Der E-Mail-Abruf hat sich also gelohnt — für die richtige Frage. Und der
 Vollabruf hat sich zusätzlich gelohnt: dieselbe Messung auf 2,7-mal so vielen
 Firmen mit Mail gab fast den doppelten Effekt.
+
+### Nachtrag vom selben Tag: die Grundlinie war zu schwach
+
+Beim Einbau in die ausgelieferten Modelle ergab die Messung fast nichts —
+dieselbe `_fit`/`_score`-Mechanik, 5-fach kreuzvalidiert, Stichtag 2025-01-01:
+
+| Modell | ohne Korrespondenz | mit | ΔAUC |
+|---|---:|---:|---:|
+| Trichter-Triage (1.616 Firmen) | 0,730 | 0,752 | +0,022 [−0,008 … +0,050] |
+| Bestand/Fortsetzung (4.335) | 0,827 | 0,832 | +0,005 [+0,000 … +0,011] |
+
+Zwei Erklärungen kamen infrage, und sie verlangen Gegenteiliges: **Redundanz**
+(die Modelle kennen das Verhalten längst) oder **Form** (die Punktetafel binnt zu
+grob). Getrennt gemessen mit demselben GBM wie oben, damit die Form nicht die
+Ursache sein kann:
+
+| Merkmalssatz | AUC | Δ |
+|---|---:|---:|
+| Stammdaten | 0,655 | — |
+| + Korrespondenz | 0,781 | +0,126 ← die Zahl oben |
+| Stammdaten + **Auftragsverhalten** | 0,824 | — |
+| + Korrespondenz | 0,836 | **+0,012** |
+
+**Es ist Redundanz.** Das Auftragsverhalten allein (0,824) schlägt Stammdaten +
+Korrespondenz (0,781). Die Korrespondenz misst dasselbe — dass eine
+Geschäftsbeziehung lebt — nur schwächer. Wo Auftragshistorie vorliegt, bleiben
++0,012.
+
+**Konsequenz: nicht ausgeliefert.** Der Einbau wurde zurückgenommen. Konsistenz
+verlangt es ohnehin: das €2,40-Anreicherungsexperiment wurde bei +0,032
+[−0,005 … +0,068] verworfen; +0,022 [−0,008 … +0,050] ist schwächer und darf
+nicht anders behandelt werden, nur weil das Ergebnis diesmal gefiele.
+
+Was von §13 stehen bleibt — und was nicht:
+
+* **Bleibt:** gegen reine Stammdaten ist Korrespondenz stark, und die Gegenprobe
+  gegen „da läuft gerade ein Geschäft" hält (Menge und Richtung allein +0,146).
+* **Fällt:** „das stärkste Merkmal, das wir je gemessen haben". Es war gegen eine
+  Grundlinie gemessen, die genau die Verhaltensdaten wegließ, die die App längst
+  benutzt. Eine Grundlinie ohne Auftragshistorie ist für diese Frage ein
+  Strohmann.
+* **Wofür der Abruf sich trotzdem gelohnt hat:** zum **Lesen**. Strukturierte
+  Felder sagen, DASS ein Objekt verloren ging; die Korrespondenz sagt WARUM. Das
+  leistet keine Kennzahl, und dafür sind die 438.979 Mails da.
+
+**Methodische Lehre, teurer als sie aussieht:** ein ΔAUC ist keine Eigenschaft
+eines Merkmals, sondern einer Paarung aus Merkmal und Grundlinie. Wer die
+Grundlinie schwach wählt, bekommt jede gewünschte Schlagzeile — hier fast das
+Zehnfache (+0,126 gegen +0,012). Künftige Messungen laufen gegen das, was die
+App tatsächlich schon kann, nicht gegen Stammdaten.
