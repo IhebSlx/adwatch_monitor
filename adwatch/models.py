@@ -938,3 +938,56 @@ class ProjectMailAnalysis(Base):
     model: Mapped[str | None] = mapped_column(String(80), nullable=True)
     analysed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class CrmLead(Base):
+    """Ein Lead aus Dynamics — die Stufe VOR der Firma.
+
+    Warum das eine eigene Tabelle verdient und nicht in `companies` gehört: ein
+    Lead ist eine Behauptung, keine geprüfte Firma. Er kann eine Dublette einer
+    bestehenden Firma sein, eine Firma, die es nie gab, oder derselbe Betrieb
+    zum vierten Mal über ein Messeformular. Ihn in den Firmenbestand zu kippen,
+    würde genau die Identitätsdisziplin aufweichen, die dieses Projekt teuer
+    aufgebaut hat.
+
+    Gemessen 2026-08-19, und das ist der Grund für den Abruf: 94.219 der 438.979
+    angehängten E-Mails — 21,5 % — hängen an Leads, verteilt auf 42.157
+    verschiedene. Ein Fünftel der gesamten Korrespondenz zeigte damit auf
+    Datensätze, die es in unserem Spiegel nicht gab.
+
+    KEINE PERSONENDATEN. `firstname`, `lastname`, `emailaddress*` und
+    `telephone*` werden bewusst NICHT geholt, obwohl sie in Dataverse stehen.
+    Gespeichert wird ausschließlich, was die FIRMA beschreibt.
+    """
+    __tablename__ = "crm_leads"
+    __table_args__ = (UniqueConstraint("lead_id", name="uq_crm_lead"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lead_id: Mapped[str] = mapped_column(String(40), index=True)
+    company_name: Mapped[str | None] = mapped_column(String(300), nullable=True, index=True)
+    subject: Mapped[str | None] = mapped_column(Text, nullable=True)
+    website: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # statecode 0=offen 1=qualifiziert 2=disqualifiziert; Klartext dazu, weil
+    # eine nackte Zahl in einem halben Jahr niemand mehr einordnet
+    statecode: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    state_label: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    statuscode: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status_label: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    lead_source: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    industry: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    quality: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    revenue: Mapped[float | None] = mapped_column(Float, nullable=True)
+    employees: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Wenn der Lead im CRM bereits an eine Firma gehängt wurde, ist das die
+    # verlässlichste Auflösung, die es gibt — sie stammt von einem Menschen.
+    parent_account_crm_id: Mapped[str | None] = mapped_column(String(40),
+                                                              nullable=True, index=True)
+    owner_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"),
+                                                   nullable=True, index=True)
+    created_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    modified_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)

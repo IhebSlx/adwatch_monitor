@@ -4626,3 +4626,55 @@ def test_email_coverage_findet_luecken_und_teilmonate(temp_db):
     lauf = crm_emails.coverage(heute.replace(day=1),
                                (heute.replace(day=1) + dt.timedelta(days=32)).replace(day=1))
     assert lauf["duenn"] == [], "der laufende Monat wird ausgenommen"
+
+
+
+# ---------------------------------------------------------------------------
+# Leads: die Antwortform des Flows, und was NICHT aufgeloest werden darf
+# ---------------------------------------------------------------------------
+
+def test_lead_antwortform_und_aufloesung(temp_db):
+    """Zwei Stellen, an denen der Lead-Abruf still falsch laufen wuerde.
+
+    1. FORM. Der Flow liefert fuer `leads` ein nacktes Array, fuer `accounts`
+       dagegen {value: [...]}. Wer sich auf eine Form verlaesst, bekommt beim
+       anderen Entity null Zeilen -- und zwar ohne Fehler, was der schlimmste
+       Fall ist: der Abruf meldet Erfolg und laedt nichts.
+
+    2. AUFLOESUNG. Ein Lead wird NUR ueber die im CRM gesetzte Mutterfirma auf
+       eine Firma gezogen, nie ueber Namensaehnlichkeit. "Fenster Meier" und
+       "Meier Fenster- und Tuerenbau GmbH" koennen dieselbe Firma sein oder
+       nicht -- das entscheidet kein Stringvergleich, und eine falsche
+       Verknuepfung vergiftet jede spaetere Auswertung.
+    """
+    from adwatch import crm_leads
+    from adwatch.models import Company
+
+    assert crm_leads._rows([{"leadid": "a"}]) == [{"leadid": "a"}]
+    assert crm_leads._rows({"value": [{"leadid": "b"}]}) == [{"leadid": "b"}]
+    assert crm_leads._rows({}) == []
+    assert crm_leads._rows(None) == []
+
+    s = temp_db.SessionLocal()
+    c = Company(name="Meier Fenster- und Tuerenbau GmbH", crm_id="GUID-1",
+                resolution_status="confirmed", country="DE")
+    s.add(c); s.commit()
+    resolve = crm_leads._company_resolver(s)
+
+    assert resolve("GUID-1") == c.id, "gesetzte Mutterfirma wird aufgeloest"
+    assert resolve("GUID-UNBEKANNT") is None
+    assert resolve(None) is None, "ohne Mutterfirma bleibt die Frage offen"
+    s.close()
+
+
+def test_lead_holt_keine_personendaten():
+    """Die Feldliste ist eine Zusage, keine Bequemlichkeit.
+
+    firstname, lastname, emailaddress1 und telephone1 stehen in Dataverse und
+    waeren einen Tastendruck entfernt. Sie duerfen nicht in SELECT stehen --
+    gespeichert wird ausschliesslich, was die FIRMA beschreibt."""
+    from adwatch import crm_leads
+    for feld in ("firstname", "lastname", "emailaddress", "telephone",
+                 "mobilephone", "fullname"):
+        assert feld not in crm_leads.SELECT, f"{feld} ist eine Personendatei"
+    assert "companyname" in crm_leads.SELECT
