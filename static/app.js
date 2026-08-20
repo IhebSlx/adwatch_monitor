@@ -281,12 +281,20 @@
     if (!ths.length || table.dataset.resizable) return;
     table.dataset.resizable = "1";
 
+    function totalPx() {
+      return ths.reduce((s, th) => s + (parseFloat(th.style.width) || th.offsetWidth || 0), 0);
+    }
     function freeze() {
       if (table.classList.contains("col-resized")) return;
       ths.forEach(th => { if (th.offsetParent !== null) th.style.width = th.offsetWidth + "px"; });
       table.classList.add("col-resized");
       table.style.tableLayout = "fixed";
-      table.style.width = "max-content";   // grows/shrinks with the columns, scrolls in .table-wrap
+      // Feste PIXELbreite, nicht max-content: `table-layout:fixed` greift nur
+      // bei bestimmter Breite. Mit max-content fiel der Browser still ins
+      // Auto-Layout zurück, und eine Spalte ließ sich nie UNTER ihre
+      // Inhaltsbreite ziehen — auf Tabellen mit langen Texten (Entscheidungen)
+      // wirkte das Ziehen deshalb schlicht nicht.
+      table.style.width = totalPx() + "px";
     }
     function reset() {
       ths.forEach(th => { th.style.width = ""; });
@@ -308,7 +316,10 @@
         freeze();
         const startX = e.clientX;
         const startW = th.offsetWidth;
-        const move = (ev) => { th.style.width = Math.max(44, startW + (ev.clientX - startX)) + "px"; };
+        const move = (ev) => {
+          th.style.width = Math.max(44, startW + (ev.clientX - startX)) + "px";
+          table.style.width = totalPx() + "px";   // Gesamtbreite folgt der Spalte
+        };
         const up = () => {
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", up);
@@ -482,12 +493,19 @@
     const listable = values.length <= 60;
 
     const menu = _menuEl();
+    // Spalten, deren Zellen LISTEN oder Erklärtexte tragen (Firmen, Architekten,
+    // Verlustgründe, Warum), haben keine sinnvolle Reihenfolge — eine
+    // alphabetische Sortierung über "Müller GmbH, Schmidt AG" sortiert nach dem
+    // zufällig erstgenannten Namen. Der Filter bleibt; die Sortier-Knöpfe
+    // verschwinden, statt so zu tun, als bedeuteten sie etwas.
+    const sortable = !th.hasAttribute("data-nosort");
     menu.innerHTML = `
       <div class="thm-head">${esc(th.textContent.replace("▾", "").trim())}</div>
+      ${sortable ? `
       <div class="thm-sec thm-sort">
         <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "asc" ? " btn-primary" : ""}" data-dir="asc">↑ Aufsteigend</button>
         <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "desc" ? " btn-primary" : ""}" data-dir="desc">↓ Absteigend</button>
-      </div>
+      </div>` : ""}
       ${listable ? `
       <div class="thm-sec"><div class="thm-sec-title">Werte (${values.length})</div>
         <input type="text" class="thm-input" id="thmValSearch" placeholder="suchen…">
@@ -600,17 +618,24 @@
     const menu = _menuEl();
     const filterable = Object.values(SERVER_COLUMNS[wrapId] || {})
       .map(c => c.label).filter(Boolean);
+    // Freitext-/Listenspalten (data-nosort) haben auch hier keine sinnvolle
+    // Reihenfolge — statt Sortier-Knöpfen, die nichts bedeuten, sagt das Menü,
+    // was stattdessen geht.
+    const sortable = !th.hasAttribute("data-nosort");
     menu.innerHTML = `
       <div class="thm-head">${esc(th.textContent.replace("▾", "").trim())}</div>
+      ${sortable ? `
       <div class="thm-sec thm-sort">
         <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "asc" ? " btn-primary" : ""}" data-dir="asc">↑ Aufsteigend</button>
         <button class="btn btn-sm thm-sort-btn${st.sort && st.sort.col === colIdx && st.sort.dir === "desc" ? " btn-primary" : ""}" data-dir="desc">↓ Absteigend</button>
-      </div>
+      </div>` : ""}
       <div class="thm-sec">
-        <div class="sub">Sortiert die <b>${loaded}</b> geladenen Zeilen von
-          ${total.toLocaleString("de-DE")}. Für diese Spalte gibt es keinen
-          Filter über den ganzen Bestand — filtern lässt sich nach:
-          ${esc(filterable.join(" · "))}.</div>
+        <div class="sub">${sortable
+          ? `Sortiert die <b>${loaded}</b> geladenen Zeilen von
+             ${total.toLocaleString("de-DE")}.`
+          : `Freitext-Spalte — eine Sortierung hätte hier keine Bedeutung.`}
+          Für diese Spalte gibt es keinen Filter über den ganzen Bestand —
+          filtern lässt sich nach: ${esc(filterable.join(" · "))}.</div>
       </div>`;
     const r = th.getBoundingClientRect();
     menu.classList.remove("hidden");
@@ -630,6 +655,9 @@
     if (!wrap || !wrap.id || table.id === "customersTable" || table.dataset.interactive) return;
     table.dataset.interactive = "1";
     $$("thead th", table).forEach((th, i) => {
+      // hasAttribute, nicht dataset-Wahrheitswert: ein wertloses `data-nomenu`
+      // liefert dataset.nomenu === "" — und leere Strings sind falsy.
+      if (th.hasAttribute("data-nomenu")) return;   // Knopf-/Aktionsspalten: kein Menü, kein Caret
       th.classList.add("th-has-menu");
       th.insertAdjacentHTML("beforeend", ` <span class="th-caret">▾</span>`);
       th.addEventListener("click", (e) => {
@@ -967,7 +995,7 @@
       </tbody></table>
       <h3 style="margin-top:18px">Offene Projekte, gereiht (${t.open_total.toLocaleString("de-DE")} gesamt)</h3>
       <table class="data-table"><thead><tr><th>Objekt</th><th>Ort</th>
-        <th class="num">Wert</th><th>Warum</th></tr></thead><tbody>
+        <th class="num">Wert</th><th data-nosort>Warum</th></tr></thead><tbody>
         ${t.rows.map(r => `<tr>
           <td><b>${esc((r.name || "—").slice(0, 54))}</b></td>
           <td>${esc(r.city || "")}</td>
@@ -985,7 +1013,7 @@
         Merkmal „hat schon gewonnen" ist die Güte unverändert.</p>
       ${listButton("funnel", "Trichter")}
       <table class="data-table"><thead><tr><th>Firma</th><th>Ort</th><th>Branche</th>
-        <th class="num">VCs</th><th class="num">Wert</th><th>Warum</th></tr></thead><tbody>
+        <th class="num">VCs</th><th class="num">Wert</th><th data-nosort>Warum</th></tr></thead><tbody>
         ${d.rows.map(r => `<tr data-cid="${r.company_id}" style="cursor:pointer">
           <td><b>${esc(r.name || "—")}</b></td><td>${esc(r.city || "")}</td>
           <td class="sub">${esc(r.sub_segment || "")}</td>
@@ -2719,7 +2747,7 @@
         <thead><tr><th>Objekt</th>
           <th title="Wann die erste Verkaufschance an diesem Objekt im CRM angelegt wurde — das älteste created_on aller zugehörigen VCs. Nicht das Bau-, Angebots- oder Abschlussdatum.">Angelegt</th>
           <th>Status</th><th class="num">VCs</th>
-          <th class="num">Wert</th><th>Firmen</th><th>Architekten</th><th>Verlustgründe</th></tr></thead>
+          <th class="num">Wert</th><th data-nosort>Firmen</th><th data-nosort>Architekten</th><th data-nosort>Verlustgründe</th></tr></thead>
         <tbody>${rows.map(p => `
           <tr data-projekt="${esc(p.project_id)}" style="cursor:pointer">
             <td style="max-width:280px">${esc(p.name)}</td>
@@ -2985,7 +3013,7 @@
     wrap.innerHTML = `
       <table class="data-table">
         <thead><tr><th>Firma</th><th>Ort</th><th>Kandidat</th>
-          <th>Hinweis</th><th style="width:170px">Entscheidung</th></tr></thead>
+          <th data-nosort>Hinweis</th><th data-nomenu style="width:170px">Entscheidung</th></tr></thead>
         <tbody>${rows.map(r => `
           <tr data-company="${r.company_id}">
             <td>${esc(r.name)}${r.import_type ? `<div class="sub">${esc(r.import_type)}</div>` : ""}</td>
