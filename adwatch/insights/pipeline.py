@@ -113,7 +113,10 @@ def market_status(s, cc: str) -> dict:
         .where(sc, WeeklyCompanyMetric.total_active_ads > 0)) or 0
 
     # ---- Käufer / Qualifizierung / ICP-Boden -------------------------------
-    # Ein Kunde ist, wer mindestens einmal einen ECHTEN Betrag bezahlt hat.
+    # KORREKTUR 2026-08-20: Belege sind ANGEBOTE, keine Rechnungen (bestätigt
+    # von Iheb; Gegenprobe: nur 23 % der Beleg-Firmen haben eine gewonnene VC,
+    # Belegsumme 752 Mio vs. 141 Mio gewonnener VC-Wert). „Kunde" heißt hier
+    # also: hat mindestens einmal ein Angebot mit ECHTEM Betrag erhalten.
     # 14.049 der 91.992 Bewegungen stehen auf 0 EUR (Garantie, Muster, Ersatz),
     # 486 Firmen haben ausschließlich solche. Ohne diese Bedingung galten sie
     # als Kunden — und `is_buyer` schließt Kunden aus der Qualifizierung aus,

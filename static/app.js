@@ -979,8 +979,8 @@
   function renderFunnel(d) {
     $("#profileQuality").innerHTML = qualityBadge("AUC", d.quality.auc, d.quality.verdict);
     $("#profileBody").innerHTML = `
-      <p class="hint"><b>Wer im Trichter wird Kunde?</b> Firmen mit Verkaufschance, aber noch ohne
-        Bestellung. Oberstes Dezil ${d.quality.top_decile_lift}× der Basisrate
+      <p class="hint"><b>Wer im Trichter wird aktiv?</b> Firmen mit Verkaufschance, aber noch ohne
+        Angebot. Oberstes Dezil ${d.quality.top_decile_lift}× der Basisrate
         (${(d.base_rate * 100).toFixed(1)} %). Das Signal ist die Kontaktintensität — ohne das
         Merkmal „hat schon gewonnen" ist die Güte unverändert.</p>
       ${listButton("funnel", "Trichter")}
@@ -1000,14 +1000,14 @@
   function renderBestand(d) {
     $("#profileQuality").innerHTML = qualityBadge("AUC", d.quality.auc, d.quality.verdict);
     $("#profileBody").innerHTML = `
-      <p class="hint"><b>Wer kauft weiter — und wer bricht ab?</b> Aufsteigend sortiert: die
+      <p class="hint"><b>Wer fragt weiter an — und wer bricht ab?</b> Aufsteigend sortiert: die
         <b>riskantesten zuerst</b>. ${esc(d.hinweis)}
         ${d.ausgeblendet ? `<br><span class="muted">${d.ausgeblendet.toLocaleString("de-DE")}
         Kleinstkunden ausgeblendet — unter der Wertgrenze lohnt die Rückholung den Anruf nicht.</span>` : ""}</p>
       ${listButton("bestand", "Rückholung")}
       <table class="data-table"><thead><tr><th>Firma</th><th>Ort</th>
-        <th class="num">Bestellungen</th><th class="num">Bestandsumsatz</th>
-        <th class="num">letzte Bestellung</th></tr></thead><tbody>
+        <th class="num">Angebote</th><th class="num">Angebotsvolumen</th>
+        <th class="num">letztes Angebot</th></tr></thead><tbody>
         ${d.at_risk.map(r => `<tr data-cid="${r.company_id}" style="cursor:pointer">
           <td><b>${esc(r.name || "—")}</b></td><td>${esc(r.city || "")}</td>
           <td class="num">${r.orders}</td><td class="num">${eur(r.revenue)}</td>
@@ -1024,11 +1024,11 @@
         <b>Vorsortierung, keine Rangliste.</b> ${esc(d.hinweis)} Ein Fensterbauer ist ein besserer
         Erstkontakt als ein Baustoffhändler — aber Rang 3 ist nicht besser als Rang 30.
       </div>
-      <p class="hint">Grundgesamtheit ${d.n.toLocaleString("de-DE")} Händler ohne bisherige
-        Bestellung (${d.country}), Basisrate ${(d.base_rate * 100).toFixed(1)} %. Gemessene
-        Kaufquote je Branche:</p>
+      <p class="hint">Grundgesamtheit ${d.n.toLocaleString("de-DE")} Händler ohne bisheriges
+        Angebot (${d.country}), Basisrate ${(d.base_rate * 100).toFixed(1)} %. Gemessene
+        Anfragequote je Branche:</p>
       <table class="data-table"><thead><tr><th>Branche</th><th class="num">Lift</th>
-        <th class="num">Kaufquote</th><th class="num">Firmen</th></tr></thead><tbody>
+        <th class="num">Anfragequote</th><th class="num">Firmen</th></tr></thead><tbody>
         ${d.branchen.map(b => `<tr${b.lift < 1 ? ' class="feat-neg"' : ""}>
           <td>${esc(b.branche)}</td><td class="num"><b>${b.lift.toFixed(2)}×</b></td>
           <td class="num">${(b.rate * 100).toFixed(1)}%</td>
@@ -2361,7 +2361,7 @@
   };
   const HEALTH_LABEL = {
     aktiv: "aktiv", beobachten: "beobachten", "gefährdet": "gefährdet",
-    verloren: "verloren", einmalig: "nur Kleinteile", nie: "nie gekauft",
+    verloren: "verloren", einmalig: "nur Kleinteile", nie: "nie angefragt",
   };
   let chancenLoaded = false;
 
@@ -2389,7 +2389,7 @@
     $("#chancenSummary").innerHTML = `
       <div class="kpi"><div class="kpi-label">Überfällig / verloren</div>
         <div class="kpi-value">${risk.toLocaleString("de-DE")}</div></div>
-      <div class="kpi"><div class="kpi-label">Umsatz historisch</div>
+      <div class="kpi"><div class="kpi-label">Angebotsvolumen historisch</div>
         <div class="kpi-value" title="${eur(riskEur)}">${eurShort(riskEur)}</div></div>
       <div class="kpi"><div class="kpi-label">Davon mit Werbung</div>
         <div class="kpi-value">${(data.advertising || 0).toLocaleString("de-DE")}</div></div>
@@ -2403,7 +2403,7 @@
       <table class="data-table">
         <thead><tr>
           <th>Firma</th><th>Segment / Untersegment</th><th>Land</th>
-          <th class="num">Umsatz</th><th class="num">Bestellungen</th>
+          <th class="num">Angebotsvolumen</th><th class="num">Angebote</th>
           <th class="num">Rhythmus</th><th class="num">still seit</th>
           <th class="num">überfällig</th><th>Status</th><th>Werbung</th>
         </tr></thead>
@@ -2453,7 +2453,7 @@
       const years = Object.entries(b.by_year || {})
         .map(([y, v]) => `${y}: ${eurShort(v)}`).join(" · ");
       html += `<div style="font-size:12.5px;margin-top:6px">
-        <b>Belege:</b> ${b.events} Bestellungen · ${eurShort(b.total)} · ${esc(b.first)} → ${esc(b.last)}
+        <b>Belege:</b> ${b.events} Angebote · ${eurShort(b.total)} · ${esc(b.first)} → ${esc(b.last)}
         <div class="sub">${esc(years)}</div></div>`;
     }
     // What this company asks Solarlux for. The euros are QUOTED across won AND
@@ -2603,7 +2603,7 @@
     const rows = [
       ["CRM-ID", c.crm_id], ["SAP-Nr.", c.sap_number], ["Quelle", c.lead_source || (c.crm_id ? "CRM" : "manuell")],
       ["Import-Typ", c.import_type], ["Kundenstatus", c.customer_state], ["Gesundheit", c.health],
-      ["Belege (Anzahl)", c.beleg_count], ["Belege (Umsatz)", money(c.beleg_sum)],
+      ["Belege (Anzahl)", c.beleg_count], ["Belege (Angebotsvolumen)", money(c.beleg_sum)],
       ["Erster / letzter Beleg", [dt2(c.beleg_first), dt2(c.beleg_last)].filter(Boolean).join(" → ") || null],
       ["Ø Grundrabatt", c.avg_discount != null ? c.avg_discount + " %" : null],
       ["Angebote (Anzahl)", c.quote_count], ["Angebote (Summe)", money(c.quote_sum)],

@@ -43,7 +43,8 @@ written to.**
 
 ### B. Excel / CSV uploads — the historical exports
 
-The Beleg (invoice document) export and the original monitored-company list came
+The Beleg export — **Angebote (quote documents), NOT invoices; corrected
+2026-08-20 after Iheb's domain check** — and the original monitored-company list came
 in as files. Belege were collapsed into **order events** (one company + one day =
 one event), because a big dealer issues several documents per order and the raw
 cadence reads as 0–3 days. `revenue_y0..y4` on `companies` also came from an

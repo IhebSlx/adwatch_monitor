@@ -9,7 +9,8 @@ diese Modelle wirklich bewegt, und dieses Modul ist der Weg, es zu erzeugen.
 
 DIE KONTROLLGRUPPE IST DER EIGENTLICHE PUNKT.
 Eine Liste abzuarbeiten und hinterher die Abschlüsse zu zählen, misst nichts:
-11,3 % der deutschen Händler kaufen auch ohne jeden Anruf. Wer nur die Ziele
+11,3 % der deutschen Händler fragen auch ohne jeden Anruf an (Belege sind
+Angebote, keine Rechnungen — Korrektur 2026-08-20). Wer nur die Ziele
 zählt, schreibt sich die Basisrate als Erfolg gut.
 
 Interessant ist nicht die Kaufwahrscheinlichkeit, sondern die REAKTION AUF

@@ -88,6 +88,12 @@ def _load(cutoff: dt.date, country: str | None = None):
         # Garantiegutschrift ist kein Kauf; wer sie als Erfolg zählt, trainiert
         # das Modell auf Reklamationen. Gemessen kostet die Bereinigung nichts
         # und bringt +0,012 AUC (0,617 -> 0,629).
+        #
+        # KORREKTUR 2026-08-20: Belege sind ANGEBOTE, keine Rechnungen. `paid`
+        # heißt darum „hat ein substanzielles Angebot erhalten", nicht „hat
+        # bezahlt". Alle darauf gebauten Etiketten messen Angebotsnachfrage,
+        # nicht Umsatz — echter Umsatz braucht einen Auftrags-/Rechnungsexport
+        # aus dem ERP, der noch aussteht.
         id_set = set(ids)
         pre: dict[int, dict] = defaultdict(lambda: {"n": 0, "sum": 0.0, "last": None})
         post: dict[int, dict] = defaultdict(
@@ -174,7 +180,7 @@ def _score(feats: set[str], w: dict[str, dict]) -> float:
 
 
 def cold_icp(country: str | None = "DE", cutoff: dt.date | None = None) -> dict:
-    """Kalt-Akquise: welche Branche/Region kauft überhaupt?
+    """Kalt-Akquise: welche Branche/Region fragt überhaupt an?
 
     AUSDRÜCKLICH eine Vorsortierung. Gemessene AUC 0,598 (Geo-Holdout 0,588):
     ein Fensterbauer ist ein besserer Erstkontakt als ein Baustoffhändler, aber
@@ -202,7 +208,8 @@ def cold_icp(country: str | None = "DE", cutoff: dt.date | None = None) -> dict:
 
 def funnel_triage(limit: int = 100, country: str | None = None,
                   cutoff: dt.date | None = None) -> dict:
-    """Wer im Trichter wird Kunde? AUC 0,753, oberstes Dezil 3,83x Basisrate.
+    """Wer im Trichter wird aktiv (erstes substanzielles Angebot)? AUC 0,753,
+    oberstes Dezil 3,83x Basisrate.
 
     Integritätsprüfung, die dieses Modell bestanden hat: ohne das Merkmal
     'hat schon eine VC gewonnen' ist die AUC unverändert 0,753. Das Signal ist
@@ -245,7 +252,7 @@ def funnel_triage(limit: int = 100, country: str | None = None,
 def continuation(limit: int = 100, country: str | None = None,
                  cutoff: dt.date | None = None,
                  min_revenue: float = MATERIAL_EUR) -> dict:
-    """Bestandskunden: wer kauft weiter, wer bricht ab? AUC 0,797.
+    """Bestandskunden: wer fragt weiter an, wer bricht ab? AUC 0,797.
 
     Die Dezile laufen von 18 % bis 98 % Fortsetzungswahrscheinlichkeit. Der
     handlungsrelevante Teil ist das UNTERSTE Fünftel — Kunden, deren eigener
@@ -287,5 +294,5 @@ def continuation(limit: int = 100, country: str | None = None,
             "min_revenue": min_revenue,
             "ausgeblendet": len(scored) - len(worth),
             "hinweis": f"Aufsteigend: riskanteste zuerst. Nur Kunden ab "
-                       f"{min_revenue:,.0f} EUR Bestandsumsatz — darunter lohnt "
+                       f"{min_revenue:,.0f} EUR Angebotsvolumen — darunter lohnt "
                        f"die Rückholung den Anruf nicht."}

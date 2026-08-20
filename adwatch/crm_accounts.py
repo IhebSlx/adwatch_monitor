@@ -162,6 +162,8 @@ def upsert_accounts(records: list[dict], *, allow_insert: bool = True) -> dict:
             if not company.crm_id:
                 company.crm_id = gid
             company.crm_modified_on = _dt(rec.get("modifiedon")) or company.crm_modified_on
+            # createdon ändert sich in CRM nie — einmal gesetzt, stehen lassen
+            company.crm_created_on = _dt(rec.get("createdon")) or company.crm_created_on
 
             for field, col in CRM_OWNED_SCALARS.items():
                 if field in rec:
@@ -315,6 +317,6 @@ SCOPES: dict[str, tuple[str, str]] = {
 def select_fields() -> list[str]:
     """The $select list for a sync — exactly the fields we map, nothing more.
     Keeps payloads small and makes it obvious what the app actually consumes."""
-    return (["accountid", "modifiedon", "statecode", "address1_country"]
+    return (["accountid", "modifiedon", "createdon", "statecode", "address1_country"]
             + list(CRM_OWNED_SCALARS) + list(CRM_OWNED_PICKLISTS)
             + list(CRM_OWNED_REVENUE))

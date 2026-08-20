@@ -47,6 +47,13 @@ class Company(Base):
     # Matching order everywhere: crm_id -> sap_number -> exact name.
     crm_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     crm_modified_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)  # CRM `modifiedon` = delta watermark
+    # CRM `createdon`. Nicht kosmetisch: ohne dieses Datum ist "keine Bestellung"
+    # zweideutig — tot oder erst seit drei Wochen im System? Genau daran hängt die
+    # in AUDIT.md §2.4 offene Rechtszensierung (offener Anteil 2023: 2,3 %,
+    # 2026: 67,4 %). Als MERKMAL dagegen mit Vorsicht: ein alter Datensatz hatte
+    # mehr Gelegenheit zu kaufen, und eine frisch entdeckte Firma hat gar kein
+    # Anlagedatum — dieselbe Falle wie "Untersegment = leer".
+    crm_created_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     sap_number: Mapped[str | None] = mapped_column(String(40), nullable=True)   # SAP Nummer
     kv: Mapped[str | None] = mapped_column(String(120), nullable=True)          # KV (account owner)
     segment: Mapped[str | None] = mapped_column(String(120), nullable=True)     # Kundensegment

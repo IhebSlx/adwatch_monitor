@@ -735,3 +735,42 @@ eines Merkmals, sondern einer Paarung aus Merkmal und Grundlinie. Wer die
 Grundlinie schwach wählt, bekommt jede gewünschte Schlagzeile — hier fast das
 Zehnfache (+0,126 gegen +0,012). Künftige Messungen laufen gegen das, was die
 App tatsächlich schon kann, nicht gegen Stammdaten.
+
+## 14. Korrektur der Etikett-Semantik: Belege sind ANGEBOTE, keine Rechnungen (2026-08-20)
+
+Von Iheb aus Domänenwissen korrigiert, danach an den Daten gegengeprüft — und
+die Daten hätten es uns längst sagen können: nur **23 %** der Firmen mit
+Belegen haben überhaupt eine gewonnene Verkaufschance, und die Belegsumme
+(**752 Mio €**) übersteigt den Wert aller gewonnenen Verkaufschancen
+(**141 Mio €**) um das Fünffache. Rechnungen können so nicht aussehen;
+Angebote schon.
+
+### Was das für jede Zahl in diesem Dokument heißt
+
+Das Etikett „Käufer / kauft / Bestellung“ aus `crm_order_events` bedeutet
+überall: **„hat ein Angebot mit echtem Betrag erhalten“** — Angebotsnachfrage,
+nicht Umsatz.
+
+* **Unverändert gültig:** alle *relativen* Befunde (Verhalten schlägt
+  Beschreibung; vergiftete Merkmale; Pooling schlägt Splitting; die
+  0-€-Bereinigung), denn sie vergleichen Merkmalssätze gegen dasselbe Etikett.
+  Ebenso das **IPP** — es ist auf CRM-`gewonnen` etikettiert, nicht auf Belege.
+* **Umzudeuten:** Trichter-Triage und Fortsetzungs-Profil sagen künftige
+  **Angebotsnachfrage** voraus. Das ist kommerziell real (wer anfragt, steht in
+  aktiver Beziehung), aber die Konversion Angebot→Auftrag ist in unseren Daten
+  **ungemessen**.
+* **Neu zu rechnen, sobald echte Umsätze vorliegen:** die Wirtschaftlichkeit
+  in §10 rechnet mit Abschlusswerten — sie braucht das echte Etikett.
+
+### Die Konsequenz nach vorn
+
+Die wertvollste offene Datenanforderung ist damit ein **Auftragseingangs- oder
+Rechnungsexport aus dem ERP**. Er würde jedes Profil von „sagt Angebote voraus“
+auf „sagt Geld voraus“ heben. Offen bleibt außerdem, was
+`slx_revenue_current_year*` auf dem Konto wirklich enthält (Umsatz oder
+ebenfalls Angebotswerte) — Frage an die CRM-Verantwortlichen.
+
+Die Oberflächentexte der App wurden am 2026-08-20 entsprechend korrigiert
+(Angebotsrhythmus statt Bestellrhythmus, Angebotsvolumen statt Umsatz, wo die
+Zahl aus Belegen stammt). Die `Umsatz`-Spalten aus `slx_revenue_*` behalten
+ihren Namen, bis ihre Bedeutung geklärt ist.

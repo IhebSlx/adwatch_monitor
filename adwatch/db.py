@@ -200,6 +200,10 @@ def _migrate(engine) -> None:
                 ("fit_breakdown", "JSON"), ("scores_updated_at", "DATETIME"),
                 ("is_intercompany", "BOOLEAN DEFAULT 0"),
                 ("crm_id", "VARCHAR(40)"), ("crm_modified_on", "DATETIME"),
+                # Anlagedatum aus CRM. Trennt "hat nie gekauft" von "ist erst
+                # seit drei Wochen im System" — die in AUDIT.md §2.4 offene
+                # Rechtszensierung.
+                ("crm_created_on", "DATETIME"),
             ]:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))
