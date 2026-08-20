@@ -3770,6 +3770,12 @@
     CUST.total = data.total;
     renderCustomers(data, append);
     updateFilterBadge();
+    // Liste und Karte sind DERSELBE Filter in zwei Darstellungen. Jede
+    // Filteränderung läuft durch diese Funktion — ist gerade die Karte offen,
+    // muss sie mitziehen, sonst filtert man sichtbar ins Leere: die Pins
+    // blieben stehen, während die (unsichtbare) Tabelle längst gefiltert war.
+    if (!append && custMap && !$("#custMapWrap").classList.contains("hidden"))
+      loadCustMapPins().catch(() => {});
   }
 
   // Infinite scroll: when the sentinel below the table comes into view and more
