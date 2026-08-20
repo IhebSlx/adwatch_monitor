@@ -719,7 +719,7 @@ def _qualification_story(filters: dict | None, styles) -> list:
     if betriebe_hoch:
         story.append(Paragraph(
             f"Verarbeiter / Handel mit Passung <b>hoch</b> — {len(betriebe_hoch)} "
-            "Firmen, noch ohne Kauf", h3))
+            "Firmen, noch ohne Angebot", h3))
         story.append(Paragraph(
             "Reihenfolge: Firmen mit einer <b>direkten Kategorie-Marke</b> "
             "(Sunflex, Vitrocsa, Sky-Frame …) zuerst — sie verkaufen unsere "
@@ -784,15 +784,15 @@ def _qualification_story(filters: dict | None, styles) -> list:
 
     # ---- the reference set ----------------------------------------------------
     if buyers:
-        story.append(Paragraph(f"Referenz: Käufer im Bestand — {len(buyers)} Firmen", h3))
+        story.append(Paragraph(f"Referenz: Bestandskunden — {len(buyers)} Firmen", h3))
         story.append(Paragraph(
-            "Wer hier bereits kauft, ist der Maßstab für alles oben — und der "
+            "Wer hier bereits anfragt, ist der Maßstab für alles oben — und der "
             "Türöffner: eine Referenz in derselben Stadt schlägt jedes Argument.",
             note))
         rows = [[Paragraph("<b>Firma</b>", hdr), Paragraph("<b>Ort</b>", hdr),
                  Paragraph("<b>Segment</b>", hdr),
-                 Paragraph("<b>Bestellungen</b>", hdr),
-                 Paragraph("<b>Umsatz</b>", hdr), Paragraph("<b>zuletzt</b>", hdr)]]
+                 Paragraph("<b>Angebote</b>", hdr),
+                 Paragraph("<b>Volumen</b>", hdr), Paragraph("<b>zuletzt</b>", hdr)]]
         for c in buyers[:25]:
             cnt, total, last, _biggest = buys[c.id]
             rows.append([

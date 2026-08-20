@@ -18,13 +18,17 @@ Alle Modelle beantworten **eine** Sorte Frage:
 Nicht „kauft Firma X" (das kann niemand beantworten), sondern **Reihenfolge**.
 Daraus folgt alles Weitere, insbesondere wie gemessen wird.
 
+Die Zielgröße der Händler-Modelle ist ein **Angebot mit echtem Betrag** im
+Folgezeitraum (Belege); das Projekt-Profil ist auf **„gewonnen"** etikettiert.
+Wo unten verkürzt „kauft" steht, ist das gemeint.
+
 Es gibt **vier** solcher Fragen, nicht eine — das war die wichtigste Einsicht
 des Projekts:
 
 | Frage | Modell | Güte |
 |---|---|---|
 | Welches offene Objekt gewinnen wir? | Projekt-Profil (IPP) | Lift **13,7×** |
-| Wer im Trichter wird Kunde? | Funnel-Triage | AUC **0,753** |
+| Wer im Trichter wird aktiv? | Funnel-Triage | AUC **0,753** |
 | Wer im Bestand bricht ab? | Kunden-Fortsetzung | AUC **0,797** |
 | Ist diese fremde Firma ein guter Partner? | Kalt-Akquise | AUC **0,63** |
 
@@ -114,8 +118,8 @@ kein Beleg** — und steht so im Bericht.
 
 Zehnfache Datenmenge bringt +0,04; der letzte Zuwachs +0,005. Die Kurve ist flach.
 
-**Andere Zielgröße.** Drei Varianten (irgendeine Bestellung / materieller Auftrag
-/ oberstes Umsatzquartil) liegen alle innerhalb von 0,03.
+**Andere Zielgröße.** Drei Varianten (irgendein Angebot / materielles Angebot
+/ oberstes Volumenquartil) liegen alle innerhalb von 0,03.
 
 Hilft weder mehr Datenmenge noch eine andere Frage, bleibt nur eins: **in den
 Spalten steckt nicht mehr Information.** Der Gegenbeweis von der anderen Seite:
