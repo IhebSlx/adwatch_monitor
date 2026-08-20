@@ -667,6 +667,23 @@ def project_emails_analyse_route(pid: str, force: bool = False):
         raise HTTPException(503, str(e))
 
 
+@app.post("/api/fragen")
+def fragen_route(payload: dict):
+    """Eine Frage in Alltagssprache über den ganzen Bestand. Das Modell wählt
+    Werkzeuge, Python macht die Scans, die Antwort trägt Werkzeug-Beleg und
+    Kosten. Synchron mit Absicht: eine Frage dauert 5-30 s, und ein Job-System
+    wäre hier Theater — der Browser wartet mit sichtbarem Spinner."""
+    from . import fragen as fragen_mod
+    try:
+        return fragen_mod.fragen(str(payload.get("frage", "")))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:  # Anthropic-Fehler (Quota, Netz) lesbar durchreichen
+        raise HTTPException(502, f"Anfrage gescheitert: {str(e)[:300]}")
+
+
 @app.get("/api/companies/{cid}/emails")
 def company_emails_route(cid: int, limit: int = 40):
     """Der angehängte Schriftverkehr einer Firma — die Projektakte, nicht das

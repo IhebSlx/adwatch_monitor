@@ -4678,3 +4678,59 @@ def test_lead_holt_keine_personendaten():
                  "mobilephone", "fullname"):
         assert feld not in crm_leads.SELECT, f"{feld} ist eine Personendatei"
     assert "companyname" in crm_leads.SELECT
+
+
+
+# ---------------------------------------------------------------------------
+# Fragen-Agent: das SQL-Werkzeug ist die Sicherheitsgrenze
+# ---------------------------------------------------------------------------
+
+def test_fragen_sql_werkzeug_ist_nur_lesend(temp_db):
+    """Das SQL-Werkzeug des Fragen-Agenten darf ALLES lesen und NICHTS koennen,
+    was schreibt. Die Pruefung hat zwei Schichten, und beide werden getestet:
+    die Textpruefung (lehnt ab) und die read-only-Verbindung (koennte selbst
+    dann nicht schreiben, wenn die Textpruefung versagt)."""
+    import pytest as _pytest
+    from adwatch import fragen
+    from adwatch.models import Company
+    import json as _json
+
+    s = temp_db.SessionLocal()
+    s.add(Company(name="Test AG", country="DE", segment="Handel"))
+    s.commit(); s.close()
+
+    # lesen geht, LIMIT wird erzwungen
+    out = _json.loads(fragen.w_sql("select name, country from companies"))
+    assert out["zeilen"] == [["Test AG", "DE"]]
+
+    # jede Schreib- oder Struktur-Anweisung scheitert an der Textpruefung
+    for boese in ("update companies set name='x'",
+                  "delete from companies",
+                  "insert into companies(name) values('x')",
+                  "drop table companies",
+                  "select 1; delete from companies",       # zweite Anweisung
+                  "pragma writable_schema=1",
+                  "attach database ':memory:' as x"):
+        with _pytest.raises(ValueError):
+            fragen.w_sql(boese)
+
+    # CTEs sind erlaubt — WITH ist lesend
+    out = _json.loads(fragen.w_sql(
+        "with t as (select count(*) n from companies) select n from t"))
+    assert out["zeilen"] == [[1]]
+
+
+def test_fragen_werkzeuge_vollstaendig_registriert():
+    """Jedes Werkzeug braucht Name, Beschreibung, Schema und Funktion — ein
+    unvollstaendiger Eintrag faellt sonst erst beim ersten API-Aufruf um,
+    mitten in einer bezahlten Frage."""
+    from adwatch import fragen
+    namen = set()
+    for w in fragen.WERKZEUGE:
+        assert w["name"] and w["description"] and callable(w["fn"])
+        assert w["input_schema"]["type"] == "object"
+        assert w["name"] not in namen, "doppelter Werkzeugname"
+        namen.add(w["name"])
+    # die Angebots-Regel muss dem Modell an den zwei Stellen begegnen,
+    # an denen es Zahlen erzeugt: Systemprompt und Datenbestand-Werkzeug
+    assert "keine Rechnungen" in fragen._SYSTEM

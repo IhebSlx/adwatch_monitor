@@ -1325,6 +1325,41 @@
     else $("#custMapCount").textContent = "";
   }));
 
+  // ================= FRAGEN — Alltagssprache über den ganzen Bestand ========
+  // Absichtlich synchron: eine Frage dauert 5–30 s, der Knopf zeigt den
+  // Zustand. Jede Antwort trägt ihren Beleg — Werkzeuge, Dauer, Kosten —,
+  // denn eine Zahl ohne Herkunft ist hier keine Antwort.
+  async function frageStellen(text) {
+    const btn = $("#frageSenden"), out = $("#frageAntwort"), card = $("#frageAntwortCard");
+    if (!text.trim() || btn.disabled) return;
+    btn.disabled = true; btn.textContent = "Denkt…";
+    card.classList.remove("hidden");
+    out.textContent = "Frage läuft — die Werkzeuge arbeiten…";
+    $("#frageVerlauf").innerHTML = ""; $("#frageKosten").textContent = "";
+    try {
+      const d = await api("/api/fragen", "POST", { frage: text });
+      out.innerHTML = esc(d.antwort).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+      $("#frageVerlauf").innerHTML = (d.verlauf || []).map(v =>
+        `<span class="tag${v.fehler ? " tag-warn" : ""}" title="${esc(JSON.stringify(v.params || {}))}${
+          v.fehler ? " — FEHLER: " + esc(v.fehler) : ""}">${esc(v.werkzeug)} · ${v.dauer_s}s</span>`).join("");
+      $("#frageKosten").textContent =
+        `${d.model} · ${(d.tokens_in + d.tokens_out).toLocaleString("de-DE")} Token` +
+        ` · ≈ $${d.kosten_usd} · ${d.dauer_s}s`;
+    } catch (e) {
+      out.textContent = `Fehler: ${e.message}`;
+    } finally {
+      btn.disabled = false; btn.textContent = "Fragen";
+    }
+  }
+  $("#frageSenden")?.addEventListener("click", () => frageStellen($("#frageInput").value));
+  $("#frageInput")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) frageStellen($("#frageInput").value);
+  });
+  $$(".frage-bsp").forEach(b => b.addEventListener("click", () => {
+    $("#frageInput").value = b.textContent;
+    frageStellen(b.textContent);
+  }));
+
   function render() {
     renderTopbar();
     renderSignals();
