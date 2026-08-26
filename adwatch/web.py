@@ -675,7 +675,9 @@ def fragen_route(payload: dict):
     wäre hier Theater — der Browser wartet mit sichtbarem Spinner."""
     from . import fragen as fragen_mod
     try:
-        return fragen_mod.fragen(str(payload.get("frage", "")))
+        v = payload.get("verlauf")
+        return fragen_mod.fragen(str(payload.get("frage", "")),
+                                 verlauf=v if isinstance(v, list) else None)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except RuntimeError as e:

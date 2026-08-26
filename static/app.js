@@ -1325,40 +1325,140 @@
     else $("#custMapCount").textContent = "";
   }));
 
-  // ================= FRAGEN — Alltagssprache über den ganzen Bestand ========
-  // Absichtlich synchron: eine Frage dauert 5–30 s, der Knopf zeigt den
-  // Zustand. Jede Antwort trägt ihren Beleg — Werkzeuge, Dauer, Kosten —,
-  // denn eine Zahl ohne Herkunft ist hier keine Antwort.
-  async function frageStellen(text) {
-    const btn = $("#frageSenden"), out = $("#frageAntwort"), card = $("#frageAntwortCard");
-    if (!text.trim() || btn.disabled) return;
-    btn.disabled = true; btn.textContent = "Denkt…";
-    card.classList.remove("hidden");
-    out.textContent = "Frage läuft — die Werkzeuge arbeiten…";
-    $("#frageVerlauf").innerHTML = ""; $("#frageKosten").textContent = "";
-    try {
-      const d = await api("/api/fragen", "POST", { frage: text });
-      out.innerHTML = esc(d.antwort).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-      $("#frageVerlauf").innerHTML = (d.verlauf || []).map(v =>
-        `<span class="tag${v.fehler ? " tag-warn" : ""}" title="${esc(JSON.stringify(v.params || {}))}${
-          v.fehler ? " — FEHLER: " + esc(v.fehler) : ""}">${esc(v.werkzeug)} · ${v.dauer_s}s</span>`).join("");
-      $("#frageKosten").textContent =
-        `${d.model} · ${(d.tokens_in + d.tokens_out).toLocaleString("de-DE")} Token` +
-        ` · ≈ $${d.kosten_usd} · ${d.dauer_s}s`;
-    } catch (e) {
-      out.textContent = `Fehler: ${e.message}`;
-    } finally {
-      btn.disabled = false; btn.textContent = "Fragen";
+  // ================= CHATBOT ==============================================
+  // Ein Gespraech: der Verlauf geht mit, damit "und in Oesterreich?" versteht,
+  // wovon die Rede war. Mitgeschickt wird nur FRAGE + ANTWORT-TEXT frueherer
+  // Wechsel, nicht deren Werkzeugaufrufe — die Antwort traegt das Ergebnis
+  // bereits in Worten, ein volles Replay wuerde nur Token kosten.
+  const CHAT = { verlauf: [], laeuft: false };
+
+  // Winziger Markdown-Uebersetzer. Kein Fremdpaket: das Modell benutzt genau
+  // fuenf Dinge — Tabellen, Aufzaehlungen, fett, Code, Ueberschriften. Alles
+  // wird ZUERST escaped, danach werden die Muster gesetzt; so kann keine
+  // Modellausgabe HTML in die Seite schreiben.
+  function mdToHtml(src) {
+    const zeilen = esc(src || "").split("\n");
+    const out = [];
+    let liste = null, absatz = [];
+    const absatzSchliessen = () => {
+      if (absatz.length) { out.push(`<p>${absatz.join("<br>")}</p>`); absatz = []; }
+    };
+    const listeSchliessen = () => { if (liste) { out.push(`</${liste}>`); liste = null; } };
+
+    for (let i = 0; i < zeilen.length; i++) {
+      const z = zeilen[i];
+      const t = z.trim();
+
+      // Tabelle: Kopfzeile + Trennzeile aus |---|
+      if (t.startsWith("|") && (zeilen[i + 1] || "").trim().match(/^\|[\s:|-]+\|$/)) {
+        absatzSchliessen(); listeSchliessen();
+        const zellen = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+        const kopf = zellen(t);
+        i += 2;
+        const koerper = [];
+        while (i < zeilen.length && zeilen[i].trim().startsWith("|")) {
+          koerper.push(zellen(zeilen[i])); i++;
+        }
+        i--;
+        out.push(`<div class="tbl-scroll"><table><thead><tr>${
+          kopf.map(c => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${
+          koerper.map(r => `<tr>${r.map(c => `<td>${inline(c)}</td>`).join("")}</tr>`)
+            .join("")}</tbody></table></div>`);
+        continue;
+      }
+      if (!t) { absatzSchliessen(); listeSchliessen(); continue; }
+      if (/^#{1,6}\s/.test(t)) {
+        absatzSchliessen(); listeSchliessen();
+        out.push(`<h3>${inline(t.replace(/^#{1,6}\s*/, ""))}</h3>`);
+        continue;
+      }
+      const auf = t.match(/^[-*]\s+(.*)$/), num = t.match(/^\d+[.)]\s+(.*)$/);
+      if (auf || num) {
+        absatzSchliessen();
+        const art = auf ? "ul" : "ol";
+        if (liste !== art) { listeSchliessen(); out.push(`<${art}>`); liste = art; }
+        out.push(`<li>${inline((auf || num)[1])}</li>`);
+        continue;
+      }
+      listeSchliessen();
+      absatz.push(inline(t));
+    }
+    absatzSchliessen(); listeSchliessen();
+    return out.join("");
+
+    function inline(s) {
+      return s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+              .replace(/`([^`]+)`/g, "<code>$1</code>");
     }
   }
-  $("#frageSenden")?.addEventListener("click", () => frageStellen($("#frageInput").value));
-  $("#frageInput")?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) frageStellen($("#frageInput").value);
-  });
-  $$(".frage-bsp").forEach(b => b.addEventListener("click", () => {
-    $("#frageInput").value = b.textContent;
-    frageStellen(b.textContent);
-  }));
+
+  const chatThread = () => $("#chatThread");
+
+  function chatLeer() {
+    chatThread().innerHTML = `<div class="chat-leer">Frag mich etwas über die Daten.</div>`;
+  }
+
+  function chatAnhaengen(html, klasse) {
+    const leer = $(".chat-leer");
+    if (leer) leer.remove();
+    const el = document.createElement("div");
+    el.className = `chat-turn ${klasse}`;
+    el.innerHTML = html;
+    chatThread().appendChild(el);
+    chatThread().scrollTop = chatThread().scrollHeight;
+    return el;
+  }
+
+  async function chatSenden(text) {
+    text = (text || "").trim();
+    if (!text || CHAT.laeuft) return;
+    CHAT.laeuft = true;
+    $("#frageSenden").disabled = true;
+    $("#frageInput").value = "";
+    $("#frageInput").style.height = "auto";
+
+    chatAnhaengen(`<div class="bubble">${esc(text)}</div>`, "user");
+    const bot = chatAnhaengen(
+      `<div class="chat-denkt"><i></i><i></i><i></i></div>`, "bot");
+
+    try {
+      const d = await api("/api/fragen", "POST",
+                          { frage: text, verlauf: CHAT.verlauf });
+      const meta = (d.verlauf || []).map(v =>
+        `<span class="wz${v.fehler ? " err" : ""}" title="${esc(JSON.stringify(v.params || {}))}${
+          v.fehler ? " — FEHLER: " + esc(v.fehler) : ""}">${esc(v.werkzeug)}</span>`).join("");
+      bot.innerHTML = mdToHtml(d.antwort) +
+        `<div class="chat-meta">${meta}<span>${esc(d.model)}</span>` +
+        `<span>≈ $${d.kosten_usd}</span><span>${d.dauer_s}s</span></div>`;
+      CHAT.verlauf.push({ frage: text, antwort: d.antwort });
+      $("#chatModell").textContent = d.model;
+    } catch (e) {
+      bot.innerHTML = `<p class="chat-fehler">${esc(e.message)}</p>`;
+    } finally {
+      CHAT.laeuft = false;
+      $("#frageSenden").disabled = false;
+      chatThread().scrollTop = chatThread().scrollHeight;
+      $("#frageInput").focus();
+    }
+  }
+
+  const frageFeld = $("#frageInput");
+  if (frageFeld) {
+    chatLeer();
+    // Enter sendet, Shift+Enter macht eine Zeile — wie man es von Chats kennt.
+    frageFeld.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSenden(frageFeld.value); }
+    });
+    // Das Feld waechst mit dem Text, bis die CSS-Hoehe deckelt.
+    frageFeld.addEventListener("input", () => {
+      frageFeld.style.height = "auto";
+      frageFeld.style.height = Math.min(frageFeld.scrollHeight, 180) + "px";
+    });
+    $("#frageSenden").addEventListener("click", () => chatSenden(frageFeld.value));
+    $("#chatNeu").addEventListener("click", () => {
+      CHAT.verlauf = []; chatLeer(); frageFeld.focus();
+    });
+  }
 
   function render() {
     renderTopbar();

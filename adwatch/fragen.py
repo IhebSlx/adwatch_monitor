@@ -382,9 +382,20 @@ ANTWORTSTIL:
 # Die Schleife
 # ---------------------------------------------------------------------------
 
-def fragen(frage: str, max_runden: int = MAX_RUNDEN) -> dict:
+MAX_VERLAUF = 6          # frühere Wechsel im Kontext — mehr kostet mehr, ohne zu helfen
+
+
+def fragen(frage: str, verlauf: list | None = None,
+           max_runden: int = MAX_RUNDEN) -> dict:
     """Eine Frage beantworten: Modell wählt Werkzeuge, Python arbeitet, Modell
-    formuliert. Gibt Antwort + vollständigen Werkzeug-Beleg + Kosten zurück."""
+    formuliert. Gibt Antwort + vollständigen Werkzeug-Beleg + Kosten zurück.
+
+    `verlauf` sind frühere Wechsel als [{"frage": …, "antwort": …}] — damit
+    "und in Österreich?" funktioniert. Bewusst nur der TEXT früherer Antworten,
+    nicht deren Werkzeug-Blöcke: die Antwort trägt das Ergebnis bereits in
+    Worten, und ein vollständiges Replay der Werkzeugaufrufe würde jede Runde
+    teurer machen, ohne mehr zu wissen.
+    """
     frage = (frage or "").strip()
     if not frage:
         raise ValueError("Leere Frage.")
@@ -396,8 +407,15 @@ def fragen(frage: str, max_runden: int = MAX_RUNDEN) -> dict:
     model = config.ANTHROPIC_MODEL
     tools = [{k: w[k] for k in ("name", "description", "input_schema")} for w in WERKZEUGE]
 
-    messages = [{"role": "user", "content": frage}]
-    verlauf: list[dict] = []
+    messages: list[dict] = []
+    for w in (verlauf or [])[-MAX_VERLAUF:]:
+        f, a = str(w.get("frage") or "").strip(), str(w.get("antwort") or "").strip()
+        if f and a:
+            messages.append({"role": "user", "content": f})
+            messages.append({"role": "assistant", "content": a})
+    messages.append({"role": "user", "content": frage})
+
+    werkzeug_log: list[dict] = []
     tin = tout = 0
     t0 = time.monotonic()
 
@@ -411,7 +429,7 @@ def fragen(frage: str, max_runden: int = MAX_RUNDEN) -> dict:
         if not calls:
             antwort = "".join(b.text for b in msg.content
                               if getattr(b, "type", None) == "text").strip()
-            return {"antwort": antwort or "(keine Antwort)", "verlauf": verlauf,
+            return {"antwort": antwort or "(keine Antwort)", "verlauf": werkzeug_log,
                     "tokens_in": tin, "tokens_out": tout,
                     "kosten_usd": _kosten_usd(model, tin, tout), "model": model,
                     "dauer_s": round(time.monotonic() - t0, 1)}
@@ -428,7 +446,7 @@ def fragen(frage: str, max_runden: int = MAX_RUNDEN) -> dict:
             except Exception as exc:  # noqa: BLE001 — der Agent soll den Fehler SEHEN
                 out = json.dumps({"fehler": str(exc)[:300]}, ensure_ascii=False)
                 fehler = str(exc)[:200]
-            verlauf.append({"werkzeug": call.name, "params": call.input,
+            werkzeug_log.append({"werkzeug": call.name, "params": call.input,
                             "dauer_s": round(time.monotonic() - t1, 2),
                             "fehler": fehler})
             log.info("fragen: %s(%s) in %.2fs%s", call.name,
@@ -440,6 +458,6 @@ def fragen(frage: str, max_runden: int = MAX_RUNDEN) -> dict:
 
     return {"antwort": "Abgebrochen: zu viele Werkzeug-Runden. Die Frage enger "
                        "stellen oder in zwei Fragen teilen.",
-            "verlauf": verlauf, "tokens_in": tin, "tokens_out": tout,
+            "verlauf": werkzeug_log, "tokens_in": tin, "tokens_out": tout,
             "kosten_usd": _kosten_usd(model, tin, tout), "model": model,
             "dauer_s": round(time.monotonic() - t0, 1)}

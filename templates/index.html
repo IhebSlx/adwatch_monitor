@@ -62,9 +62,9 @@
       </button>
 
       <div class="nav-group">Erkenntnisse</div>
-      <button class="tab" data-tab="fragen" data-label="Fragen">
+      <button class="tab" data-tab="fragen" data-label="Chatbot">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/></svg>
-        Fragen
+        Chatbot
       </button>
       <button class="tab" data-tab="profil" data-label="ICP-Profil">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
@@ -582,32 +582,22 @@
     </section>
 
     <!-- ================= TAB: Chancen (Rückgewinnung) ================= -->
-    <!-- ================= TAB: Fragen ================= -->
+    <!-- ================= TAB: Chatbot ================= -->
     <section id="tab-fragen" class="tab-panel">
-      <header class="page-head">
-        <h1>Fragen — der ganze Bestand in Alltagssprache</h1>
-        <p>Das Modell liest nur die Frage und das eingeengte Ergebnis — die Scans
-          über zehntausende Zeilen macht Python. Eine Frage kostet Cents; jede
-          Antwort zeigt, welche Werkzeuge liefen und was sie gekostet hat.
-          Nur Lesen — nichts wird verändert.</p>
-      </header>
-      <div class="card" style="margin-bottom:14px">
-        <div class="inline-form" style="align-items:stretch">
-          <textarea id="frageInput" rows="2" placeholder="z.&nbsp;B.: Welche 10 Bestandskunden in AT sind am stärksten abbruchgefährdet — und warum?"
-            style="flex:1;resize:vertical;min-height:44px;font:inherit;padding:8px 10px"></textarea>
-          <button id="frageSenden" class="btn btn-primary" style="flex:0 0 auto">Fragen</button>
+      <div class="chat">
+        <div id="chatThread" class="chat-thread"></div>
+        <div class="chat-composer">
+          <div class="chat-box">
+            <textarea id="frageInput" rows="1" placeholder="Frage stellen …"></textarea>
+            <button id="frageSenden" class="chat-send" title="Senden (Enter)" aria-label="Senden">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </button>
+          </div>
+          <div class="chat-foot">
+            <span id="chatModell"></span>
+            <button id="chatNeu" class="chat-neu">Neuer Chat</button>
+          </div>
         </div>
-        <div id="frageBeispiele" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
-          <button class="btn btn-sm frage-bsp">Welche offenen Projekte über 200.000 € sehen am gewinnbarsten aus?</button>
-          <button class="btn btn-sm frage-bsp">Wie viele Fensterbauer in DE haben noch nie angefragt?</button>
-          <button class="btn btn-sm frage-bsp">Was lief zuletzt zwischen uns und der Firma Solarlux Scandinavia?</button>
-          <button class="btn btn-sm frage-bsp">Welches Land hat den größten unbearbeiteten Trichter?</button>
-        </div>
-      </div>
-      <div id="frageAntwortCard" class="card hidden">
-        <div id="frageAntwort" style="white-space:pre-wrap;line-height:1.6"></div>
-        <div id="frageVerlauf" class="sub" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px"></div>
-        <div id="frageKosten" class="sub" style="margin-top:6px;color:var(--muted)"></div>
       </div>
     </section>
 
