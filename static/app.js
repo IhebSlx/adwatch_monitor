@@ -961,6 +961,50 @@
     }
   }
 
+  // Lift ist eine Verhaeltniszahl, und "1,40x" sagt niemandem etwas, der nicht
+  // weiss, wovon. Daraus wird hier ein Satz: 1,40 -> "40 % haeufiger". Die Zahl
+  // bleibt als Tooltip erhalten, damit nachrechnen kann, wer will.
+  // Prozent deutsch: 56.1 -> "56,1 %". toFixed liefert immer einen Punkt.
+  const pct = (v, n = 1) => `${(v * 100).toFixed(n).replace(".", ",")} %`;
+
+  function liftSatz(l) {
+    if (!isFinite(l) || l <= 0) return "—";
+    if (l >= 1.95) return `${l.toFixed(1).replace(".", ",")}× so oft`;
+    if (l >= 1.05) return `${Math.round((l - 1) * 100)} % häufiger`;
+    if (l > 0.95) return "wie der Durchschnitt";
+    if (l >= 0.5) return `${Math.round((1 - l) * 100)} % seltener`;
+    return "weniger als halb so oft";
+  }
+
+  // Merkmalsschluessel sind fuer Menschen geschrieben worden, die den Code
+  // kennen. Fuer alle anderen uebersetzt das hier.
+  const MERKMAL_WORT = {
+    mehrere_vcs: "mehrere Verkaufschancen am Objekt",
+    architekt_beteiligt: "Architekt beteiligt",
+    "vc_offen:ja": "offene Verkaufschance",
+    "vc_offen:nein": "keine offene Verkaufschance",
+    "vc_verloren:nein": "noch nie eine Chance verloren",
+    "vc_verloren:ja": "schon einmal verloren",
+    "website:ja": "hat eine Website",
+    "website:nein": "keine Website",
+  };
+  const MERKMAL_PRAEFIX = {
+    familie: "Produkt", kanal: "Vertriebsweg", segment: "Segment",
+    branche: "Branche", region: "Region", land: "Land",
+    vc_anzahl: "Verkaufschancen", frequenz: "bisherige Angebote",
+    aktualitaet: "letztes Angebot", volumen: "Angebotsvolumen",
+    vc_wert: "Chancenwert",
+  };
+  function merkmalWort(key) {
+    if (MERKMAL_WORT[key]) return MERKMAL_WORT[key];
+    const i = String(key).indexOf(":");
+    if (i > 0) {
+      const p = MERKMAL_PRAEFIX[key.slice(0, i)];
+      if (p) return `${p}: ${key.slice(i + 1)}`;
+    }
+    return String(key).replace(/_/g, " ");
+  }
+
   function qualityBadge(label, value, verdict) {
     return `<span class="qual-badge ${QUAL_CLASS(value)}">${esc(label)} ${value.toFixed(3)}</span>`
          + `<span class="muted"> · ${esc(verdict)}</span>`;
@@ -979,18 +1023,17 @@
         <div class="decile" title="Dezil ${i + 1}: ${(r * 100).toFixed(0)}% gewonnen">
           <div class="decile-fill" style="height:${Math.max(r / Math.max(...dec) * 100, 3)}%"></div>
           <span>${(r * 100).toFixed(0)}%</span></div>`).join("")}</div>
-      <p class="hint">Basisrate ${(p.base_rate * 100).toFixed(1)} % · ${p.test.n.toLocaleString("de-DE")}
+      <p class="hint">Basisrate ${pct(p.base_rate)} · ${p.test.n.toLocaleString("de-DE")}
         Projekte im Test · ${p.test.monotone_steps}/9 Stufen monoton steigend</p>
       <h3 style="margin-top:18px">Die stärksten Merkmale</h3>
-      <table class="data-table"><thead><tr><th>Merkmal</th><th class="num">Lift</th>
-        <th class="num">Gewinnquote</th><th class="num">Projekte</th></tr></thead><tbody>
-        ${p.features.slice(0, 8).map(f => `<tr><td>${esc(f.feature)}</td>
-          <td class="num"><b>${f.lift.toFixed(2)}×</b></td>
-          <td class="num">${(f.rate * 100).toFixed(0)}%</td>
-          <td class="num">${f.total.toLocaleString("de-DE")}</td></tr>`).join("")}
-        ${p.features.slice(-3).map(f => `<tr class="feat-neg"><td>${esc(f.feature)}</td>
-          <td class="num">${f.lift.toFixed(2)}×</td>
-          <td class="num">${(f.rate * 100).toFixed(0)}%</td>
+      <table class="data-table"><thead><tr><th>Merkmal</th>
+        <th class="num">gewonnen</th><th>im Vergleich zum Schnitt</th>
+        <th class="num">Projekte</th></tr></thead><tbody>
+        ${[...p.features.slice(0, 8).map(f => [f, ""]),
+           ...p.features.slice(-3).map(f => [f, ' class="feat-neg"'])]
+          .map(([f, cls]) => `<tr${cls}><td>${esc(merkmalWort(f.feature))}</td>
+          <td class="num">${pct(f.rate, 0)}</td>
+          <td title="Lift ${f.lift.toFixed(2)}× gegenüber der Basisrate ${pct(p.base_rate)}"><b>${liftSatz(f.lift)}</b></td>
           <td class="num">${f.total.toLocaleString("de-DE")}</td></tr>`).join("")}
       </tbody></table>
       <h3 style="margin-top:18px">Offene Projekte, gereiht (${t.open_total.toLocaleString("de-DE")} gesamt)</h3>
@@ -1000,7 +1043,9 @@
           <td><b>${esc((r.name || "—").slice(0, 54))}</b></td>
           <td>${esc(r.city || "")}</td>
           <td class="num">${r.estimated_value ? eur(r.estimated_value) : "—"}</td>
-          <td class="sub">${r.why.map(w => `${esc(w.feature)} <b>${w.lift}×</b>`).join(" · ")}</td>
+          <td class="sub">${r.why.map(w =>
+            `<div title="Lift ${Number(w.lift).toFixed(2)}×">${esc(merkmalWort(w.feature))}
+             — <b>${liftSatz(Number(w.lift))} gewonnen</b></div>`).join("")}</td>
         </tr>`).join("")}</tbody></table>`;
   }
 
@@ -1019,7 +1064,9 @@
           <td class="sub">${esc(r.sub_segment || "")}</td>
           <td class="num">${r.vc_n}${r.vc_open ? ` <span class="sub">(${r.vc_open} offen)</span>` : ""}</td>
           <td class="num">${r.vc_value ? eur(r.vc_value) : "—"}</td>
-          <td class="sub">${r.why.map(w => `${esc(w.feature)} <b>${w.lift}×</b>`).join(" · ")}</td>
+          <td class="sub">${r.why.map(w =>
+            `<div title="Lift ${Number(w.lift).toFixed(2)}×">${esc(merkmalWort(w.feature))}
+             — <b>${liftSatz(Number(w.lift))}</b></div>`).join("")}</td>
         </tr>`).join("")}</tbody></table>`;
     wireProfileRows();
     wireListButton(d.rows.map(r => ({ company_id: r.company_id, score: r.score })));
@@ -1053,13 +1100,15 @@
         Erstkontakt als ein Baustoffhändler — aber Rang 3 ist nicht besser als Rang 30.
       </div>
       <p class="hint">Grundgesamtheit ${d.n.toLocaleString("de-DE")} Händler ohne bisheriges
-        Angebot (${d.country}), Basisrate ${(d.base_rate * 100).toFixed(1)} %. Gemessene
+        Angebot (${d.country}), Basisrate ${pct(d.base_rate)}. Gemessene
         Anfragequote je Branche:</p>
-      <table class="data-table"><thead><tr><th>Branche</th><th class="num">Lift</th>
-        <th class="num">Anfragequote</th><th class="num">Firmen</th></tr></thead><tbody>
+      <table class="data-table"><thead><tr><th>Branche</th>
+        <th class="num">fragt an</th><th>im Vergleich zum Schnitt</th>
+        <th class="num">Firmen</th></tr></thead><tbody>
         ${d.branchen.map(b => `<tr${b.lift < 1 ? ' class="feat-neg"' : ""}>
-          <td>${esc(b.branche)}</td><td class="num"><b>${b.lift.toFixed(2)}×</b></td>
-          <td class="num">${(b.rate * 100).toFixed(1)}%</td>
+          <td>${esc(b.branche)}</td>
+          <td class="num">${pct(b.rate)}</td>
+          <td title="Lift ${b.lift.toFixed(2)}× — ${pct(b.rate)} geteilt durch die Basisrate ${pct(d.base_rate)}"><b>${liftSatz(b.lift)}</b></td>
           <td class="num">${b.n.toLocaleString("de-DE")}</td></tr>`).join("")}
       </tbody></table>`;
   }
