@@ -27,16 +27,30 @@ from .models import Company
 # Segment values that are not part of the partner business.
 EXCLUDED_SEGMENTS: tuple[str, ...] = ("Private Endkunden",)
 
-# Kundenklassen, die kein Partnergeschäft sind. „07 - SL Mitarbeiter" sind
-# Konten von Solarlux-Beschäftigten — dieselbe Sorte Verunreinigung wie Private
-# Endkunden, nur schwerer zu sehen: Segment und Branche sehen aus wie bei einem
-# echten Händler. Gemessen am 2026-08-20 lagen 2.126 solcher Konten im
-# Händler-Panel, auf dem jede ICP-Zahl beruht.
+# NICHTS wird über sl_customer_class ausgeschlossen — und das ist eine
+# Korrektur, keine Auslassung.
 #
-# Verglichen wird auf ENTHALTEN statt auf Gleichheit, weil das Label in CRM den
-# Zifferncode trägt („07 - SL Mitarbeiter") und eine Umbenennung der Anzeige
-# den Ausschluss sonst still aushebeln würde.
-EXCLUDED_CLASS_MARKER: str = "SL Mitarbeiter"
+# Am 2026-08-20 wurde „07 - SL Mitarbeiter" als „Konto einer Solarlux-Person"
+# gelesen und ausgeschlossen. Der volle Abruf widerlegte das binnen Minuten:
+# 8.204 Konten tragen die Klasse, 7.302 davon im Händler-Panel, zusammen
+# 104,6 Mio EUR Angebotsvolumen — und darunter Firmen wie MADEROS Wintergärten,
+# LEEB Balkone, Willab Garden AB. Das sind Händler, keine Beschäftigten.
+#
+# Die Klasse bedeutet offenkundig die BETREUUNGSART (direkt durch einen
+# Solarlux-Mitarbeiter statt über den Fachhandelsvertrieb) — passend dazu sind
+# alle anderen Werte ebenfalls Vertriebswege: Zuschuss, Fachhandelsvertrieb,
+# Direktvertrieb, Objektvertrieb, Architektenberatung.
+#
+# Zwei Lehren, beide teuer:
+#  * Der Ausschluss hätte fast die halbe Grundgesamtheit gelöscht (6.207 -> 1.858
+#    allein im Kalt-Profil), inklusive der größten Konten.
+#  * Als MERKMAL ist das Feld verboten: „wer betreut die Firma" beschreibt
+#    unsere Beziehung, nicht die Firma — dieselbe Falle wie
+#    `Vertriebsweg = Direktvertrieb` (§3), die bereits als Wert-Leckage
+#    gemessen und entfernt wurde.
+#
+# Gespiegelt bleibt die Spalte trotzdem: sie ist als Filter und als Kontext
+# nützlich, nur eben nicht als Ausschluss und nicht als Merkmal.
 
 
 def in_scope_clause():
@@ -56,10 +70,6 @@ def in_scope_clause():
         or_(Company.segment.is_(None),
             Company.segment.not_in(EXCLUDED_SEGMENTS)),
         or_(Company.is_competitor.is_(None), Company.is_competitor.is_(False)),
-        # NULL bleibt drin: unbekannt ist nicht dasselbe wie Mitarbeiterkonto,
-        # und der Wert fehlt bei jeder Firma, die nicht aus CRM stammt.
-        or_(Company.sl_customer_class.is_(None),
-            ~Company.sl_customer_class.contains(EXCLUDED_CLASS_MARKER)),
     )
 
 
@@ -68,12 +78,9 @@ def apply(stmt):
     return stmt.where(in_scope_clause())
 
 
-def is_in_scope(segment: str | None, is_competitor: bool | None = False,
-                customer_class: str | None = None) -> bool:
+def is_in_scope(segment: str | None, is_competitor: bool | None = False) -> bool:
     """Same rule for rows already loaded in Python."""
     if is_competitor:
-        return False
-    if customer_class and EXCLUDED_CLASS_MARKER in customer_class:
         return False
     return segment is None or segment not in EXCLUDED_SEGMENTS
 

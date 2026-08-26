@@ -4769,44 +4769,39 @@ def test_fragen_ergebnis_ist_immer_gueltiges_json(temp_db):
 
 
 
-def test_scope_haelt_mitarbeiterkonten_draussen(temp_db):
-    """„07 - SL Mitarbeiter" sind Konten von Solarlux-Beschaeftigten und gehoeren
-    aus jeder Auswertung heraus -- dieselbe Sorte Verunreinigung wie Private
-    Endkunden, nur schwerer zu sehen: Segment und Branche sehen aus wie bei
-    einem echten Haendler. Gemessen lagen 2.126 davon im Haendler-Panel.
+def test_kundenklasse_schliesst_nichts_aus(temp_db):
+    """sl_customer_class darf NIEMANDEN aus der Auswertung werfen.
 
-    Geprueft wird auf ENTHALTEN, nicht auf Gleichheit, damit eine Umbenennung
-    der Anzeige (etwa "07 - SL Mitarbeiter (intern)") den Ausschluss nicht
-    still aushebelt."""
+    Am 2026-08-20 wurde "07 - SL Mitarbeiter" als "Konto einer Solarlux-Person"
+    gelesen und ausgeschlossen. Der volle Abruf widerlegte das: 8.204 Konten
+    tragen die Klasse, 7.302 davon im Haendler-Panel, zusammen 104,6 Mio EUR
+    Angebotsvolumen -- darunter MADEROS Wintergaerten, LEEB Balkone, Willab
+    Garden AB. Das sind Haendler. Die Klasse bedeutet die BETREUUNGSART, nicht
+    die Person.
+
+    Der Ausschluss haette fast die halbe Grundgesamtheit geloescht (6.207 ->
+    1.858 allein im Kalt-Profil), inklusive der groessten Konten. Dieser Test
+    haelt die Korrektur fest, damit die naheliegende Fehllesung nicht
+    zurueckkehrt."""
     from sqlalchemy import select
     from adwatch import scope
     from adwatch.models import Company
 
     s = temp_db.SessionLocal()
     s.add_all([
-        Company(name="Echter Haendler", segment="Handel", country="DE"),
-        Company(name="Mitarbeiter A", segment="Handel", country="DE",
+        Company(name="MADEROS Wintergaerten", segment="Verarbeiter", country="DE",
                 sl_customer_class="07 - SL Mitarbeiter"),
-        Company(name="Mitarbeiter B", segment="Verarbeiter", country="DE",
-                sl_customer_class="07 - SL Mitarbeiter (intern)"),
         Company(name="Fachhandel", segment="Handel", country="DE",
                 sl_customer_class="02 - Fachhandelsvertrieb"),
-        Company(name="Ohne Klasse", segment="Handel", country="DE"),
+        Company(name="Privatperson", segment="Private Endkunden", country="DE"),
     ])
     s.commit()
 
     drin = {n for (n,) in s.execute(
         select(Company.name).where(scope.in_scope_clause()))}
-    assert "Echter Haendler" in drin
+    assert "MADEROS Wintergaerten" in drin, "Betreuungsart ist kein Ausschlussgrund"
     assert "Fachhandel" in drin
-    assert "Ohne Klasse" in drin, "NULL ist unbekannt, nicht Mitarbeiter"
-    assert "Mitarbeiter A" not in drin
-    assert "Mitarbeiter B" not in drin, "Umbenennung darf den Ausschluss nicht aushebeln"
-
-    # dieselbe Regel fuer Zeilen, die schon in Python liegen
-    assert scope.is_in_scope("Handel", False, "02 - Fachhandelsvertrieb")
-    assert not scope.is_in_scope("Handel", False, "07 - SL Mitarbeiter")
-    assert scope.is_in_scope("Handel", False, None)
+    assert "Privatperson" not in drin, "Private Endkunden bleiben ausgeschlossen"
     s.close()
 
 

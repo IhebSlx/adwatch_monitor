@@ -831,14 +831,41 @@ erheblich**:
 Bemerkenswert: **Tischler kippt von überdurchschnittlich auf durchschnittlich** —
 ein Gewerk, das man auf die alte Zahl hin priorisiert hätte.
 
-### 15b. Solarlux-Mitarbeiter im Händler-Panel
+### 15b. „07 - SL Mitarbeiter" — die Fehllesung, die fast die halbe Grundgesamtheit gekostet hätte
 
-`sl_customer_class` = „07 - SL Mitarbeiter" markiert Konten von
-Solarlux-Beschäftigten (von Iheb bestätigt). **2.126 davon lagen im
-Händler-Panel** der 15.463 Firmen, auf dem jede ICP-Zahl beruht — Segment und
-Branche sehen aus wie bei einem echten Händler, nur das Geschäft ist keines.
+Auf die Frage, was die Kundenklasse bedeutet, kam die Antwort „Solarlux
+Mitarbeiter". Daraufhin wurde das Feld gespiegelt und die Klasse wie Private
+Endkunden ausgeschlossen. **Der volle Abruf widerlegte das binnen Minuten.**
 
-Das Feld wurde bis dahin nicht gespiegelt; ohne es war die Verunreinigung
-unsichtbar. Jetzt in `scope.in_scope_clause()` ausgeschlossen, mit derselben
-Härte wie Private Endkunden. Geprüft wird auf ENTHALTEN statt Gleichheit, damit
-eine Umbenennung der Anzeige den Ausschluss nicht still aushebelt.
+| | |
+|---|---:|
+| Konten mit Klasse 07 | **8.204** |
+| davon im Händler-Panel | **7.302** von 15.463 |
+| Angebotsvolumen dieser Konten | **104,6 Mio €** |
+
+Solarlux hat keine 8.204 Beschäftigten. Und die größten Konten der Klasse sind
+unübersehbar Firmen: **MADEROS GmbH Wintergärten** (1.246 Angebote, 3,5 Mio €),
+**LEEB Balkone GmbH**, **Willab Garden AB**, **John Knight Glass Ltd**.
+
+Die Klasse bedeutet die **Betreuungsart** — direkt durch einen
+Solarlux-Mitarbeiter statt über den Fachhandelsvertrieb. Dazu passt, dass jeder
+andere Wert des Feldes ebenfalls ein Vertriebsweg ist: Zuschuss,
+Fachhandelsvertrieb, Direktvertrieb, Objektvertrieb, Architektenberatung.
+
+**Der Ausschluss wurde zurückgenommen.** Er hätte die Kalt-Grundgesamtheit von
+6.207 auf 1.858 gedrückt und dabei die umsatzstärksten Partner entfernt.
+
+Zwei Festlegungen bleiben:
+
+* **Kein Ausschluss.** `scope.py` filtert nichts über dieses Feld; ein Test hält
+  das fest, damit die naheliegende Fehllesung nicht zurückkehrt.
+* **Kein Merkmal, niemals.** „Wer betreut die Firma" beschreibt **unsere
+  Beziehung**, nicht die Firma — dieselbe Falle wie `Vertriebsweg =
+  Direktvertrieb` (§3), die bereits als Wert-Leckage gemessen und entfernt
+  wurde. Die Spalte bleibt gespiegelt, weil sie als Filter und Kontext nützlich
+  ist.
+
+**Die Lehre ist nicht die Fehllesung, sondern dass sie prüfbar war.** Eine
+Aussage über die Bedeutung eines Feldes lässt sich an den Daten gegenlesen,
+bevor man danach handelt — 8.204 statt der erwarteten Handvoll wäre schon beim
+Backfill aufgefallen, wenn jemand hingesehen hätte.
