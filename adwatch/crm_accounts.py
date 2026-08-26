@@ -53,6 +53,10 @@ CRM_OWNED_PICKLISTS: dict[str, str] = {
     "sl_customer_segment": "segment",
     "sl_customer_sub_segment": "sub_segment",
     "sl_sales_channel": "sales_channel",
+    # Wegen „07 - SL Mitarbeiter" geholt: Mitarbeiterkonten gehören aus jeder
+    # Auswertung heraus, sind aber ohne dieses Feld nicht erkennbar. Siehe
+    # scope.py und den Kommentar an Company.sl_customer_class.
+    "sl_customer_class": "sl_customer_class",
 }
 
 # Revenue: five rolling year columns, confirmed populated on live records.

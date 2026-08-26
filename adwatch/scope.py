@@ -27,6 +27,17 @@ from .models import Company
 # Segment values that are not part of the partner business.
 EXCLUDED_SEGMENTS: tuple[str, ...] = ("Private Endkunden",)
 
+# Kundenklassen, die kein Partnergeschäft sind. „07 - SL Mitarbeiter" sind
+# Konten von Solarlux-Beschäftigten — dieselbe Sorte Verunreinigung wie Private
+# Endkunden, nur schwerer zu sehen: Segment und Branche sehen aus wie bei einem
+# echten Händler. Gemessen am 2026-08-20 lagen 2.126 solcher Konten im
+# Händler-Panel, auf dem jede ICP-Zahl beruht.
+#
+# Verglichen wird auf ENTHALTEN statt auf Gleichheit, weil das Label in CRM den
+# Zifferncode trägt („07 - SL Mitarbeiter") und eine Umbenennung der Anzeige
+# den Ausschluss sonst still aushebeln würde.
+EXCLUDED_CLASS_MARKER: str = "SL Mitarbeiter"
+
 
 def in_scope_clause():
     """SQLAlchemy criterion for "part of the business".
@@ -45,6 +56,10 @@ def in_scope_clause():
         or_(Company.segment.is_(None),
             Company.segment.not_in(EXCLUDED_SEGMENTS)),
         or_(Company.is_competitor.is_(None), Company.is_competitor.is_(False)),
+        # NULL bleibt drin: unbekannt ist nicht dasselbe wie Mitarbeiterkonto,
+        # und der Wert fehlt bei jeder Firma, die nicht aus CRM stammt.
+        or_(Company.sl_customer_class.is_(None),
+            ~Company.sl_customer_class.contains(EXCLUDED_CLASS_MARKER)),
     )
 
 
@@ -53,9 +68,12 @@ def apply(stmt):
     return stmt.where(in_scope_clause())
 
 
-def is_in_scope(segment: str | None, is_competitor: bool | None = False) -> bool:
+def is_in_scope(segment: str | None, is_competitor: bool | None = False,
+                customer_class: str | None = None) -> bool:
     """Same rule for rows already loaded in Python."""
     if is_competitor:
+        return False
+    if customer_class and EXCLUDED_CLASS_MARKER in customer_class:
         return False
     return segment is None or segment not in EXCLUDED_SEGMENTS
 

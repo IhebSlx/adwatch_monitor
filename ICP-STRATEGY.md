@@ -774,3 +774,71 @@ Die Oberflächentexte der App wurden am 2026-08-20 entsprechend korrigiert
 (Angebotsrhythmus statt Bestellrhythmus, Angebotsvolumen statt Umsatz, wo die
 Zahl aus Belegen stammt). Die `Umsatz`-Spalten aus `slx_revenue_*` behalten
 ihren Namen, bis ihre Bedeutung geklärt ist.
+
+## 15. Zwei Verunreinigungen der Grundgesamtheit, gefunden 2026-08-20
+
+Beide betreffen nicht das Modell, sondern **wer überhaupt in der Auswertung
+steht** — die teuerste Fehlerart in diesem Projekt, weil sie plausible Zahlen
+erzeugt.
+
+### 15a. Die Bevölkerung kannte ihre eigene Zukunft
+
+Iheb fragte, was „Garten- und Landschaftsbau 4,45×" in der Kalt-Liste bedeutet.
+Die Antwort: nichts. **51 der 57 Konten dieses Gewerks wurden erst 2024 oder
+später im CRM angelegt** — am Stichtag 01.01.2025 kannten wir sie größtenteils
+gar nicht.
+
+Gemessen über alle Gewerke (DE, Handel + Verarbeiter), erst seit dem
+`crm_created_on`-Backfill vom selben Tag überhaupt prüfbar:
+
+| im CRM angelegt | Firmen | Anfragequote |
+|---|---:|---:|
+| vor 2021 | 8.091 | 22,1 % |
+| 2021–2023 | 1.500 | 21,3 % |
+| **ab 2024** | 1.363 | **33,1 %** |
+
+Die Ursache ist banal und heikel: **eine Firma wird oft angelegt, WEIL sie
+angefragt hat.** Damit sagt das Anlagedatum die Anfrage voraus — und jedes
+Gewerk, das zufällig viele frische Datensätze trägt, sieht stark aus, ohne es zu
+sein. Derselbe Effekt in jedem Gewerk: Glaser 25,5 % → 56,7 %, Fensterbau
+27,2 % → 41,4 % zwischen alten und frischen Datensätzen.
+
+**Korrektur in `profiles._load()`:** die Grundgesamtheit enthält nur noch
+Firmen, die am Stichtag bereits existierten (`crm_created_on < cutoff`; NULL
+bleibt drin, weil entdeckte Firmen kein CRM-Anlagedatum haben).
+
+Wirkung auf die Kalt-Vorsortierung DE:
+
+| | vorher | nachher |
+|---|---:|---:|
+| Grundgesamtheit | 7.824 | **6.207** |
+| Basisrate | 11,8 % | **7,2 %** |
+| AUC | 0,629 | 0,629 |
+
+Die Trennschärfe bleibt gleich — die **Rangfolge der Gewerke ändert sich
+erheblich**:
+
+| Gewerk | Lift vorher | Lift nachher |
+|---|---:|---:|
+| Garten- und Landschaftsbau | 4,45 | **entfällt** (unter Trägergrenze) |
+| Wintergartenbau | 1,40 | **1,88** |
+| Metallbau-Schlosser | 1,12 | 1,31 |
+| Glaser | 1,20 | 1,31 |
+| Fensterbau | 1,11 | 1,20 |
+| Tischler-Schreiner-Zimmerer | 1,10 | **0,96** |
+| Ladenbau/Objekteinrichter | 0,67 | 0,25 |
+
+Bemerkenswert: **Tischler kippt von überdurchschnittlich auf durchschnittlich** —
+ein Gewerk, das man auf die alte Zahl hin priorisiert hätte.
+
+### 15b. Solarlux-Mitarbeiter im Händler-Panel
+
+`sl_customer_class` = „07 - SL Mitarbeiter" markiert Konten von
+Solarlux-Beschäftigten (von Iheb bestätigt). **2.126 davon lagen im
+Händler-Panel** der 15.463 Firmen, auf dem jede ICP-Zahl beruht — Segment und
+Branche sehen aus wie bei einem echten Händler, nur das Geschäft ist keines.
+
+Das Feld wurde bis dahin nicht gespiegelt; ohne es war die Verunreinigung
+unsichtbar. Jetzt in `scope.in_scope_clause()` ausgeschlossen, mit derselben
+Härte wie Private Endkunden. Geprüft wird auf ENTHALTEN statt Gleichheit, damit
+eine Umbenennung der Anzeige den Ausschluss nicht still aushebelt.

@@ -71,10 +71,31 @@ def _plz2(pc, country) -> str | None:
 
 
 def _load(cutoff: dt.date, country: str | None = None):
-    """Firmen im Scope + zeitlich sauber getrennte Vor-/Nachgeschichte."""
+    """Firmen im Scope + zeitlich sauber getrennte Vor-/Nachgeschichte.
+
+    DIE BEVÖLKERUNG MUSS AM STICHTAG BEKANNT GEWESEN SEIN. Eine Firma, die erst
+    2025 im CRM angelegt wurde, stand am 01.01.2025 nicht in unserer Datenbank —
+    sie in „kalte Händler zum Stichtag" zu zählen, ist ein Blick in die Zukunft.
+
+    Gefunden am 2026-08-20 und erst seit dem crm_created_on-Backfill überhaupt
+    prüfbar: frisch angelegte Konten fragen mit 33,1 % an, alte mit 22,1 %.
+    Der Grund ist banal und heikel — eine Firma wird oft ANGELEGT, WEIL sie
+    angefragt hat. Damit sagte das Anlagedatum die Anfrage voraus, und jedes
+    Gewerk, das zufällig viele frische Datensätze trug, sah stark aus, ohne es
+    zu sein (Garten- und Landschaftsbau: 51 von 57 Konten aus 2024+, Lift 4,45).
+
+    NULL bleibt drin: Firmen ohne CRM-Herkunft (Entdeckung, Marktanalyse) haben
+    kein Anlagedatum, und sie stillschweigend zu verwerfen wäre der umgekehrte
+    Fehler.
+    """
+    from sqlalchemy import or_
+    stichtag = dt.datetime.combine(cutoff, dt.time.min)
     with SessionLocal() as s:
-        stmt = select(Company).where(scope.in_scope_clause(),
-                                     Company.segment.in_(DEALER_SEGMENTS))
+        stmt = select(Company).where(
+            scope.in_scope_clause(),
+            Company.segment.in_(DEALER_SEGMENTS),
+            or_(Company.crm_created_on.is_(None),
+                Company.crm_created_on < stichtag))
         if country:
             stmt = stmt.where(func.upper(Company.country) == country.upper())
         comps = list(s.scalars(stmt))

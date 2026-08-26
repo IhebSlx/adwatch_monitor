@@ -54,6 +54,16 @@ class Company(Base):
     # mehr Gelegenheit zu kaufen, und eine frisch entdeckte Firma hat gar kein
     # Anlagedatum — dieselbe Falle wie "Untersegment = leer".
     crm_created_on: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    # CRM `sl_customer_class` als Klartext: 01 Zuschuss · 02 Fachhandelsvertrieb ·
+    # 03 Direktvertrieb · 04 Objektvertrieb · 05 Architektenberatung ·
+    # 07 SL Mitarbeiter · 08 Andere.
+    #
+    # Geholt wegen EINER Ausprägung: „07 - SL Mitarbeiter" sind Konten von
+    # Solarlux-Beschäftigten (von Iheb bestätigt 2026-08-20). Gemessen lagen
+    # 2.126 davon mitten im Händler-Panel, auf dem jede ICP-Zahl beruht — also
+    # dieselbe Sorte Verunreinigung wie Private Endkunden, nur unsichtbar.
+    sl_customer_class: Mapped[str | None] = mapped_column(String(60), nullable=True,
+                                                          index=True)
     sap_number: Mapped[str | None] = mapped_column(String(40), nullable=True)   # SAP Nummer
     kv: Mapped[str | None] = mapped_column(String(120), nullable=True)          # KV (account owner)
     segment: Mapped[str | None] = mapped_column(String(120), nullable=True)     # Kundensegment

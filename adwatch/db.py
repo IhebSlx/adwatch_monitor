@@ -204,6 +204,9 @@ def _migrate(engine) -> None:
                 # seit drei Wochen im System" — die in AUDIT.md §2.4 offene
                 # Rechtszensierung.
                 ("crm_created_on", "DATETIME"),
+                # Kundenklasse aus CRM — gebraucht, um Mitarbeiterkonten
+                # ("07 - SL Mitarbeiter") aus den Auswertungen zu halten.
+                ("sl_customer_class", "VARCHAR(60)"),
             ]:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))

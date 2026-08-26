@@ -4766,3 +4766,76 @@ def test_fragen_ergebnis_ist_immer_gueltiges_json(temp_db):
     # kleine Ergebnisse bleiben unangetastet
     d = _json.loads(fragen._j({"a": 1}))
     assert d == {"a": 1}
+
+
+
+def test_scope_haelt_mitarbeiterkonten_draussen(temp_db):
+    """„07 - SL Mitarbeiter" sind Konten von Solarlux-Beschaeftigten und gehoeren
+    aus jeder Auswertung heraus -- dieselbe Sorte Verunreinigung wie Private
+    Endkunden, nur schwerer zu sehen: Segment und Branche sehen aus wie bei
+    einem echten Haendler. Gemessen lagen 2.126 davon im Haendler-Panel.
+
+    Geprueft wird auf ENTHALTEN, nicht auf Gleichheit, damit eine Umbenennung
+    der Anzeige (etwa "07 - SL Mitarbeiter (intern)") den Ausschluss nicht
+    still aushebelt."""
+    from sqlalchemy import select
+    from adwatch import scope
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name="Echter Haendler", segment="Handel", country="DE"),
+        Company(name="Mitarbeiter A", segment="Handel", country="DE",
+                sl_customer_class="07 - SL Mitarbeiter"),
+        Company(name="Mitarbeiter B", segment="Verarbeiter", country="DE",
+                sl_customer_class="07 - SL Mitarbeiter (intern)"),
+        Company(name="Fachhandel", segment="Handel", country="DE",
+                sl_customer_class="02 - Fachhandelsvertrieb"),
+        Company(name="Ohne Klasse", segment="Handel", country="DE"),
+    ])
+    s.commit()
+
+    drin = {n for (n,) in s.execute(
+        select(Company.name).where(scope.in_scope_clause()))}
+    assert "Echter Haendler" in drin
+    assert "Fachhandel" in drin
+    assert "Ohne Klasse" in drin, "NULL ist unbekannt, nicht Mitarbeiter"
+    assert "Mitarbeiter A" not in drin
+    assert "Mitarbeiter B" not in drin, "Umbenennung darf den Ausschluss nicht aushebeln"
+
+    # dieselbe Regel fuer Zeilen, die schon in Python liegen
+    assert scope.is_in_scope("Handel", False, "02 - Fachhandelsvertrieb")
+    assert not scope.is_in_scope("Handel", False, "07 - SL Mitarbeiter")
+    assert scope.is_in_scope("Handel", False, None)
+    s.close()
+
+
+def test_profil_bevoelkerung_kennt_die_zukunft_nicht(temp_db):
+    """Eine Firma, die erst NACH dem Stichtag im CRM angelegt wurde, darf nicht
+    in der Bevoelkerung stehen -- am Stichtag kannten wir sie nicht.
+
+    Das war ein echter Fehler: frisch angelegte Konten fragen mit 33,1 % an,
+    alte mit 22,1 %, weil eine Firma oft ANGELEGT wird, WEIL sie angefragt hat.
+    Damit sagte das Anlagedatum die Anfrage voraus. Garten- und Landschaftsbau
+    stand mit Lift 4,45 an der Spitze der Kalt-Liste -- 51 seiner 57 Konten
+    stammten aus 2024+. Nach der Korrektur faellt das Gewerk unter die
+    Traegergrenze und verschwindet."""
+    import datetime as dt
+    from adwatch.insights import profiles
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name="Alt", segment="Handel", country="DE",
+                crm_created_on=dt.datetime(2020, 5, 1)),
+        Company(name="Neu", segment="Handel", country="DE",
+                crm_created_on=dt.datetime(2025, 6, 1)),
+        Company(name="Ohne Datum", segment="Handel", country="DE"),
+    ])
+    s.commit(); s.close()
+
+    comps, _pre, _post, _vc = profiles._load(dt.date(2025, 1, 1))
+    namen = {c.name for c in comps}
+    assert "Alt" in namen
+    assert "Ohne Datum" in namen, "ohne Anlagedatum laesst sich nichts ausschliessen"
+    assert "Neu" not in namen, "am Stichtag gab es diese Firma bei uns noch nicht"
