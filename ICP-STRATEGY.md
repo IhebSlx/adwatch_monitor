@@ -788,20 +788,28 @@ Die Antwort: nichts. **51 der 57 Konten dieses Gewerks wurden erst 2024 oder
 später im CRM angelegt** — am Stichtag 01.01.2025 kannten wir sie größtenteils
 gar nicht.
 
-Gemessen über alle Gewerke (DE, Handel + Verarbeiter), erst seit dem
-`crm_created_on`-Backfill vom selben Tag überhaupt prüfbar:
+Gemessen über alle Gewerke (DE, Handel + Verarbeiter, ohne Wettbewerber und
+Töchter), Stichtag **2023-01-01**, Bevölkerung wie im Kalt-Profil — also nur
+Firmen **ohne Angebot vor dem Stichtag** —, Etikett: Angebot danach:
 
-| im CRM angelegt | Firmen | Anfragequote |
+| im CRM angelegt | Firmen | fragt danach an |
 |---|---:|---:|
-| vor 2021 | 8.091 | 22,1 % |
-| 2021–2023 | 1.500 | 21,3 % |
-| **ab 2024** | 1.363 | **33,1 %** |
+| vor 2019 | 4.933 | 7,7 % |
+| 2019 bis Stichtag | 1.320 | 5,3 % |
+| **nach dem Stichtag** | 1.809 | **31,0 %** |
 
-Die Ursache ist banal und heikel: **eine Firma wird oft angelegt, WEIL sie
-angefragt hat.** Damit sagt das Anlagedatum die Anfrage voraus — und jedes
-Gewerk, das zufällig viele frische Datensätze trägt, sieht stark aus, ohne es zu
-sein. Derselbe Effekt in jedem Gewerk: Glaser 25,5 % → 56,7 %, Fensterbau
-27,2 % → 41,4 % zwischen alten und frischen Datensätzen.
+Firmen, die es am Stichtag noch gar nicht gab, fragen also **vier- bis sechsmal
+häufiger** an als solche, die schon da waren. Die Ursache ist banal und heikel:
+**eine Firma wird oft angelegt, WEIL sie angefragt hat.** Damit sagt das
+Anlagedatum die Anfrage voraus — und jedes Gewerk, das zufällig viele frische
+Datensätze trägt, sieht stark aus, ohne es zu sein.
+
+> **Korrektur an dieser Stelle (2026-08-26, Selbstprüfung).** Die zuerst
+> veröffentlichten Zahlen (22,1 % vs. 33,1 %) waren falsch gemessen: sie
+> benutzten `companies.beleg_count` statt der Ereignistabelle und
+> unterschieden die Jahrgänge nicht am tatsächlichen Stichtag. Richtung und
+> Schluss stimmten, die Größenordnung war deutlich untertrieben — der wahre
+> Unterschied ist 31,0 % gegen 5–8 %, nicht 33 gegen 22.
 
 **Korrektur in `profiles._load()`:** die Grundgesamtheit enthält nur noch
 Firmen, die am Stichtag bereits existierten (`crm_created_on < cutoff`; NULL
@@ -869,3 +877,47 @@ Zwei Festlegungen bleiben:
 Aussage über die Bedeutung eines Feldes lässt sich an den Daten gegenlesen,
 bevor man danach handelt — 8.204 statt der erwarteten Handvoll wäre schon beim
 Backfill aufgefallen, wenn jemand hingesehen hätte.
+
+## 16. Selbstprüfung 2026-08-26 — was die Revision fand
+
+Auf die Frage „prüf deine eigene Logik" hin wurde die Grundgesamtheit gegen die
+Daten gehalten statt gegen die Erinnerung. Vier Befunde, davon zwei echte
+Fehler.
+
+### 16a. Eigene Töchter standen in der Grundgesamtheit — behoben
+
+`icp.py` und `rfm.py` schließen `is_intercompany` seit jeher aus. **`profiles.py`
+und `ipp.py` — die vier neueren Profile — taten es nicht.** In der Bevölkerung
+standen **19 Töchter**, angeführt von Linara Kaufbeuren (10,8 Mio €
+Angebotsvolumen), Linara Ahaus, Linara OWL. Das sind Solarlux-eigene Gesellschaften:
+als „zu gewinnender Partner" bewertet ergeben sie keinen Sinn.
+
+Das ist genau das Versagen, vor dem `scope.py` in seinem eigenen Kopftext warnt
+— jeder Aufrufer merkt sich den Filter selbst, und der neueste vergisst ihn.
+
+Behoben in `profiles._load()`, bewusst **nicht** in `scope.in_scope_clause()`:
+in der Firmenliste soll man Solarlux Nederland durchaus finden können, nur eben
+nicht als Akquiseziel bewertet bekommen.
+
+### 16b. Die §15a-Zahlen waren falsch gemessen — korrigiert
+
+Siehe Kasten in §15a. `companies.beleg_count` statt der Ereignistabelle, und
+die Jahrgänge nicht am tatsächlichen Stichtag getrennt. **Der Schluss stimmte,
+die Größenordnung war untertrieben.**
+
+### 16c. Kein Fehler: beleg_count ≠ Anzahl Ereignisse
+
+Bei 5.867 Firmen weicht `companies.beleg_count` von der Zeilenzahl in
+`crm_order_events` ab. Das sah nach zwei Wahrheiten aus, ist aber **Absicht**:
+der Zähler zählt **Belege**, die Ereignistabelle **Firma-Tage** (129.676 Belege
+→ 91.992 Ereignisse, 1,41 je Ereignis). Verschiedene Einheiten, kein Widerspruch.
+
+**Offen bleibt eine kleinere Auffälligkeit:** bei **284** Firmen ist der Zähler
+*niedriger* als die Ereigniszahl. Zusammenfassen kann eine Zahl nur senken, nie
+erhöhen — dort stimmt etwas nicht. Betroffen sind wenige Promille; notiert,
+nicht behoben.
+
+### 16d. Sauber
+
+Keine doppelten `crm_id` (0). Nur **53** CRM-Firmen ohne Anlagedatum, die den
+Stichtagsfilter passieren — vernachlässigbar gegen 47.770.

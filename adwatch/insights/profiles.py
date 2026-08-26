@@ -94,6 +94,17 @@ def _load(cutoff: dt.date, country: str | None = None):
         stmt = select(Company).where(
             scope.in_scope_clause(),
             Company.segment.in_(DEALER_SEGMENTS),
+            # Eigene Töchter gehören in keine Partner-Auswertung: Linara,
+            # NanaWall, Solarlux Nederland/Schweiz sind wir selbst. Sie stehen
+            # NICHT in scope.in_scope_clause(), weil man sie in der Firmenliste
+            # durchaus finden können soll — nur eben nicht als zu gewinnenden
+            # Partner bewerten. icp.py und rfm.py filtern sie seit jeher
+            # separat; profiles.py und ipp.py taten es nicht, und so standen
+            # 19 Töchter in der Grundgesamtheit — Linara Kaufbeuren mit
+            # 10,8 Mio EUR Angebotsvolumen ganz vorn. Gefunden bei der
+            # Selbstprüfung am 2026-08-26.
+            or_(Company.is_intercompany.is_(None),
+                Company.is_intercompany.is_(False)),
             or_(Company.crm_created_on.is_(None),
                 Company.crm_created_on < stichtag))
         if country:
