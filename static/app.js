@@ -2310,7 +2310,79 @@
     renderReportsTable();
   }
 
+  // ---- Microsoft-Anbindung: Personensuche + Teams ------------------------
+  // Teams laesst sich NICHT einbetten (Microsoft verbietet frame-ancestors, ein
+  // iframe bliebe leer). Ein Deep Link tut, was gemeint ist, und braucht keine
+  // einzige Berechtigung.
+  function teamsLink(email) {
+    const e = (email || "").trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return "";
+    return `<a class="btn btn-sm" target="_blank" rel="noopener"
+      href="https://teams.microsoft.com/l/chat/0/0?users=${encodeURIComponent(e)}"
+      title="Chat in Microsoft Teams öffnen">💬 Teams</a>`;
+  }
+
+  // Empfaenger sollen GEWAEHLT werden, nicht getippt: ein Tippfehler schickt
+  // den Bericht sonst an eine fremde Person, und niemand merkt es. Ist der
+  // Personen-Flow nicht eingerichtet, bleibt das Feld ein normales Eingabefeld
+  // — die Empfaengerpflege darf nie an einer Zusatzfunktion haengen.
+  function wirePeoplePicker() {
+    const feld = $("#newRecipientEmail"), box = $("#peoplePicker");
+    if (!feld || !box || feld.dataset.wired) return;
+    feld.dataset.wired = "1";
+    let timer = null, letzte = "";
+
+    const zu = () => box.classList.add("hidden");
+    const waehlen = (p) => {
+      feld.value = p.email;
+      const nameFeld = $("#newRecipientName");
+      if (nameFeld && !nameFeld.value.trim()) nameFeld.value = p.name || "";
+      zu();
+    };
+
+    async function suchen() {
+      const q = feld.value.trim();
+      if (q === letzte) return;
+      letzte = q;
+      if (q.length < 2) return zu();
+      let d;
+      try { d = await api(`/api/people/search?q=${encodeURIComponent(q)}`); }
+      catch { return zu(); }
+      if (!d.verfuegbar) {
+        const hint = $("#peopleHint");
+        if (hint) {
+          hint.textContent = "Tipp: Mit dem Flow „Personen suchen“ lassen "
+            + "sich Empfänger aus dem Verzeichnis wählen statt abtippen — "
+            + "einzurichten unter Einstellungen.";
+          hint.classList.remove("hidden");
+        }
+        return zu();
+      }
+      if (!d.rows.length) return zu();
+      box.innerHTML = d.rows.map((p, i) => `
+        <button type="button" class="people-row" data-i="${i}">
+          <b>${esc(p.name)}</b>
+          <span class="muted">${esc(p.email)}</span>
+          ${p.abteilung || p.titel ? `<span class="sub">${
+            esc([p.titel, p.abteilung].filter(Boolean).join(" · "))}</span>` : ""}
+        </button>`).join("");
+      $$(".people-row", box).forEach(b =>
+        b.addEventListener("click", () => waehlen(d.rows[Number(b.dataset.i)])));
+      box.classList.remove("hidden");
+    }
+
+    feld.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(suchen, 220);   // nicht bei jedem Tastendruck fragen
+    });
+    feld.addEventListener("keydown", (e) => { if (e.key === "Escape") zu(); });
+    document.addEventListener("click", (e) => {
+      if (!box.contains(e.target) && e.target !== feld) zu();
+    });
+  }
+
   function renderRecipients() {
+    wirePeoplePicker();
     const box = $("#recipientsList");
     const recipients = REPORTS_STATE.recipients;
     if (!recipients.length) {
@@ -2323,7 +2395,10 @@
           <input type="checkbox" class="recipient-check" data-rid="${r.id}" ${r.preselected === false ? "" : "checked"}>
           <span><b>${esc(r.name || r.email)}</b>${r.name ? ` <span class="muted">${esc(r.email)}</span>` : ""}</span>
         </label>
-        <button class="btn btn-sm del-recipient-btn" data-rid="${r.id}">Remove</button>
+        <span style="display:flex;gap:6px;align-items:center">
+          ${teamsLink(r.email)}
+          <button class="btn btn-sm del-recipient-btn" data-rid="${r.id}">Entfernen</button>
+        </span>
       </div>`).join("");
     $$(".recipient-check", box).forEach(cb => cb.addEventListener("change", async () => {
       const rid = Number(cb.dataset.rid);

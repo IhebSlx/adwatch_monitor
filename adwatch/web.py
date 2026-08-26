@@ -667,6 +667,18 @@ def project_emails_analyse_route(pid: str, force: bool = False):
         raise HTTPException(503, str(e))
 
 
+@app.get("/api/people/search")
+def people_search_route(q: str = "", limit: int = 8):
+    """Personen im Microsoft-Verzeichnis suchen — für die Empfängerauswahl.
+
+    Gibt IMMER 200 zurück, auch wenn kein Flow eingerichtet ist: das Feld fällt
+    dann auf freie Eingabe zurück. Ein Fehler an dieser Stelle würde nur die
+    Empfängerpflege blockieren, ohne etwas zu verbessern."""
+    from . import people
+    return {"verfuegbar": people.verfuegbar(),
+            "rows": people.suchen(q, top=min(max(limit, 1), 20))}
+
+
 @app.post("/api/fragen")
 def fragen_route(payload: dict):
     """Eine Frage in Alltagssprache über den ganzen Bestand. Das Modell wählt

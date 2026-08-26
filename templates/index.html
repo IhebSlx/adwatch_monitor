@@ -815,15 +815,25 @@
         <p>PDF-Berichte erzeugen, planen und per E-Mail versenden.</p>
       </header>
       <div class="card">
-        <h2>Recipients</h2>
-        <p class="hint">Check who should receive a report, then use "Send" on any report below.
-          Managed entirely here — Power Automate just sends to whatever address this app gives it.</p>
+        <h2>Empfänger</h2>
+        <p class="hint">Wer einen Bericht bekommen soll — hier ankreuzen, dann unten bei einem
+          Bericht auf „Senden". Power Automate versendet nur an die Adressen, die diese App
+          übergibt.</p>
         <div id="recipientsList"></div>
-        <form id="addRecipientForm" class="inline-form" style="margin-top:10px">
-          <input id="newRecipientEmail" type="email" placeholder="email@solarlux.com" autocomplete="off" style="flex:2">
+        <!-- Adressen werden GEWÄHLT, nicht getippt, sobald der Personen-Flow
+             eingerichtet ist: ein Tippfehler schickt den Bericht sonst an eine
+             fremde Person, und niemand merkt es. Ohne Flow bleibt die freie
+             Eingabe — die Pflege darf nie an einer Zusatzfunktion hängen. -->
+        <form id="addRecipientForm" class="inline-form" style="margin-top:10px;position:relative">
+          <div style="flex:2;position:relative">
+            <input id="newRecipientEmail" type="email" placeholder="email@solarlux.com"
+                   autocomplete="off" style="width:100%">
+            <div id="peoplePicker" class="people-picker hidden"></div>
+          </div>
           <input id="newRecipientName" placeholder="Name (optional)" autocomplete="off" style="flex:1">
-          <button class="btn btn-primary" type="submit">Add</button>
+          <button class="btn btn-primary" type="submit">Hinzufügen</button>
         </form>
+        <p id="peopleHint" class="hint hidden" style="margin-top:6px"></p>
       </div>
 
       <div class="card">

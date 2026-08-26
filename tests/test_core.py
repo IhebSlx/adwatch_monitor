@@ -4839,3 +4839,54 @@ def test_profil_bevoelkerung_kennt_die_zukunft_nicht(temp_db):
     assert "Alt" in namen
     assert "Ohne Datum" in namen, "ohne Anlagedatum laesst sich nichts ausschliessen"
     assert "Neu" not in namen, "am Stichtag gab es diese Firma bei uns noch nicht"
+
+
+
+def test_personensuche_ohne_flow_bricht_nichts():
+    """Die Empfaengerpflege darf NIE an einer Zusatzfunktion haengen.
+
+    Ist der Personen-Flow nicht eingerichtet (der Normalfall bei jeder frischen
+    Installation), muss die Suche eine leere Liste liefern statt zu werfen --
+    das Feld faellt dann auf freie Eingabe zurueck."""
+    from adwatch import people
+    assert people.suchen("Mueller") == []
+    assert people.suchen("") == []
+    assert people.suchen("a") == [], "unter zwei Zeichen wird gar nicht gefragt"
+
+
+def test_personensuche_versteht_beide_antwortformen():
+    """Der Flow liefert je nach Aufbau eine nackte Liste oder {value: [...]},
+    und die Feldnamen unterscheiden sich je nach Connector-Version
+    (mail vs. userPrincipalName, displayName vs. DisplayName). Wer eine Form
+    voraussetzt, bekommt beim anderen Aufbau still null Zeilen -- derselbe
+    Fehler, der beim Lead-Abruf schon einmal zuschlug."""
+    from adwatch import people
+
+    assert people._rows([{"mail": "a@b.de"}]) == [{"mail": "a@b.de"}]
+    assert people._rows({"value": [{"mail": "a@b.de"}]}) == [{"mail": "a@b.de"}]
+    assert people._rows({}) == []
+    assert people._rows(None) == []
+
+    # beide Schreibweisen ergeben denselben Datensatz
+    a = people._norm({"displayName": "Iheb Marouani", "mail": "i.m@solarlux.com",
+                      "jobTitle": "BD", "department": "Strategie"})
+    b = people._norm({"DisplayName": "Iheb Marouani", "UserPrincipalName": "i.m@solarlux.com",
+                      "JobTitle": "BD", "Department": "Strategie"})
+    assert a == b
+    assert a["email"] == "i.m@solarlux.com" and a["name"] == "Iheb Marouani"
+
+    # ohne brauchbare Adresse ist eine Zeile als Empfaenger wertlos
+    assert people._norm({"displayName": "Ohne Mail"}) is None
+    assert people._norm({"displayName": "Kaputt", "mail": "keine-adresse"}) is None
+
+
+def test_teams_link_nur_bei_echter_adresse():
+    """Teams laesst sich nicht einbetten, aber ein Deep Link tut es auch --
+    ohne jede Berechtigung. Nur muss die Adresse eine sein."""
+    from adwatch import people
+    link = people.teams_link("i.marouani@solarlux.com")
+    assert link and link.startswith("https://teams.microsoft.com/l/chat/0/0?users=")
+    assert "i.marouani%40solarlux.com" in link, "Adresse muss kodiert sein"
+    assert people.teams_link("kein-at-zeichen") is None
+    assert people.teams_link("") is None
+    assert people.teams_link(None) is None

@@ -95,6 +95,12 @@ SETTINGS_SPEC = [
      "label": "Flow: Dataverse abfragen",
      "help": "POST {entity, select, filter, top} -> {value:[rows]}. Read-only. "
              "Used for the CRM sync and scoped loads."},
+    {"key": "FLOW_URL_GRAPH_USERS", "env": "FLOW_URL_GRAPH_USERS", "default": "",
+     "secret": True, "test": "flow_graph_users", "group": "Power Automate flows",
+     "label": "Flow: Personen suchen (Office 365)",
+     "help": "POST {suche, top} -> {value:[{displayName, mail, jobTitle, department}]}. "
+             "Nur lesend. Füllt die Empfängerauswahl, damit Adressen gewählt statt "
+             "getippt werden. Optional — ohne diesen Flow bleibt das Eingabefeld."},
     # Legacy key: installs configured before the flow registry existed. flows.py
     # falls back to it for the report_email role, so nothing breaks on upgrade.
     {"key": "POWER_AUTOMATE_WEBHOOK_URL", "env": "POWER_AUTOMATE_WEBHOOK_URL", "default": "",

@@ -33,6 +33,14 @@ FLOW_ROLES: dict[str, tuple[str, str, str]] = {
     "crm_query": (
         "FLOW_URL_CRM_QUERY", "Dataverse abfragen (Accounts, Opportunities)",
         "{entity, select, filter, top} -> {value: [rows]}"),
+    # Kolleginnen und Kollegen aus dem Microsoft-Verzeichnis suchen — damit
+    # Empfänger ausgewählt statt abgetippt werden. Läuft über denselben
+    # Flow-Umweg wie Dataverse und braucht deshalb KEINE Azure-App-Registrierung
+    # und keine Administrator-Zustimmung: der Flow handelt unter der Identität
+    # dessen, der ihn angelegt hat.
+    "graph_users": (
+        "FLOW_URL_GRAPH_USERS", "Personen im Verzeichnis suchen (Office 365)",
+        "{suche, top} -> {value: [{displayName, mail, jobTitle, department}]}"),
 }
 
 # The email flow predates this registry and is configured in many installs as
