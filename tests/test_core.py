@@ -4734,3 +4734,35 @@ def test_fragen_werkzeuge_vollstaendig_registriert():
     # die Angebots-Regel muss dem Modell an den zwei Stellen begegnen,
     # an denen es Zahlen erzeugt: Systemprompt und Datenbestand-Werkzeug
     assert "keine Rechnungen" in fragen._SYSTEM
+
+
+
+def test_fragen_ergebnis_ist_immer_gueltiges_json(temp_db):
+    """Ein gekuerztes Werkzeug-Ergebnis muss LESBAR bleiben.
+
+    Gefunden am 2026-08-20 im End-to-End-Test: `_j` serialisierte erst und
+    schnitt dann bei 6.000 Zeichen ab -- mitten in einem Firmennamen. Der Agent
+    bekam kaputtes JSON zurueck und haette mitten in einer bezahlten Frage
+    daran gescheitert. Jetzt werden ZEILEN entfernt statt Zeichen, und das
+    Ergebnis sagt selbst, dass es gekuerzt ist.
+    """
+    import json as _json
+    from adwatch import fragen
+
+    # Liste, die weit ueber dem Deckel liegt
+    gross = [{"id": i, "name": f"Musterfirma Nummer {i} GmbH & Co. KG", "ort": "Musterstadt"}
+             for i in range(400)]
+    text = fragen._j(gross)
+    assert len(text) <= fragen.MAX_ERGEBNIS_ZEICHEN
+    d = _json.loads(text)                      # <- hier scheiterte es vorher
+    assert d["gekuerzt"], "die Kuerzung muss sichtbar sein"
+    assert len(d["zeilen"]) < 400
+
+    # dasselbe fuer ein Dict mit langer Liste darin
+    text = fragen._j({"spalten": ["id", "name"], "zeilen": gross})
+    d = _json.loads(text)
+    assert len(d["zeilen"]) < 400 and "gekuerzt" in d
+
+    # kleine Ergebnisse bleiben unangetastet
+    d = _json.loads(fragen._j({"a": 1}))
+    assert d == {"a": 1}

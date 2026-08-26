@@ -57,14 +57,51 @@ def _kosten_usd(model: str, tin: int, tout: int) -> float:
     return 0.0
 
 
-def _clip(text: str, limit: int = MAX_ERGEBNIS_ZEICHEN) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + f"\n… [gekürzt, {len(text):,} Zeichen insgesamt]"
-
-
 def _j(obj) -> str:
-    return _clip(json.dumps(obj, ensure_ascii=False, default=str))
+    """JSON für den Agenten — notfalls gekürzt, aber NIE kaputt.
+
+    Erst serialisieren, dann abschneiden wäre der naheliegende Weg und ist
+    falsch: das Ergebnis ist mitten in einer Struktur abgeschnittenes JSON, das
+    der Agent nicht mehr lesen kann. Gemessen am 2026-08-20 an einer Abfrage
+    über 200 Firmen — sie kippte bei Zeichen 6.001 mitten in einen Namen.
+
+    Stattdessen werden ZEILEN entfernt, bis es passt. Das Ergebnis bleibt
+    gültiges JSON und sagt selbst, was fehlt — der Agent kann dann enger
+    filtern, statt an einem Parserfehler zu scheitern.
+    """
+    text = json.dumps(obj, ensure_ascii=False, default=str)
+    if len(text) <= MAX_ERGEBNIS_ZEICHEN:
+        return text
+
+    def _kuerze(liste: list, huelle) -> str | None:
+        behalten = len(liste)
+        while behalten > 1:
+            behalten //= 2
+            kurz = huelle(liste[:behalten])
+            if isinstance(kurz, dict):
+                kurz["gekuerzt"] = (f"{len(liste)} Zeilen vorhanden, {behalten} "
+                                    f"gezeigt — enger filtern oder aggregieren")
+            t = json.dumps(kurz, ensure_ascii=False, default=str)
+            if len(t) <= MAX_ERGEBNIS_ZEICHEN:
+                return t
+        return None
+
+    if isinstance(obj, list) and obj:
+        t = _kuerze(obj, lambda teil: {"zeilen": teil, "gekuerzt": True})
+        if t:
+            return t
+    elif isinstance(obj, dict):
+        listen = [(k, v) for k, v in obj.items() if isinstance(v, list) and v]
+        if listen:
+            k, v = max(listen, key=lambda kv: len(json.dumps(kv[1], default=str)))
+            t = _kuerze(v, lambda teil: {**obj, k: teil})
+            if t:
+                return t
+
+    # Notnagel: als STRING-Wert kürzen, damit die Hülle gültiges JSON bleibt
+    return json.dumps({"gekuerzt_roh": text[:MAX_ERGEBNIS_ZEICHEN],
+                       "hinweis": f"{len(text):,} Zeichen — Abfrage enger fassen"},
+                      ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
