@@ -943,11 +943,25 @@
 
   const QUAL_CLASS = (auc) => auc >= 0.70 ? "qual-stark" : auc >= 0.65 ? "qual-mittel" : "qual-schwach";
 
+  // Ein Satz je Ansicht: WEN sie zeigt und WOZU. Steht ueber der Tabelle, weil
+  // die Frage "was sehe ich hier eigentlich" vor der ersten Zahl kommt.
+  const PROFIL_WAS = {
+    ipp: "Alle offenen Bauvorhaben, gereiht nach Ähnlichkeit zu früher gewonnenen. " +
+         "Oben anfangen zu arbeiten.",
+    funnel: "Firmen, mit denen ein Gespräch läuft (offene Verkaufschance), die aber " +
+            "noch nie ein Angebot bekommen haben. Wen davon diese Woche anrufen?",
+    bestand: "Firmen, die schon angefragt haben und jetzt gegen ihren eigenen " +
+             "Rhythmus verstummen. Die riskantesten zuerst.",
+    kalt: "Firmen, mit denen wir noch nie gesprochen haben. Nur eine Vorsortierung " +
+          "nach Gewerk — über die einzelne Firma weiß hier niemand etwas.",
+  };
+
   async function loadProfile(kind) {
     profileKind = kind;
     const box = $("#profileBody");
     box.innerHTML = `<p class="hint">Lädt…</p>`;
     $("#profileQuality").textContent = "";
+    $("#profileWas").textContent = PROFIL_WAS[kind] || "";
     try {
       if (kind === "ipp") return renderIpp(await api("/api/ipp"),
                                            await api("/api/ipp/triage?limit=40"));
