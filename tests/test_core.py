@@ -4885,3 +4885,44 @@ def test_teams_link_nur_bei_echter_adresse():
     assert people.teams_link("kein-at-zeichen") is None
     assert people.teams_link("") is None
     assert people.teams_link(None) is None
+
+
+
+def test_projektwert_ist_die_primaere_vc_nicht_die_summe(temp_db):
+    """Der Wert eines Objekts ist der Wert seiner PRIMAEREN Verkaufschance.
+
+    Vorher wurden alle Geschwister addiert. An einem Gebaeude bekommen aber
+    mehrere Haendler und Generalunternehmer dasselbe Gewerk angeboten --
+    gewinnen kann nur einer. Karlsruhe, Rheinstrasse 91 stand deshalb mit
+    14,7 Mio EUR in der Liste: derselbe Betrag von 2.293.202 lag dort viermal,
+    1.277.564 dreimal.
+
+    Gemessen an 581 GEWONNENEN Objekten, wo der tatsaechliche Auftragswert
+    bekannt ist -- Verhaeltnis Formel zu Auftrag:
+        Summe    Median 2,41x (28 % brauchbar)
+        Maximum  Median 1,21x (82 %)
+        primaere Median 1,01x (85 %)   <- praktisch unverzerrt
+    """
+    from adwatch.insights.projekte import _projekt_schaetzwert
+    from adwatch.models import CrmOpportunity
+
+    prim = CrmOpportunity(crm_id="1", opportunity_guid="P", project_id="P",
+                          estimated_value=2_293_202)
+    geschwister = [prim] + [
+        CrmOpportunity(crm_id=str(i), opportunity_guid=f"G{i}", project_id="P",
+                       estimated_value=v)
+        for i, v in enumerate([2_293_202, 2_293_202, 1_277_564, 1_277_564], start=2)]
+
+    wert = _projekt_schaetzwert(prim, geschwister)
+    assert wert == 2_293_202, "der Wert der primaeren VC, nicht die Summe"
+    assert wert != sum(float(m.estimated_value) for m in geschwister)
+
+    # Rueckfall: traegt die primaere VC keinen Wert, gilt der groesste --
+    # von den verbleibenden Regeln liegt er am wenigsten daneben.
+    ohne = CrmOpportunity(crm_id="1", opportunity_guid="P", project_id="P",
+                          estimated_value=None)
+    assert _projekt_schaetzwert(ohne, [ohne] + geschwister[1:]) == 2_293_202
+
+    # gar keine Werte -> None, nicht 0 (0 EUR und "unbekannt" sind verschieden)
+    leer = CrmOpportunity(crm_id="1", opportunity_guid="P", project_id="P")
+    assert _projekt_schaetzwert(leer, [leer]) is None

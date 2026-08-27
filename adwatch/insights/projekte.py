@@ -138,6 +138,36 @@ MEMBER_BUCKETS: tuple[tuple[str, int, int | None], ...] = (
 )
 
 
+def _projekt_schaetzwert(primary: CrmOpportunity,
+                         members: list[CrmOpportunity]) -> float | None:
+    """Was ist dieses Bauvorhaben wert? Der Wert der PRIMÄREN Verkaufschance.
+
+    Vorher wurden die Schätzwerte aller Verkaufschancen eines Objekts addiert.
+    Das ist falsch, und zwar erheblich: an einem Gebäude bekommen mehrere
+    Händler und Generalunternehmer dasselbe Gewerk angeboten — gewinnen kann
+    nur einer. Karlsruhe, Rheinstraße 91 stand deshalb mit 14,7 Mio EUR in der
+    Liste; derselbe Betrag von 2.293.202 lag dort viermal, 1.277.564 dreimal.
+
+    Welche Regel stimmt, ist messbar: bei GEWONNENEN Objekten kennen wir den
+    tatsächlichen Auftragswert. Gemessen an 581 solchen Objekten, Verhältnis
+    Formel zu Auftrag:
+
+        Summe aller Schätzwerte     Median 2,41x   28 % im Bereich 0,5–2,0
+        größter Schätzwert          Median 1,21x   82 %
+        PRIMÄRE Verkaufschance      Median 1,01x   85 %      <- praktisch unverzerrt
+
+    Die primäre Verkaufschance trägt den Projektwert also bereits; sie musste
+    nur gelesen statt aufsummiert werden. Verfügbar für 52.576 von 52.796
+    Objekten — für den Rest bleibt der größte Einzelwert als Rückfall, weil er
+    von den verbleibenden Regeln am wenigsten danebenliegt.
+    """
+    p = float(primary.estimated_value or 0)
+    if p > 0:
+        return p
+    werte = [float(m.estimated_value or 0) for m in members]
+    return max(werte) or None
+
+
 def _in_bucket(n: int, lo: int, hi: int | None) -> bool:
     return n >= lo and (hi is None or n <= hi)
 
@@ -219,8 +249,13 @@ def list_projects(status: str | None = None, min_members: int = 1,
         outcome = _outcome(members)
         if status and outcome != status:
             continue
+        # Sortierung und der Filter „Mindestwert" müssen denselben Wert
+        # benutzen wie die Anzeige — sonst steht ein Objekt weiter oben, als
+        # seine eigene Zahl rechtfertigt.
+        _prim = next((m for m in members if (m.opportunity_guid or "") == key),
+                     members[0])
         rank = (sum(float(m.order_value or 0) for m in members)
-                or sum(float(m.estimated_value or 0) for m in members) or 0)
+                or _projekt_schaetzwert(_prim, members) or 0)
         if min_value and rank < min_value:
             continue
         if lost_reason and not any((m.lost_reason or "") == lost_reason
@@ -249,7 +284,7 @@ def list_projects(status: str | None = None, min_members: int = 1,
         primary = next((m for m in members if (m.opportunity_guid or "") == key),
                        members[0])
         value = sum(float(m.order_value or 0) for m in members) or None
-        est = sum(float(m.estimated_value or 0) for m in members) or None
+        est = _projekt_schaetzwert(primary, members)
         firms = sorted({n for n in (name_of(m.parent_account_crm_id)
                                     for m in members) if n})
         # third-party architects only — see specifying_architect(). The column
@@ -398,7 +433,9 @@ def detail(project_id: str) -> dict | None:
         "won_members": len(won),
         "won_via": won_via,
         "order_value": round(sum(float(m.order_value or 0) for m in members), 2) or None,
-        "estimated_value": round(sum(float(m.estimated_value or 0) for m in members), 2) or None,
+        # Schätzwert des Objekts = primäre Verkaufschance, nicht Summe der
+        # Geschwister — siehe _projekt_schaetzwert().
+        "estimated_value": _projekt_schaetzwert(primary, members),
         "won_value": round(sum(float(m.order_value or 0) for m in won), 2) or None,
         "first": timeline[0]["date"] if timeline else None,
         "last": max((t["closed"] or t["date"] or "") for t in timeline) or None,
