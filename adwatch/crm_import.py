@@ -779,7 +779,15 @@ def import_opportunity_addresses(path: str | Path) -> dict:
 
     from .insights import projekte as _pj
     _pj.invalidate_cache()      # addresses changed -> the cached grouping is stale
-    return {"in_file": len(rows), "matched": seen, "filled": filled}
+
+    # Neue oder korrigierte Bauadressen heißen neue Pins. Der Zentroid-Lauf
+    # gehört deshalb HIERHIN und nicht in einen Knopf, den jemand vergisst:
+    # sonst stünde die Projektkarte still, während die Adressen längst da sind.
+    # Er ist additiv und überschreibt nichts Genaueres (geo.py).
+    from . import geo as _geo
+    geo_stats = _geo.assign_project_centroids()
+    return {"in_file": len(rows), "matched": seen, "filled": filled,
+            "geocoded": geo_stats}
 
 
 def import_opportunity_products(path: str | Path) -> dict:

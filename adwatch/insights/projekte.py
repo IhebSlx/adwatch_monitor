@@ -219,27 +219,28 @@ def overview(min_members: int = 1, max_members: int | None = None) -> dict:
     }
 
 
-def list_projects(status: str | None = None, min_members: int = 1,
-                  limit: int = 200, q: str | None = None,
-                  min_value: float = 0.0, lost_reason: str | None = None,
-                  max_members: int | None = None) -> dict:
-    """Projects, most valuable first, with their members and roles resolved.
+def kandidaten(status: str | None = None, min_members: int = 1,
+               q: str | None = None, min_value: float = 0.0,
+               lost_reason: str | None = None,
+               max_members: int | None = None) -> list[tuple]:
+    """Welche Objekte passen auf den Filter — als (rank, key, members, outcome),
+    absteigend nach Wert.
 
-    Returns {"rows": [...], "total": n, "returned": len(rows)} — the total is the
-    count that MATCHED, before the limit. Without it the UI can only report "34 of
-    300 rows" and a reader reasonably concludes 300 is the whole set, when there
-    are 52.796 projects and 8.189 won ones. Filtering happens here, over all of
-    them; only the slice sent to the browser is capped.""" 
+    Eigene Funktion, weil Liste und Karte dieselbe Auswahl brauchen. Läge der
+    Filter zweimal im Code, würden „300 Objekte in der Liste" und „300 Pins auf
+    der Karte" irgendwann verschiedene 300 meinen — dieselbe Regel, die schon
+    `geo.pins` an den Firmen-Explorer bindet: eine Filtersprache, nicht zwei.
+    """
     groups = _project_rows()
     names = _company_names()
 
     def name_of(gid):
         return names.get((gid or "").lower())
 
-    # Two passes. The first is cheap and runs over all 52.796 projects to decide
-    # what MATCHES and how it ranks; the second builds the display dict only for
-    # the page. Building all 52.796 dicts — resolving firms and architects for
-    # each — to then return 300 cost 4,4 s per request on its own.
+    # Absichtlich billig: hier wird nur ENTSCHIEDEN, was passt und wie es
+    # rankt — keine Anzeigedaten. Die baut der Aufrufer für seine Seite. Für
+    # alle 52.796 Objekte Firmen und Architekten aufzulösen, um dann 300
+    # zurückzugeben, kostete allein 4,4 s je Anfrage.
     candidates = []
     for key, members in groups.items():
         if len(members) < min_members:
@@ -276,8 +277,30 @@ def list_projects(status: str | None = None, min_members: int = 1,
                        for g in (m.parent_account_crm_id, m.architect_crm_id))
         candidates = [c for c in candidates if hit(c[1], c[2])]
 
-    total = len(candidates)
     candidates.sort(key=lambda c: -c[0])
+    return candidates
+
+
+def list_projects(status: str | None = None, min_members: int = 1,
+                  limit: int = 200, q: str | None = None,
+                  min_value: float = 0.0, lost_reason: str | None = None,
+                  max_members: int | None = None) -> dict:
+    """Projects, most valuable first, with their members and roles resolved.
+
+    Returns {"rows": [...], "total": n, "returned": len(rows)} — the total is the
+    count that MATCHED, before the limit. Without it the UI can only report "34 of
+    300 rows" and a reader reasonably concludes 300 is the whole set, when there
+    are 52.796 projects and 8.189 won ones. Filtering happens here, over all of
+    them; only the slice sent to the browser is capped."""
+    names = _company_names()
+
+    def name_of(gid):
+        return names.get((gid or "").lower())
+
+    candidates = kandidaten(status=status, min_members=min_members, q=q,
+                            min_value=min_value, lost_reason=lost_reason,
+                            max_members=max_members)
+    total = len(candidates)
 
     out = []
     for _rank, key, members, outcome in candidates[:limit]:

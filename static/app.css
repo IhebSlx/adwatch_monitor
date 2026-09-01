@@ -1093,10 +1093,48 @@ body.nav-collapsed .nav-badge {
 .tag-belegt { background: #e6f6ec; color: #1c7c3c; }
 .tag-ki     { background: #eef0fd; color: #3a44b5; }
 
+/* ===================== Explorer: Karte|Liste über Firmen|Projekte =========
+   Zwei Ebenen, die sich nicht verwechseln dürfen. Deshalb tragen sie
+   verschiedenes Gewicht statt derselben Pille zweimal: oben die Darstellung
+   (kräftig, gefüllt), darunter der Bestand (leiser, nur unterstrichen). Wer
+   auf die Seite schaut, liest zuerst „Karte", dann „Firmen" — die Reihenfolge,
+   in der auch entschieden wird. */
+.explore-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin: 0 0 16px;
+}
+.segmented {
+  display: inline-flex; background: var(--bg-subtle);
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px;
+}
+.segmented button {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--muted);
+  padding: 6px 16px; border-radius: 999px; line-height: 1.3;
+  transition: background .12s, color .12s;
+}
+.segmented button:hover { color: var(--ink); }
+.segmented button.active {
+  background: var(--card); color: var(--ink); box-shadow: var(--shadow-xs);
+}
+/* zweite Ebene: dieselbe Mechanik, weniger Stimme */
+.segmented-sub { background: transparent; border-color: transparent; padding: 0; }
+.segmented-sub button { font-weight: 500; padding: 6px 12px; }
+.segmented-sub button.active {
+  background: transparent; color: var(--accent-ink);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  border-radius: 0;
+}
+.explore-count { font-size: 12px; margin-left: auto; }
+.bucket-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+/* In der Kartenansicht bleibt nur die Karte: Importformular, Hintergrundjobs
+   und die Tabelle sind dann Rauschen, das die Karte unter den Falz drückt.
+   !important, weil einzelne dieser Blöcke ihr display als style-Attribut
+   tragen — und inline schlägt sonst jede Klasse. */
+body.explore-karte .explore-liste-only { display: none !important; }
+
 /* ===================== Phase 4: Karte ===================== */
-.view-toggle { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; }
-.view-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-#custMap {
+#custMap, #objMap {
   height: 68vh; min-height: 420px;
   border: 1px solid var(--border); border-radius: var(--radius);
   /* die Karte liegt UNTER Drawer und Backdrop — Leaflet-Panes bringen eigene
@@ -1114,6 +1152,12 @@ body.nav-collapsed .nav-badge {
 .dot-kunde { background: #1c7c3c; }
 .dot-architekt { background: #8a5220; }
 .dot-interessent { background: #4f5ce5; }
+/* Projektkarte: die Farbe sagt den AUSGANG. Bewusst dieselben Grün-/Rot-Töne
+   wie die Status-Chips in der Tabelle (--ok / --danger), damit „grün" auf der
+   Karte und „gewonnen" in der Liste dasselbe heißen. */
+.dot-gewonnen { background: #0e9f6e; }
+.dot-offen { background: #4f5ce5; }
+.dot-verloren { background: #d92d20; }
 
 /* ===================== Phase 5: Warteschlangen-Tastatur + Aktivität ===================== */
 /* fokussierte Zeile in Entscheidungen: klarer Rand, kein Farbrausch */

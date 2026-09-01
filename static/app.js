@@ -805,13 +805,12 @@
         <div class="kpi-value">${esc(String(c.value))}</div>
         <div class="kpi-hint">${esc(c.hint)}</div>
       </button>`).join("");
-    // showTab lebt in wireStatic() und ist hier nicht erreichbar — der Klick
-    // auf den Nav-Button nimmt denselben Weg wie ein echter Klick des Nutzers
-    // (Listener setzt localStorage und ruft showTab).
-    $$("#heuteCards [data-goto]").forEach(b => b.addEventListener("click", () => {
-      const tab = $$(".tab").find(t => t.dataset.tab === b.dataset.goto);
-      if (tab) tab.click();
-    }));
+    // showTab lebt in wireStatic() und ist hier nicht erreichbar — gotoTab
+    // klickt den Nav-Button und nimmt damit denselben Weg wie ein echter Klick
+    // des Nutzers (Listener setzt localStorage und ruft showTab). Über gotoTab
+    // statt direkt, damit "customers"/"objekte" mit übersetzt werden.
+    $$("#heuteCards [data-goto]").forEach(b =>
+      b.addEventListener("click", () => gotoTab(b.dataset.goto)));
   }
 
   function setPruefenBadge(n) {
@@ -831,7 +830,21 @@
 
   // Kartenklick-Trick von Heute: der echte Nav-Button wird geklickt, damit
   // localStorage + showTab denselben Weg nehmen wie ein Klick des Nutzers.
+  //
+  // "customers" und "objekte" sind keine Tabs mehr, sondern Bereiche des
+  // Explorers. Sie werden hier übersetzt statt an jeder der sechs Aufrufstellen
+  // — und weil ein alter localStorage-Eintrag oder ein geteilter Link denselben
+  // Namen tragen kann, muss die Übersetzung ohnehin an einer Stelle stehen.
+  const EXPLORE_ALIAS = { customers: "firmen", objekte: "projekte" };
   function gotoTab(name) {
+    const bereich = EXPLORE_ALIAS[name];
+    if (bereich) {
+      EXPLORE.bereich = bereich;
+      // Wer aus „Lauf über Firmen starten" kommt, will die Tabelle mit ihren
+      // Auswahlkästchen sehen, nicht die Karte.
+      EXPLORE.ansicht = "liste";
+      name = "explore";
+    }
     const b = $$(".tab").find(t => t.dataset.tab === name);
     if (b) b.click();
   }
@@ -1289,15 +1302,47 @@
     if (!custMap) return;
     const b = custMap.getBounds();
     const n = custMapPins.reduce((a, p) => a + (b.contains([p.lat, p.lng]) ? 1 : 0), 0);
-    $("#custMapCount").textContent =
+    $("#exploreCount").textContent =
       `Im Kartenausschnitt: ${n.toLocaleString("de-DE")} von ${custMapPins.length.toLocaleString("de-DE")} Firmen`;
   }
 
-  async function loadCustMapPins() {
-    $("#custMapCount").textContent = "Lade Pins…";
+  // Beim Öffnen der Kartenansicht stoßen ZWEI Wege denselben Abruf an: das
+  // Umschalten selbst und die Tabelle, die nach dem Laden die Karte nachzieht.
+  // Gemessen: zwei identische POSTs à 3,9 s hintereinander.
+  //
+  // Dedupliziert wird deshalb über den FILTER, nicht über „läuft gerade
+  // etwas" — die beiden Aufrufe kamen nacheinander, nicht gleichzeitig. Ein
+  // echter Filterwechsel hat einen anderen Schlüssel und lädt sofort neu;
+  // zweimal derselbe Filter liefert zweimal dasselbe und wird übersprungen.
+  //
+  // Preis dieser Entscheidung, offen gesagt: ändert sich ein Firmentyp im
+  // Hintergrund (z. B. nach einem Lauf), ohne dass der Filter sich bewegt,
+  // bleibt die Pin-Farbe bis zum nächsten Filterwechsel oder Neuladen stehen.
+  // Position und Name ändern sich dabei nicht, deshalb ist das der günstigere
+  // Fehler als 4 Sekunden Wartezeit bei jedem Umschalten.
+  let custPinsKey = null, custPinsLauf = null, custPinsSeq = 0;
+
+  function loadCustMapPins() {
+    const filters = currentCustomerFilters();
+    const key = JSON.stringify(filters);
+    if (custPinsKey === key && (custPinsLauf || custMapPins.length))
+      return custPinsLauf || Promise.resolve();
+    custPinsKey = key;
+    custPinsLauf = _ladeCustMapPins(filters).finally(() => { custPinsLauf = null; });
+    return custPinsLauf;
+  }
+
+  async function _ladeCustMapPins(filters) {
+    const seq = ++custPinsSeq;
+    $("#exploreCount").textContent = "Lade Pins…";
     let d;
-    try { d = await api("/api/map/pins", "POST", { filters: currentCustomerFilters() }); }
-    catch (e) { $("#custMapCount").textContent = `Fehler: ${e.message}`; return; }
+    try { d = await api("/api/map/pins", "POST", { filters }); }
+    catch (e) { $("#exploreCount").textContent = `Fehler: ${e.message}`; return; }
+    // Eine überholte Antwort darf die Ebene nicht mehr anfassen. addLayers()
+    // füllt bei chunkedLoading häppchenweise WEITER, auch nachdem ein späterer
+    // Lauf clearLayers() gerufen hat — beim Test stand deshalb kurz „76.128 von
+    // 42.683" im Cluster, mehr Punkte als es Firmen gibt.
+    if (seq !== custPinsSeq) return;
     custMapPins = d.pins;
     custClusters.clearLayers();
     custClusters.addLayers(d.pins.map(p => {
@@ -1324,7 +1369,7 @@
 
   async function showCustMap() {
     if (typeof L === "undefined") {
-      $("#custMapCount").textContent = "Kartenbibliothek nicht geladen (static/vendor fehlt?)";
+      $("#exploreCount").textContent = "Kartenbibliothek nicht geladen (static/vendor fehlt?)";
       return;
     }
     if (!custMap) {
@@ -1378,14 +1423,161 @@
   setInterval(pollActivity, 30000);
   pollActivity();
 
-  $$("#custViewToggle .view-btn").forEach(b => b.addEventListener("click", async () => {
-    $$("#custViewToggle .view-btn").forEach(x => x.classList.toggle("active", x === b));
-    const karte = b.dataset.view === "karte";
-    $("#custMapWrap").classList.toggle("hidden", !karte);
-    $("#customersTable")?.closest(".table-wrap")?.classList.toggle("hidden", karte);
-    $("#custScrollSentinel")?.classList.toggle("hidden", karte);
-    if (karte) await showCustMap();
-    else $("#custMapCount").textContent = "";
+  // ================= KARTE (Projekte: Baustellen) =================
+  // Zweite Karte, absichtlich getrennt von der Firmenkarte: sie zeigt eine
+  // andere Adresse (die Baustelle statt des Firmensitzes) und eine andere
+  // Farbdeutung (Ausgang statt Firmentyp). Ein gemeinsamer Layer müsste beides
+  // gleichzeitig behaupten.
+  let objMap = null, objClusters = null, objMapPins = [];
+  const OBJ_TYPE_COLOR = { gewonnen: "#0e9f6e", offen: "#4f5ce5", verloren: "#d92d20" };
+
+  // Genau der Filter, den auch die Projektliste schickt — inklusive der
+  // Spaltenmenü-Parameter. Eine zweite Zusammenstellung hier wäre die zweite
+  // Filtersprache, die der Server gerade vermeidet.
+  function objekteQuery() {
+    const st = $("#objekteStatus").value;
+    const [lo, hi] = String($("#objekteVcs").value).split("-");
+    return `min_members=${lo}` + (hi ? `&max_members=${hi}` : "")
+      + (st ? `&status=${st}` : "") + serverParamQuery("objekteWrap");
+  }
+
+  function updateObjMapCount(ohne) {
+    if (!objMap) return;
+    const b = objMap.getBounds();
+    const n = objMapPins.reduce((a, p) => a + (b.contains([p.lat, p.lng]) ? 1 : 0), 0);
+    // `ohne` wird beim Laden gemerkt: Objekte ohne Bauadresse existieren, sind
+    // aber unsichtbar. Sie ungesagt zu lassen hieße, die Karte für vollständig
+    // auszugeben — dieselbe stille Kappung, die geo.pins schon einmal hatte.
+    if (ohne != null) objMap._ohne = ohne;
+    const rest = objMap._ohne
+      ? ` · ${objMap._ohne.toLocaleString("de-DE")} ohne Bauadresse`
+      : "";
+    $("#exploreCount").textContent =
+      `Im Kartenausschnitt: ${n.toLocaleString("de-DE")} von `
+      + `${objMapPins.length.toLocaleString("de-DE")} Objekten${rest}`;
+  }
+
+  // Gleiche Dopplung wie bei den Firmen, gleicher Riegel: Schlüssel ist hier
+  // der Query-String, denn genau er beschreibt den Filter vollständig.
+  let objPinsKey = null, objPinsLauf = null, objPinsSeq = 0;
+
+  function loadObjMapPins() {
+    const query = objekteQuery();
+    if (objPinsKey === query && (objPinsLauf || objMapPins.length))
+      return objPinsLauf || Promise.resolve();
+    objPinsKey = query;
+    objPinsLauf = _ladeObjMapPins(query).finally(() => { objPinsLauf = null; });
+    return objPinsLauf;
+  }
+
+  async function _ladeObjMapPins(query) {
+    const seq = ++objPinsSeq;
+    $("#exploreCount").textContent = "Lade Pins…";
+    let d;
+    try { d = await api(`/api/map/projekt-pins?${query}`); }
+    catch (e) { $("#exploreCount").textContent = `Fehler: ${e.message}`; return; }
+    if (seq !== objPinsSeq) return;   // überholt — siehe _ladeCustMapPins
+    objMapPins = d.pins;
+    objClusters.clearLayers();
+    objClusters.addLayers(d.pins.map(p => {
+      const m = L.circleMarker([p.lat, p.lng], {
+        radius: 6, weight: 1.5, color: "#fff",
+        fillColor: OBJ_TYPE_COLOR[p.typ] || "#64708a",
+        fillOpacity: 0.85,
+      });
+      m.bindPopup(`<b>${esc(p.name)}</b><br>${esc(p.city || "")}<br>`
+        + `<span style="color:#64708a">${esc(p.typ)} · ${p.members} `
+        + `Verkaufschance${p.members === 1 ? "" : "n"}`
+        + `${p.value ? " · " + eur(p.value) : ""}</span><br>`
+        + `<a href="#" data-projekt="${esc(p.id)}">Objektakte öffnen →</a>`);
+      // Der Link hat kein Ziel wie #/firma/123 — für Objekte gibt es keinen
+      // Deep-Link — also öffnet der Klick die Schublade direkt.
+      m.on("popupopen", (e) => {
+        const a = e.popup.getElement()?.querySelector("a[data-projekt]");
+        if (a) a.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          openProjektDrawer(a.dataset.projekt);
+        });
+      });
+      return m;
+    }));
+    if (d.pins.length)
+      objMap.fitBounds(L.latLngBounds(d.pins.map(p => [p.lat, p.lng])).pad(0.08));
+    updateObjMapCount(d.ohne_koordinate);
+  }
+
+  async function showObjMap() {
+    if (typeof L === "undefined") {
+      $("#exploreCount").textContent = "Kartenbibliothek nicht geladen (static/vendor fehlt?)";
+      return;
+    }
+    if (!objMap) {
+      objMap = L.map("objMap", {
+        preferCanvas: true, minZoom: 2,
+        maxBounds: [[-85, -180], [85, 180]], maxBoundsViscosity: 1.0,
+      }).setView([49.5, 8.0], 5);
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende',
+        maxZoom: 19, noWrap: true, bounds: [[-85, -180], [85, 180]],
+      }).addTo(objMap);
+      objClusters = L.markerClusterGroup({ chunkedLoading: true });
+      objMap.addLayer(objClusters);
+      objMap.on("moveend zoomend", () => updateObjMapCount());
+      window._objMap = objMap;
+    }
+    setTimeout(() => objMap.invalidateSize(), 0);
+    await loadObjMapPins();
+  }
+
+  function objMapSichtbar() {
+    return objMap && !$("#objMapWrap").classList.contains("hidden");
+  }
+
+  // ================= EXPLORER: Karte|Liste × Firmen|Projekte ==============
+  // Firmen und Projekte sind zwei Panels geblieben (#tab-customers,
+  // #tab-objekte) — sie tragen viel Verdrahtung, die ein Umbau nur riskiert
+  // hätte. Neu ist, dass sie EIN Tab sind: welches Panel gilt, entscheidet
+  // hier der Zustand, nicht mehr die Seitenleiste.
+  const EXPLORE = { ansicht: "karte", bereich: "firmen" };
+  try {
+    const g = JSON.parse(localStorage.getItem("adwatch.explore") || "{}");
+    if (g.ansicht === "liste" || g.ansicht === "karte") EXPLORE.ansicht = g.ansicht;
+    if (g.bereich === "firmen" || g.bereich === "projekte") EXPLORE.bereich = g.bereich;
+  } catch { /* private mode */ }
+
+  async function applyExplore() {
+    const karte = EXPLORE.ansicht === "karte";
+    const firmen = EXPLORE.bereich === "firmen";
+    $$("#exploreAnsicht button").forEach(b =>
+      b.classList.toggle("active", b.dataset.ansicht === EXPLORE.ansicht));
+    $$("#exploreBereich button").forEach(b =>
+      b.classList.toggle("active", b.dataset.bereich === EXPLORE.bereich));
+    document.body.classList.toggle("explore-karte", karte);
+    $("#tab-customers").classList.toggle("active", firmen);
+    $("#tab-objekte").classList.toggle("active", !firmen);
+    $("#custMapWrap").classList.toggle("hidden", !(karte && firmen));
+    $("#objMapWrap").classList.toggle("hidden", !(karte && !firmen));
+    $("#exploreCount").textContent = "";
+    try { localStorage.setItem("adwatch.explore", JSON.stringify(EXPLORE)); }
+    catch { /* private mode */ }
+    // Erst den Bestand, dann die Karte — und zwar mit await: die Karte darf
+    // nicht mit einem Filter losziehen, den die Tabelle gleich noch ändert.
+    if (firmen) {
+      await ensureCustomersLoaded();
+      if (karte) await showCustMap();
+    } else {
+      await ensureObjekteLoaded();
+      if (karte) await showObjMap();
+    }
+  }
+
+  $$("#exploreAnsicht button").forEach(b => b.addEventListener("click", () => {
+    EXPLORE.ansicht = b.dataset.ansicht;
+    applyExplore();
+  }));
+  $$("#exploreBereich button").forEach(b => b.addEventListener("click", () => {
+    EXPLORE.bereich = b.dataset.bereich;
+    applyExplore();
   }));
 
   // ================= CHATBOT ==============================================
@@ -2165,14 +2357,18 @@
       const btn = $$(".tab").find(t => t.dataset.tab === name);
       if (!btn) return;
       $$(".tab").forEach(t => t.classList.toggle("active", t === btn));
+      // Der Explorer hat kein eigenes Panel, sondern zwei — welches gilt,
+      // sagt EXPLORE.bereich. Deshalb deaktiviert diese Zeile für "explore"
+      // erst alles, und applyExplore() schaltet das richtige wieder an.
       $$(".tab-panel").forEach(p => p.classList.toggle("active", p.id === `tab-${name}`));
+      $("#exploreBar").classList.toggle("hidden", name !== "explore");
+      if (name !== "explore") document.body.classList.remove("explore-karte");
+      if (name === "explore") { applyExplore(); return; }
       if (name === "dashboard") loadHeute();   // Karten beim Rückwechsel auffrischen
       if (name === "pipeline") ensurePipelineLoaded();
       if (name === "listen") ensureListenLoaded();
-      if (name === "customers") ensureCustomersLoaded();
       if (name === "chancen") ensureChancenLoaded();
       if (name === "pruefen") ensurePruefenLoaded();
-      if (name === "objekte") ensureObjekteLoaded();
       if (name === "profil") { ensureProfilesLoaded(); loadIcpStatus(); }
       if (name === "reports") {
         // If a Companies filter is active, default the report to use it — so
@@ -2197,9 +2393,18 @@
     $$(".settings-save-btn").forEach(b => b.addEventListener("click", saveSettings));
 
     // restore the last-open tab after a refresh (default: dashboard) — AFTER
-    // the wire* calls above, since showTab("customers") loads the table, which
-    // reads the filter dropdowns that wireCustomers() mounts
-    const savedTab = localStorage.getItem("adwatch.activeTab");
+    // the wire* calls above, since showTab("explore") loads the table, which
+    // reads the filter dropdowns that wireCustomers() mounts.
+    //
+    // Ein gespeichertes "customers"/"objekte" stammt aus der Zeit vor dem
+    // Explorer. Übersetzt statt ignoriert: sonst landet jeder, der zuletzt in
+    // Firmen war, nach dem Update kommentarlos auf „Heute".
+    let savedTab = localStorage.getItem("adwatch.activeTab");
+    if (EXPLORE_ALIAS[savedTab]) {
+      EXPLORE.bereich = EXPLORE_ALIAS[savedTab];
+      savedTab = "explore";
+      localStorage.setItem("adwatch.activeTab", savedTab);
+    }
     if (savedTab && savedTab !== "dashboard") showTab(savedTab);
 
     // Deep-Link beim Start: eine geteilte #/firma/123-URL öffnet das Dossier
@@ -2559,11 +2764,12 @@
     $("#saveReportSchedule").checked = def ? def.schedule_enabled : false;
     $("#saveReportDay").value = def ? def.schedule_day : 0;
     $("#saveReportTime").value = def ? def.schedule_time : "07:00";
-    // the panel lives in the Companies (customers) tab — make sure it's showing
-    // (matters when editing from the Reports tab). Clicking the tab button reuses
-    // the app's own tab-switch logic.
-    const custTab = $$(".tab").find(t => t.dataset.tab === "customers");
-    if (custTab && !custTab.classList.contains("active")) custTab.click();
+    // Das Panel wohnt im Firmen-Bereich des Explorers — dorthin schalten
+    // (relevant beim Bearbeiten aus dem Berichte-Tab). Und zwar in die LISTE:
+    // in der Kartenansicht ist der Bereich ausgeblendet, das Panel wäre
+    // aufgeklappt und unsichtbar.
+    if (!$("#tab-customers").classList.contains("active")
+        || EXPLORE.ansicht !== "liste") gotoTab("customers");
     hideCompanyPanels();
     const p = $("#saveReportPanel");
     p.classList.remove("hidden");
@@ -3010,6 +3216,11 @@
         }
       }));
 
+    // Der Filter gilt für beide Darstellungen. Ohne das hier zeigte die Karte
+    // weiter die Pins des vorigen Filters, während die KPIs darüber schon die
+    // neue Auswahl zählten — zwei Wahrheiten auf einem Bildschirm.
+    if (objMapSichtbar()) loadObjMapPins();
+
     const rows = data.rows || [];
     if (!rows.length) {
       wrap.innerHTML = `<p class="muted" style="padding:12px">Keine Projekte für diesen Filter.</p>`;
@@ -3236,10 +3447,14 @@
     btn.disabled = false;
   }
 
+  // Gibt wie ensureCustomersLoaded() ein Versprechen zurück — die Projektkarte
+  // wartet darauf, damit nicht Liste und Karte getrennt losziehen.
+  let objekteBereit = null;
   function ensureObjekteLoaded() {
-    if (objekteLoaded) return;
+    if (objekteLoaded) return objekteBereit || Promise.resolve();
     objekteLoaded = true;
-    loadObjekte();
+    objekteBereit = loadObjekte();
+    return objekteBereit;
   }
 
   function wireObjekte() {
@@ -3607,6 +3822,10 @@
   // ------------------------------------------------------------------ Companies tab (Explorer)
   const CUST = {
     loaded: false,
+    // Versprechen aus ensureCustomersLoaded(): hält, wenn Optionen geladen,
+    // Standardfilter gesetzt und die erste Seite da ist. Die Karte wartet
+    // darauf, damit sie denselben Filter schickt wie die Tabelle.
+    bereit: null,
     filters: {},
     sort: "name",
     direction: "asc",
@@ -3994,16 +4213,22 @@
     if (wanted.length) CUST_DROP.excludeSegment.setSelected(wanted);
   }
 
+  // Gibt ein Versprechen zurück, das hält, wenn der FILTER endgültig steht.
+  // Das ist wichtiger, als es aussieht: applyDefaultExclusion() setzt „Private
+  // Endkunden ausgeschlossen" erst, nachdem die Optionen geladen sind. Wer die
+  // Karte vorher öffnete, schickte einen anderen Filter los als die Tabelle
+  // eine Sekunde später — zwei Abrufe, und der erste mit der falschen Frage.
   function ensureCustomersLoaded() {
-    if (CUST.loaded) return;
+    if (CUST.loaded) return CUST.bereit || Promise.resolve();
     CUST.loaded = true;
-    loadCustomerFilterOptions().then(() => {
+    CUST.bereit = loadCustomerFilterOptions().then(() => {
       applyDefaultExclusion();          // options must exist before they can be checked
-      loadCustomers();
+      return loadCustomers();
     });
     loadJobs().then(jobs => {
       if (jobs.some(j => j.status === "running" || j.status === "queued")) startJobPolling();
     });
+    return CUST.bereit;
   }
 
   // distinct filter values, cached for the column-header menus

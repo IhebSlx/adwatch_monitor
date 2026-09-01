@@ -657,6 +657,19 @@ class CrmOpportunity(Base):
     quoted_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     quoted_count: Mapped[int] = mapped_column(Integer, default=0)
     sap_order_numbers: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # ---- Koordinate der BAUSTELLE, für die Karte ----------------------------
+    # Dieselbe PLZ-Zentroid-Logik wie bei den Firmen (geo.py), aber auf einer
+    # anderen Adresse: `street`/`city`/`postal_code` oben sind der Projektort,
+    # nicht der Firmensitz. Genau deshalb lohnt die zweite Karte — ein Händler
+    # in Osnabrück verbaut Glas in München, und nur die Projektkarte zeigt das.
+    #
+    # Das Land steht in der Verkaufschance NICHT drin (0 von 57.776 gefüllt),
+    # es wird in geo.assign_project_centroids() erschlossen. Gemessen: 36.905
+    # von 38.895 primären VCs mit PLZ bekommen so eine Koordinate (94,9 %).
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    geocode_precision: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    geocode_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
 
 
 class PlzGeo(Base):

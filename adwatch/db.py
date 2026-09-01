@@ -342,7 +342,12 @@ def _migrate(engine) -> None:
                               ("invoiced_value", "FLOAT"), ("invoiced_count", "INTEGER DEFAULT 0"),
                               ("quoted_value", "FLOAT"), ("quoted_count", "INTEGER DEFAULT 0"),
                               ("sap_order_numbers", "JSON"),
-                              ("street", "VARCHAR(200)")]:
+                              ("street", "VARCHAR(200)"),
+                              # Koordinate der Baustelle (Projektkarte) — additiv,
+                              # NULL heißt "noch nicht geokodiert"
+                              ("lat", "FLOAT"), ("lng", "FLOAT"),
+                              ("geocode_precision", "VARCHAR(12)"),
+                              ("geocode_country", "VARCHAR(2)")]:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE crm_opportunities ADD COLUMN {name} {ddl}"))
         # companies: Karten-Koordinaten (PLZ-Zentroid / Nominatim / manuell) —

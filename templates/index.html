@@ -52,13 +52,15 @@
       </button>
 
       <div class="nav-group">Daten</div>
-      <button class="tab" data-tab="customers" data-label="Firmen">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4v18"/><path d="M19 21V11l-7-4"/><path d="M9 9v.01M9 12v.01M9 15v.01M9 18v.01"/></svg>
-        Firmen
-      </button>
-      <button class="tab" data-tab="objekte" data-label="Projekte">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M6 21V8l6-5 6 5v13"/><path d="M10 21v-6h4v6"/></svg>
-        Projekte
+      <!-- Ein Eingang für den Bestand. Firmen und Projekte waren zwei Tabs,
+           obwohl es dieselbe Frage aus zwei Richtungen ist: WER baut (Firma)
+           und WO wird gebaut (Objekt). Die Wahl trifft man jetzt drinnen —
+           Karte|Liste oben, Firmen|Projekte darunter. Die Panels heißen
+           weiterhin #tab-customers und #tab-objekte; sie sind Ansichten
+           desselben Tabs geworden, nicht zwei Tabs. -->
+      <button class="tab" data-tab="explore" data-label="Explorer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6M8 11h6"/></svg>
+        Explorer
       </button>
 
       <div class="nav-group">Erkenntnisse</div>
@@ -119,6 +121,26 @@
   <main>
     <div id="noDataNotice" class="notice hidden">
       Noch keine Anzeigen-Daten — links auf <b>Anzeigen abrufen</b> klicken.
+    </div>
+
+    <!-- ================= EXPLORER: Umschalter ==========================
+         Steht ABSICHTLICH außerhalb der beiden Panels: Firmen (#tab-customers)
+         und Projekte (#tab-objekte) sind im Dokument weit voneinander entfernt,
+         und eine Leiste, die in beiden dupliziert wäre, würde irgendwann
+         auseinanderlaufen. Sichtbar nur, solange der Explorer offen ist.
+
+         Zwei Ebenen, in dieser Reihenfolge: erst WIE (Karte oder Liste),
+         dann WAS (Firmen oder Projekte). Start ist Karte/Firmen. -->
+    <div id="exploreBar" class="explore-bar hidden">
+      <div class="segmented" id="exploreAnsicht" role="tablist" aria-label="Darstellung">
+        <button type="button" data-ansicht="karte" class="active">🗺 Karte</button>
+        <button type="button" data-ansicht="liste">☰ Liste</button>
+      </div>
+      <div class="segmented segmented-sub" id="exploreBereich" role="tablist" aria-label="Bestand">
+        <button type="button" data-bereich="firmen" class="active">Firmen</button>
+        <button type="button" data-bereich="projekte">Projekte</button>
+      </div>
+      <span id="exploreCount" class="muted explore-count"></span>
     </div>
 
     <!-- ================= TAB: Dashboard ================= -->
@@ -273,9 +295,10 @@
     <section id="tab-customers" class="tab-panel">
       <header class="page-head">
         <h1>Firmen</h1>
-        <p>Alles an einem Ort — Stammdaten, Identitätsprüfung, Anzeigen-Abruf. Zeile anklicken für Details; Zeilen auswählen für eine Aktion.</p>
+        <p><b>Wer</b> baut — Stammdaten, Identitätsprüfung, Anzeigen-Abruf. Der Pin sitzt am
+          Firmensitz. Zeile anklicken für Details; Zeilen auswählen für eine Aktion.</p>
       </header>
-      <div class="card">
+      <div class="card explore-liste-only">
         <h2>Firmen hinzufügen</h2>
         <div class="add-company-row">
           <form id="addCompanyForm" class="inline-form" style="flex:1;min-width:260px">
@@ -512,15 +535,11 @@
           </div>
         </div>
 
-        <!-- Liste | Karte: dieselben Firmen, derselbe Filter — nur die Darstellung
-             wechselt. Die Karte lädt Leaflet erst beim ersten Umschalten (lazy)
-             und holt ihre Pins über POST /api/map/pins mit dem AKTUELLEN
+        <!-- Karte | Liste: dieselben Firmen, derselbe Filter — nur die Darstellung
+             wechselt. Umgeschaltet wird oben in #exploreBar; hier liegt nur noch
+             der Kartencontainer. Leaflet lädt erst beim ersten Umschalten (lazy)
+             und holt seine Pins über POST /api/map/pins mit dem AKTUELLEN
              Explorer-Filter. Private Endkunden erscheinen nie (scope, Server). -->
-        <div class="view-toggle" id="custViewToggle">
-          <button class="btn btn-sm view-btn active" data-view="liste">☰ Liste</button>
-          <button class="btn btn-sm view-btn" data-view="karte">🗺 Karte</button>
-          <span id="custMapCount" class="muted" style="margin-left:10px"></span>
-        </div>
         <div id="custMapWrap" class="hidden">
           <div id="custMap"></div>
           <div class="map-legend">
@@ -530,7 +549,7 @@
             <span class="muted">Pin-Position = PLZ-Zentroid (stadtgenau)</span>
           </div>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap explore-liste-only">
           <table id="customersTable" class="sortable">
             <thead><tr>
               <th class="col-selhead">
@@ -568,11 +587,11 @@
             <tbody id="customersTableBody"></tbody>
           </table>
         </div>
-        <p class="hint" id="customersEmptyHint">Noch keine Firmen — oben eine Datei importieren oder von Hand anlegen.</p>
-        <div id="custScrollSentinel" class="scroll-sentinel"><span id="custPageInfo" class="muted"></span></div>
+        <p class="hint explore-liste-only" id="customersEmptyHint">Noch keine Firmen — oben eine Datei importieren oder von Hand anlegen.</p>
+        <div id="custScrollSentinel" class="scroll-sentinel explore-liste-only"><span id="custPageInfo" class="muted"></span></div>
       </div>
 
-      <div class="card">
+      <div class="card explore-liste-only">
         <h2>Background jobs</h2>
         <p class="hint">Identity checks and ad lookups both run here, one company at a time — progress is
           saved after every step, so a job survives an app restart (it's marked "interrupted" → hit Resume)
@@ -650,9 +669,11 @@
     <section id="tab-objekte" class="tab-panel">
       <header class="page-head">
         <h1>Projekte — Bauvorhaben (Objekte) mit mehreren Verkaufschancen</h1>
-        <p>Mehrere Verkaufschancen gehören oft zu <b>einem</b> Objekt. <b>Ein Gewinn macht das
-          Projekt gewonnen</b> — Geschwister-VCs, die als „Zugehörige VC gewonnen“ geschlossen
-          wurden, sind keine Verluste.</p>
+        <p><b>Wo</b> gebaut wird. Mehrere Verkaufschancen gehören oft zu <b>einem</b> Objekt.
+          <b>Ein Gewinn macht das Projekt gewonnen</b> — Geschwister-VCs, die als
+          „Zugehörige VC gewonnen“ geschlossen wurden, sind keine Verluste. Der Pin sitzt an der
+          <b>Baustelle</b>, nicht am Firmensitz — deshalb steht der Punkt eines Osnabrücker
+          Händlers hier in München, wenn er dort verbaut hat.</p>
       </header>
       <div id="objekteKpis" class="kpi-row"></div>
       <div class="card">
@@ -678,10 +699,29 @@
           </label>
           <button class="btn" id="objekteReload" style="margin-left:auto">Aktualisieren</button>
         </div>
-        <p class="hint" style="margin:0 0 6px">Gewinnrate nach Anzahl Verkaufschancen am Objekt —
-          über <b>alle</b> Objekte, unabhängig vom Filter. Klick setzt den Filter.</p>
-        <div id="objekteBuckets" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"></div>
-        <div id="objekteWrap" class="table-wrap">
+        <p class="hint explore-liste-only" style="margin:0 0 6px">Gewinnrate nach Anzahl
+          Verkaufschancen am Objekt — über <b>alle</b> Objekte, unabhängig vom Filter.
+          Klick setzt den Filter.</p>
+        <!-- display:flex stand hier als style-Attribut. Inline schlägt Klasse:
+             die Zeile blieb in der Kartenansicht sichtbar, während der Hinweis
+             darüber verschwand. Layout gehört ins Stylesheet (.bucket-row). -->
+        <div id="objekteBuckets" class="bucket-row explore-liste-only"></div>
+
+        <!-- Projektkarte. Eigener Leaflet-Container, eigene Pins: ein Objekt ist
+             kein CRM-Satz, sondern eine Gruppe von Verkaufschancen, und die
+             Koordinate kommt aus der PLZ der BAUADRESSE (geo.assign_project_
+             centroids). Die Farbe zeigt den Ausgang, nicht den Firmentyp. -->
+        <div id="objMapWrap" class="hidden">
+          <div id="objMap"></div>
+          <div class="map-legend">
+            <span><i class="map-dot dot-gewonnen"></i> gewonnen</span>
+            <span><i class="map-dot dot-offen"></i> offen</span>
+            <span><i class="map-dot dot-verloren"></i> verloren</span>
+            <span class="muted">Pin-Position = PLZ-Zentroid der Bauadresse (stadtgenau)</span>
+          </div>
+        </div>
+
+        <div id="objekteWrap" class="table-wrap explore-liste-only">
           <p class="muted" style="padding:12px">Wird geladen …</p>
         </div>
       </div>

@@ -562,6 +562,21 @@ def map_pins_route(payload: MapPinsIn = MapPinsIn()):
     return geo.pins(filters=payload.filters, country=payload.country)
 
 
+# --- Karte: Baustellen statt Firmensitze. Eigener Endpunkt, weil ein Objekt
+# --- eine andere Sache ist als eine Firma: es hat keinen eigenen CRM-Satz,
+# --- sondern ist eine Gruppe von Verkaufschancen, und seine Adresse ist die
+# --- Bauadresse. Der Filter ist derselbe wie in der Projektliste.
+@app.get("/api/map/projekt-pins")
+def map_projekt_pins_route(status: str | None = None, min_members: int = 1,
+                           max_members: int | None = None, q: str | None = None,
+                           min_value: float = 0.0,
+                           lost_reason: str | None = None):
+    from . import geo
+    return geo.project_pins(status=status, min_members=min_members,
+                            max_members=max_members, q=q,
+                            min_value=min_value, lost_reason=lost_reason)
+
+
 # --- IPP: Ideales Projekt-Profil + Triage der offenen Projekte -------------
 @app.get("/api/ipp")
 def ipp_profile_route(force: bool = False):

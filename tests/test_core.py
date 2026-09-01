@@ -4926,3 +4926,103 @@ def test_projektwert_ist_die_primaere_vc_nicht_die_summe(temp_db):
     # gar keine Werte -> None, nicht 0 (0 EUR und "unbekannt" sind verschieden)
     leer = CrmOpportunity(crm_id="1", opportunity_guid="P", project_id="P")
     assert _projekt_schaetzwert(leer, [leer]) is None
+
+
+def test_die_projektkarte_pinnt_die_baustelle_nicht_den_firmensitz(temp_db, monkeypatch):
+    """Ein Objekt gehört auf die Karte an die Adresse, an der gebaut wird.
+
+    Vier Dinge werden hier festgenagelt, weil jedes einzeln schon einmal
+    falsch war oder falsch sein könnte:
+
+    1. Nur die PRIMÄRE Verkaufschance bekommt einen Pin. Die Geschwister sind
+       Angebote an verschiedene Firmen für dasselbe Gebäude — ein Pin je VC
+       hieße acht Punkte auf einem Haus und eine Karte, die Wettbewerb um
+       EIN Projekt als acht Projekte zeigt.
+    2. Das Land steht in der Verkaufschance nicht drin (0 von 57.776 Zeilen
+       gefüllt). Es wird erschlossen: erst über die Firma, an der die Chance
+       hängt, sonst über das Format der PLZ. Geraten wird nie — ohne Treffer
+       in plz_geo bleibt das Objekt ohne Koordinate.
+    3. Eine genauere Koordinate ('street'/'manual') überschreibt der
+       Zentroid-Lauf nicht, genau wie bei den Firmen.
+    4. Liste und Karte filtern über DIESELBE Funktion. Die Summe aus Pins und
+       'ohne_koordinate' muss deshalb exakt der Gesamtzahl der Liste
+       entsprechen — sonst zeigt die Karte stillschweigend eine andere
+       Grundgesamtheit, als die Zahl darüber behauptet.
+    """
+    from adwatch import geo
+    from adwatch.insights import projekte
+    from adwatch.models import Company, CrmOpportunity, PlzGeo
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        PlzGeo(country="DE", plz="80331", lat=48.14, lng=11.57, place="Muenchen"),
+        PlzGeo(country="NL", plz="4812", lat=51.59, lng=4.78, place="Breda"),
+        PlzGeo(country="AT", plz="5020", lat=47.80, lng=13.04, place="Salzburg"),
+        # Der Haendler sitzt in Osnabrueck, baut aber in Muenchen: genau der
+        # Unterschied, den die zweite Karte sichtbar machen soll.
+        Company(crm_id="F-OS", name="Haendler Osnabrueck", country="DE",
+                postal_code="49074", segment="Handel"),
+    ])
+    s.commit()
+
+    # P1 Muenchen: primaere VC + zwei Geschwister an andere Firmen
+    rows = [CrmOpportunity(crm_id="P1-0", opportunity_guid="P1", project_id="P1",
+                           project_name="Neubau Muenchen", state="gewonnen",
+                           order_value=500000.0, parent_account_crm_id="F-OS",
+                           city="Muenchen", postal_code="80331")]
+    rows += [CrmOpportunity(crm_id=f"P1-{i}", opportunity_guid=f"G{i}",
+                            project_id="P1", state="verloren",
+                            city="Muenchen", postal_code="80331")
+             for i in (1, 2)]
+    # P2: keine Firma dahinter -> Land nur aus dem PLZ-Format ("4812 XN" = NL)
+    rows.append(CrmOpportunity(crm_id="P2-0", opportunity_guid="P2", project_id="P2",
+                               project_name="Breda", state="offen",
+                               city="Breda", postal_code="4812 XN"))
+    # P3: schon strassengenau -> der Zentroid-Lauf fasst es nicht an
+    rows.append(CrmOpportunity(crm_id="P3-0", opportunity_guid="P3", project_id="P3",
+                               project_name="Salzburg genau", state="offen",
+                               city="Salzburg", postal_code="5020",
+                               lat=47.11111, lng=13.11111,
+                               geocode_precision="street"))
+    # P4: PLZ, die in keiner plz_geo-Zeile steht -> bleibt ohne Koordinate
+    rows.append(CrmOpportunity(crm_id="P4-0", opportunity_guid="P4", project_id="P4",
+                               project_name="Nirgendwo", state="offen",
+                               city="?", postal_code="99999"))
+    s.add_all(rows)
+    s.commit()
+    s.close()
+
+    monkeypatch.setattr(geo, "SessionLocal", temp_db.SessionLocal)
+    monkeypatch.setattr(projekte, "SessionLocal", temp_db.SessionLocal)
+    projekte.invalidate_cache()
+
+    r = geo.assign_project_centroids()
+    assert r["projects"] == 4, "nur primaere VCs -- die zwei Geschwister zaehlen nicht mit"
+    assert r["geocoded"] == 2, "Muenchen ueber die Firma, Breda ueber das PLZ-Format"
+    assert r["kept_better"] == 1, "'street' wird nie durch einen Zentroid ersetzt"
+    assert r["no_match"] == 1, "99999 steht in keiner Zeile -- und wird nicht geraten"
+
+    s = temp_db.SessionLocal()
+    p1 = s.scalar(select(CrmOpportunity).where(CrmOpportunity.crm_id == "P1-0"))
+    assert (p1.lat, p1.geocode_country) == (48.14, "DE")
+    p2 = s.scalar(select(CrmOpportunity).where(CrmOpportunity.crm_id == "P2-0"))
+    assert (p2.lat, p2.geocode_country) == (51.59, "NL"), "'4812 XN' ist niederlaendisch"
+    assert s.scalar(select(CrmOpportunity.lat)
+                    .where(CrmOpportunity.crm_id == "P1-1")) is None, \
+        "Geschwister-VCs bekommen keinen eigenen Pin"
+    s.close()
+
+    projekte.invalidate_cache()
+    d = geo.project_pins()
+    assert {p["name"] for p in d["pins"]} == {"Neubau Muenchen", "Breda", "Salzburg genau"}
+    assert d["ohne_koordinate"] == 1, "das Objekt ohne Bauadresse wird GEZAEHLT, nicht verschwiegen"
+    muenchen = next(p for p in d["pins"] if p["name"] == "Neubau Muenchen")
+    assert muenchen["typ"] == "gewonnen" and muenchen["members"] == 3
+
+    # Liste und Karte muessen dieselbe Grundgesamtheit meinen -- in jedem Filter
+    for kw in ({}, {"status": "offen"}, {"min_members": 2}):
+        liste = projekte.list_projects(**kw)["total"]
+        karte = geo.project_pins(**kw)
+        assert liste == karte["total"] + karte["ohne_koordinate"], \
+            f"Liste und Karte filtern verschieden bei {kw}"

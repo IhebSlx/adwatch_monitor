@@ -144,6 +144,130 @@ def assign_plz_centroids() -> dict:
     return {"geocoded": hit, "no_match": miss, "kept_better": kept}
 
 
+# --- Projekte (Baustellen) --------------------------------------------------
+# Reihenfolge der Länder-Kandidaten, wenn die PLZ selbst keine Auskunft gibt.
+# Nicht alphabetisch, sondern nach Bestand: DE ist bei Solarlux der Normalfall,
+# alles andere die Ausnahme. Bei einer 5-stelligen PLZ, die es in DE und FR
+# gibt, ist DE damit die Antwort — was in 24.480 von 36.905 Fällen ohnehin
+# durch das Firmenland bestätigt wird.
+_PLZ_KANDIDATEN: list[tuple[re.Pattern, tuple[str, ...]]] = [
+    (re.compile(r"^\d{4}[A-Z]{2}$"), ("NL",)),
+    (re.compile(r"^\d{5}$"), ("DE", "FR", "ES", "IT")),
+    (re.compile(r"^\d{4}$"), ("AT", "DK", "CH", "BE", "NO")),
+    (re.compile(r"^[A-Z]{1,2}\d"), ("GB", "IE")),
+]
+
+
+def _laender_kandidaten(raw_plz: str, firmenland: str | None) -> list[str]:
+    """Welche Länder kommen für diese PLZ in Frage — bestes zuerst.
+
+    Die Verkaufschance nennt ihr Land nicht (`country` ist in ALLEN 57.776
+    Zeilen leer), also wird es erschlossen: zuerst das Land der Firma, an der
+    die Chance hängt — die baut fast immer im eigenen Markt —, danach das
+    Format der PLZ selbst. Geraten wird nie: passt keine Kombination auf eine
+    Zeile in `plz_geo`, bleibt das Projekt ohne Koordinate und damit von der
+    Karte weg."""
+    out: list[str] = []
+    if firmenland:
+        out.append(firmenland.strip().upper()[:2])
+    p = re.sub(r"[\s\-]", "", str(raw_plz)).upper()
+    for muster, laender in _PLZ_KANDIDATEN:
+        if muster.match(p):
+            out.extend(laender)
+            break
+    seen: set[str] = set()
+    return [x for x in out if not (x in seen or seen.add(x))]
+
+
+def assign_project_centroids() -> dict:
+    """Jedem Objekt (primäre Verkaufschance) eine Koordinate geben.
+
+    Geokodiert wird die PRIMÄRE Verkaufschance, denn sie *ist* das Objekt --
+    ihre Adresse ist die Bauadresse. Die Geschwister-VCs sind Angebote an
+    verschiedene Firmen für dasselbe Gebäude und bekommen bewusst keinen
+    eigenen Pin; sonst stünden am selben Haus acht Punkte übereinander.
+
+    Wie `assign_plz_centroids` re-runnbar und additiv: eine bereits gesetzte
+    'street'- oder 'manual'-Koordinate wird nie überschrieben."""
+    from .models import Company, CrmOpportunity
+
+    with SessionLocal() as s:
+        geo = {(g.country, g.plz): (g.lat, g.lng) for g in s.scalars(select(PlzGeo))}
+        land_der_firma = {
+            (c.crm_id or "").lower(): c.country
+            for c in s.execute(select(Company.crm_id, Company.country)
+                               .where(Company.crm_id.is_not(None))).all()}
+        rows = s.scalars(select(CrmOpportunity).where(
+            CrmOpportunity.opportunity_guid == CrmOpportunity.project_id,
+            CrmOpportunity.postal_code.is_not(None),
+            CrmOpportunity.postal_code != "")).all()
+
+        hit = miss = kept = 0
+        for o in rows:
+            if o.geocode_precision in ("street", "manual"):
+                kept += 1
+                continue
+            firmenland = land_der_firma.get((o.parent_account_crm_id or "").lower())
+            for cc in _laender_kandidaten(o.postal_code, firmenland):
+                pt = geo.get((cc, _norm_plz(cc, o.postal_code)))
+                if pt:
+                    o.lat, o.lng = pt
+                    o.geocode_precision = "plz"
+                    o.geocode_country = cc
+                    hit += 1
+                    break
+            else:
+                miss += 1
+        s.commit()
+    # Der Projekt-Cache hängt an einem Fingerabdruck aus Zeilenzahl und
+    # `synced_at` — beide bewegt eine Geokodierung nicht. Ohne diesen Aufruf
+    # zeigte die Karte bis zum nächsten Import 0 Pins, obwohl die Koordinaten
+    # in der Datenbank stünden.
+    from .insights import projekte
+    projekte.invalidate_cache()
+    return {"projects": len(rows), "geocoded": hit,
+            "no_match": miss, "kept_better": kept}
+
+
+def project_pins(status: str | None = None, min_members: int = 1,
+                 max_members: int | None = None, q: str | None = None,
+                 min_value: float = 0.0, lost_reason: str | None = None,
+                 limit: int = 60000) -> dict:
+    """Pins für die Projektkarte — dieselben Objekte wie die Projektliste.
+
+    Der Filter ist wörtlich derselbe (`projekte._kandidaten`), damit Liste und
+    Karte nicht auseinanderlaufen können; die Karte zeigt davon die Teilmenge
+    mit Koordinate. `ohne_koordinate` sagt, wie groß der Rest ist — eine Karte,
+    die 70 % zeigt und 100 % suggeriert, wäre die stille Kappung, die wir uns
+    an anderer Stelle schon eingefangen haben."""
+    from .insights import projekte
+
+    kandidaten = projekte.kandidaten(status=status, min_members=min_members,
+                                     max_members=max_members, q=q,
+                                     min_value=min_value, lost_reason=lost_reason)
+    out, ohne = [], 0
+    for rank, key, members, outcome in kandidaten:
+        primary = next((m for m in members
+                        if (m.opportunity_guid or "") == key), members[0])
+        if primary.lat is None or primary.lng is None:
+            ohne += 1
+            continue
+        if len(out) >= limit:
+            ohne += 1
+            continue
+        out.append({
+            "id": key,
+            "name": primary.project_name or primary.name or "(ohne Namen)",
+            "city": primary.city,
+            "lat": round(primary.lat, 5), "lng": round(primary.lng, 5),
+            "prec": primary.geocode_precision,
+            "typ": outcome,
+            "members": len(members),
+            "value": round(rank, 2) or None,
+        })
+    return {"pins": out, "total": len(out), "ohne_koordinate": ohne}
+
+
 def pins(filters: dict | None = None, country: str | None = None,
          limit: int = 60000) -> dict:
     # limit > Gesamtbestand (44.397 geokodiert, 2026-08) — eine Notbremse gegen
