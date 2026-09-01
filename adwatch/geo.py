@@ -24,6 +24,7 @@ import datetime as dt
 import io
 import logging
 import re
+import unicodedata
 import zipfile
 from collections import defaultdict
 from pathlib import Path
@@ -179,6 +180,50 @@ def _laender_kandidaten(raw_plz: str, firmenland: str | None) -> list[str]:
     return [x for x in out if not (x in seen or seen.add(x))]
 
 
+def _formatgruppe(raw_plz: str) -> frozenset[str]:
+    """Die Länder, die dieses PLZ-Format teilen — leer, wenn keines passt.
+
+    Vier Ziffern sehen in Österreich, Dänemark, der Schweiz, Belgien und
+    Norwegen gleich aus; fünf Ziffern in Deutschland, Frankreich, Spanien und
+    Italien. Innerhalb einer Gruppe sagen die Ziffern nichts, außerhalb sagen
+    sie alles."""
+    p = re.sub(r"[\s\-]", "", str(raw_plz)).upper()
+    for muster, laender in _PLZ_KANDIDATEN:
+        if muster.match(p):
+            return frozenset(laender)
+    return frozenset()
+
+
+def _ort_schluessel(s: str | None) -> str:
+    """Ortsname auf das Vergleichbare eindampfen: Kleinschreibung, Akzente und
+    alles Nicht-Buchstabliche weg. "København Ø" und "Kobenhavn" sollen sich
+    treffen, "Wien 12., Meidling" und "Wien" ebenfalls."""
+    s = unicodedata.normalize("NFKD", (s or "").lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"[^a-z]", "", s)
+
+
+def _land_per_ortsname(kandidaten: list[tuple[str, tuple]], stadt: str | None) -> str | None:
+    """Wenn dieselbe PLZ in mehreren Ländern existiert: entscheidet der ORT.
+
+    Eine 4-stellige PLZ gibt es in AT, DK, CH, BE und NO gleichermaßen — die
+    Ziffern allein können das nicht auflösen, und die Reihenfolge der Kandidaten
+    ist dann bloß eine Vermutung. Gemessen: 10.417 Objekte sind auf diese Weise
+    mehrdeutig, bei 7.506 macht der Ortsname sie eindeutig, und 132 Pins lagen
+    dadurch im falschen Land — ein Projekt in København stand in Österreich.
+    Das ist die Sorte Fehler, die eine ganze Karte unglaubwürdig macht.
+
+    Bleibt es mehrdeutig, wird NICHT geraten: der Aufrufer nimmt dann seine
+    Reihenfolge, und die ist wenigstens nachvollziehbar begründet."""
+    sn = _ort_schluessel(stadt)
+    if not sn:
+        return None
+    passend = [cc for cc, (_la, _ln, ort) in kandidaten
+               if (o := _ort_schluessel(ort))
+               and (o.startswith(sn[:6]) or sn.startswith(o[:6]))]
+    return passend[0] if len(passend) == 1 else None
+
+
 def assign_project_centroids() -> dict:
     """Jedem Objekt (primäre Verkaufschance) eine Koordinate geben.
 
@@ -192,7 +237,8 @@ def assign_project_centroids() -> dict:
     from .models import Company, CrmOpportunity
 
     with SessionLocal() as s:
-        geo = {(g.country, g.plz): (g.lat, g.lng) for g in s.scalars(select(PlzGeo))}
+        geo = {(g.country, g.plz): (g.lat, g.lng, g.place)
+               for g in s.scalars(select(PlzGeo))}
         land_der_firma = {
             (c.crm_id or "").lower(): c.country
             for c in s.execute(select(Company.crm_id, Company.country)
@@ -202,22 +248,57 @@ def assign_project_centroids() -> dict:
             CrmOpportunity.postal_code.is_not(None),
             CrmOpportunity.postal_code != "")).all()
 
-        hit = miss = kept = 0
+        hit = miss = kept = mehrdeutig = 0
         for o in rows:
             if o.geocode_precision in ("street", "manual"):
                 kept += 1
                 continue
             firmenland = land_der_firma.get((o.parent_account_crm_id or "").lower())
+            # ALLE passenden Länder sammeln statt beim ersten aufzuhören: erst
+            # wenn man sie nebeneinander hat, kann der Ortsname entscheiden.
+            treffer = []
             for cc in _laender_kandidaten(o.postal_code, firmenland):
                 pt = geo.get((cc, _norm_plz(cc, o.postal_code)))
                 if pt:
-                    o.lat, o.lng = pt
-                    o.geocode_precision = "plz"
-                    o.geocode_country = cc
-                    hit += 1
-                    break
-            else:
+                    treffer.append((cc, pt))
+            if not treffer:
                 miss += 1
+                continue
+            if len(treffer) > 1:
+                mehrdeutig += 1
+            ort_sagt = (_land_per_ortsname(treffer, o.city)
+                        if len(treffer) > 1 else None)
+            gewaehlt = ort_sagt or treffer[0][0]
+
+            # Wann darf das FORMAT das Firmenland überstimmen? Nur, wenn es
+            # wirklich etwas weiß. "CT15 6DZ" ist eine britische Postleitzahl,
+            # egal wo die Firma gemeldet ist — dort zu pinnen ist keine
+            # Vermutung, sondern eine Tatsache (2.088 solcher Fälle).
+            #
+            # Steht das Firmenland dagegen SELBST in der Formatgruppe und
+            # trifft trotzdem nicht, dann ist das Geschwisterland reine
+            # Vermutung: eine dänische Firma mit vertippter 4-stelliger PLZ
+            # landete so in Österreich, ein Projekt in Jakarta in Frankreich.
+            # 159 Fälle — sie fallen lieber unter "ohne Bauadresse", wo sie
+            # gezählt werden, als als stiller falscher Pin auf die Karte.
+            fl = (firmenland or "").strip().upper()[:2]
+            if fl and gewaehlt != fl and not ort_sagt \
+                    and fl in _formatgruppe(o.postal_code):
+                # Verwerfen heißt auch: eine FRÜHER geschriebene Zentroid-
+                # Koordinate wieder wegnehmen. Sonst überlebt der falsche Pin
+                # die Regel, die ihn verhindern soll — beim ersten Lauf stand
+                # das dänische Præstevangen danach weiter in Österreich.
+                if o.geocode_precision == "plz":
+                    o.lat = o.lng = o.geocode_country = None
+                    o.geocode_precision = None
+                miss += 1
+                continue
+
+            lat, lng, _ort = dict(treffer)[gewaehlt]
+            o.lat, o.lng = lat, lng
+            o.geocode_precision = "plz"
+            o.geocode_country = gewaehlt
+            hit += 1
         s.commit()
     # Der Projekt-Cache hängt an einem Fingerabdruck aus Zeilenzahl und
     # `synced_at` — beide bewegt eine Geokodierung nicht. Ohne diesen Aufruf
@@ -225,8 +306,8 @@ def assign_project_centroids() -> dict:
     # in der Datenbank stünden.
     from .insights import projekte
     projekte.invalidate_cache()
-    return {"projects": len(rows), "geocoded": hit,
-            "no_match": miss, "kept_better": kept}
+    return {"projects": len(rows), "geocoded": hit, "no_match": miss,
+            "kept_better": kept, "mehrdeutig": mehrdeutig}
 
 
 def project_pins(status: str | None = None, min_members: int = 1,

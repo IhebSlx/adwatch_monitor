@@ -5026,3 +5026,77 @@ def test_die_projektkarte_pinnt_die_baustelle_nicht_den_firmensitz(temp_db, monk
         karte = geo.project_pins(**kw)
         assert liste == karte["total"] + karte["ohne_koordinate"], \
             f"Liste und Karte filtern verschieden bei {kw}"
+
+
+def test_das_land_der_baustelle_wird_erschlossen_nie_geraten(temp_db, monkeypatch):
+    """Die Verkaufschance nennt ihr Land nicht -- also muss es hergeleitet
+    werden. Drei Regeln, jede aus einem echten Fehlpin entstanden:
+
+    1. Bei mehreren passenden Laendern entscheidet der ORTSNAME. Vier Ziffern
+       sehen in AT, DK, CH, BE und NO gleich aus; ohne diesen Schritt stand ein
+       Projekt in Kobenhavn in Oesterreich (132 solcher Pins).
+    2. Ausserhalb der Formatgruppe schlaegt das FORMAT das Firmenland. Eine
+       britische Postleitzahl ist britisch, auch wenn die Firma in Deutschland
+       gemeldet ist -- 2.088 Objekte haengen daran.
+    3. Innerhalb derselben Formatgruppe wird NICHT geraten. Trifft das
+       Firmenland nicht und bestaetigt der Ort nichts, faellt das Objekt unter
+       "ohne Bauadresse" -- und eine frueher geschriebene Koordinate wird dabei
+       wieder WEGGENOMMEN, sonst ueberlebt der falsche Pin die Regel, die ihn
+       verhindern soll.
+    """
+    from adwatch import geo
+    from adwatch.insights import projekte
+    from adwatch.models import Company, CrmOpportunity, PlzGeo
+    from sqlalchemy import select
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        # dieselben vier Ziffern in zwei Laendern -- nur der Ort trennt sie
+        PlzGeo(country="AT", plz="8280", lat=47.04, lng=16.05, place="Fuerstenfeld"),
+        PlzGeo(country="DK", plz="8280", lat=56.12, lng=10.14, place="Viby J"),
+        PlzGeo(country="GB", plz="CT15", lat=51.15, lng=1.30, place="Dover"),
+        PlzGeo(country="AT", plz="4711", lat=48.20, lng=13.50, place="Aurolzmuenster"),
+        Company(crm_id="F-DK", name="Daenische Bau A/S", country="DK"),
+        Company(crm_id="F-DE", name="Deutsche GmbH", country="DE"),
+    ])
+    s.add_all([
+        # 1. Ortsname entscheidet: Firma ohne Land, PLZ in AT und DK
+        CrmOpportunity(crm_id="A", opportunity_guid="A", project_id="A",
+                       project_name="Viby", state="offen",
+                       city="Viby J", postal_code="8280"),
+        # 2. GB-Format unter deutscher Firma -> bleibt GB
+        CrmOpportunity(crm_id="B", opportunity_guid="B", project_id="B",
+                       project_name="Dover", state="offen",
+                       parent_account_crm_id="F-DE",
+                       city="Dover", postal_code="CT15 6DZ"),
+        # 3. Daenische Firma, PLZ gibt es nur in AT, Ort bestaetigt nichts.
+        #    Traegt schon eine (falsche) Koordinate aus einem frueheren Lauf.
+        CrmOpportunity(crm_id="C", opportunity_guid="C", project_id="C",
+                       project_name="Vertippt", state="offen",
+                       parent_account_crm_id="F-DK",
+                       city="Aarhus", postal_code="4711",
+                       lat=48.20, lng=13.50, geocode_precision="plz",
+                       geocode_country="AT"),
+    ])
+    s.commit(); s.close()
+
+    monkeypatch.setattr(geo, "SessionLocal", temp_db.SessionLocal)
+    monkeypatch.setattr(projekte, "SessionLocal", temp_db.SessionLocal)
+    projekte.invalidate_cache()
+    r = geo.assign_project_centroids()
+
+    s = temp_db.SessionLocal()
+    hol = lambda cid: s.scalar(select(CrmOpportunity)
+                               .where(CrmOpportunity.crm_id == cid))
+    a, b, c = hol("A"), hol("B"), hol("C")
+    assert a.geocode_country == "DK" and a.lat == 56.12, \
+        "'Viby J' ist daenisch -- der Ortsname schlaegt die Kandidatenreihenfolge"
+    assert b.geocode_country == "GB", \
+        "eine britische Postleitzahl bleibt britisch, egal wo die Firma sitzt"
+    assert (c.lat, c.lng, c.geocode_country, c.geocode_precision) == (None, None, None, None), \
+        "geraten wird nicht -- und der alte falsche Pin muss dabei verschwinden"
+    s.close()
+
+    assert r["geocoded"] == 2 and r["no_match"] == 1
+    # zweimal laufen lassen aendert nichts mehr
+    assert geo.assign_project_centroids() == r, "der Lauf ist wiederholbar"
