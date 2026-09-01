@@ -19,6 +19,21 @@ python run.py serve      # → http://127.0.0.1:8000
 Open the dashboard and click **"Fetch latest ads."** That's it — one command,
 one button. No need to run anything on the command line first.
 
+### Windows: per Doppelklick starten
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\desktop_verknuepfung.ps1
+```
+
+Legt **AdWatch** auf den Desktop. Ein Doppelklick startet den Server, wartet,
+bis er antwortet, und öffnet den Browser. Läuft der Server bereits, wird er
+*nicht* neu gestartet — es öffnet sich nur das Browserfenster. Das ist Absicht:
+ein Neustart mitten in einem Import sperrt die Datenbank und bricht den Lauf ab.
+Zweimal klicken kann also nichts kaputt machen.
+
+Der Server lebt in dem Fenster mit dem Titel *AdWatch — Server*. Wird es
+geschlossen, ist die App aus.
+
 The dashboard is a plain FastAPI backend (`adwatch/web.py`) serving a small
 hand-built HTML/CSS/JS frontend (`templates/`, `static/`) — no Node.js, no
 build step, nothing to install beyond `requirements.txt`.
