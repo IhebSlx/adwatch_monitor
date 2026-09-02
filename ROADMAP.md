@@ -97,12 +97,16 @@ permission at all. Not built yet; flagged here as a decision, not a plan.
 | # | Item | Gated on |
 |---|---|---|
 | 16 | **Prove discovered leads convert** — 293 in lists, **1 contacted** since 18.08. | sales working the lists |
-| 17 | Angebot → Auftrag je Segment auswerten (SAP-Beleg-Join liegt ungenutzt) | nothing — the data is in the database |
-| 2 | Export von Listen, Armen und Ergebnissen (dieses Dokument, §2) | nothing |
 | 10 | Ads-vs-enrichment consistency check — the second identity scrutiny | Apify credits |
 | 12 | Twin search prototype — lookalike leads from the internet | #16 reading out first |
 | 1 | Dataverse write-back (this document, §1) | write permissions |
 | 7 | Split `app.js` into ES modules | nothing — housekeeping |
+
+**Erledigt am 2026-09-02:** #17 (Konversion Angebot → Auftrag, eigener Tab, mit
+Wilson-Intervall je Zeile — Wohnungswirtschaft 37,5 % und Gebäudebetreiber
+30,9 % über einer Grundlinie von 21,3 %, Architekten 5,9 % darunter) ·
+#2 (Export von Listen, Armen und Ergebnissen als Excel, Kontrollgruppe markiert
+und rot hinterlegt).
 
 **Erledigt seit der letzten Fassung:** #8 (Dataverse-Lesen: 438.979 E-Mails über
 44/44 Monate, 236.710 Leads, `createdon`, SAP-Beleg-Join auf Projektebene) ·
