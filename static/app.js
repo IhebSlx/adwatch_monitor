@@ -1194,6 +1194,20 @@
       $("#listenOffen").addEventListener("change", () => renderListe(Number(sel.value)));
       sel.dataset.wired = "1";
     }
+    // Der Export folgt der Auswahl: wer eine Liste offen hat, will meistens
+    // diese Datei, nicht alle drei. Alle bekommt man ueber die Mappe ohne
+    // Parameter — deshalb bleibt der Titel ehrlich beschriftet.
+    const exp = $("#listenExport");
+    if (exp) {
+      const setzeZiel = () => {
+        exp.href = `/api/lists/export?list_id=${sel.value}`;
+        const l = d.lists.find(x => String(x.id) === String(sel.value));
+        exp.title = l ? `„${l.name}" als Excel — Kontrollgruppe markiert und rot hinterlegt`
+                      : "Liste als Excel";
+      };
+      setzeZiel();
+      if (!exp.dataset.wired) { sel.addEventListener("change", setzeZiel); exp.dataset.wired = "1"; }
+    }
     renderListe(Number(sel.value));
   }
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import datetime as dt
 import random
+import re
 
 from sqlalchemy import func, select
 
@@ -193,7 +194,14 @@ def list_lists() -> list[dict]:
                                    TargetListEntry.outcome.is_not(None))) or 0
             out.append({"id": tl.id, "name": tl.name, "source": tl.source,
                         "created_at": tl.created_at.isoformat(), "n": n,
-                        "entschieden": done})
+                        "entschieden": done,
+                        # Anteil und Startwert der Ziehung gehören zur Liste
+                        # dazu: ohne sie ist im Export nicht nachvollziehbar,
+                        # WIE die Kontrollgruppe zustande kam — und eine
+                        # Ziehung, die man nicht nachrechnen kann, ist als
+                        # Beleg wertlos.
+                        "holdout_share": tl.holdout_share, "seed": tl.seed,
+                        "filters": tl.filters})
         return out
 
 
@@ -216,3 +224,103 @@ def entries(list_id: int, arm: str | None = None, open_only: bool = False) -> li
                  "contacted_at": e.contacted_at.isoformat() if e.contacted_at else None,
                  "channel": e.channel, "outcome": e.outcome, "note": e.note}
                 for e, c in s.execute(stmt)]
+
+
+# --- Export ----------------------------------------------------------------
+# Warum es diesen Export gibt, obwohl alles in der App steht:
+#
+# E-Mails, Firmen und Verkaufschancen sind ein SPIEGEL des CRM — brennt die
+# Datenbank ab, sind sie in ein paar Stunden wieder da. Listen, Arme und
+# Ergebnisse sind das nicht. Sie sind das einzige Exemplar der teuersten Daten
+# im System: menschliche Vertriebsentscheidungen, die niemand nachbauen kann.
+# Sieben rotierende Tagessicherungen sind dafür dünn.
+#
+# Der zweite Grund ist praktischer: eine Liste, die nur in AdWatch existiert,
+# muss in AdWatch abgearbeitet werden. Als Datei kann eine Kollegin sie
+# annehmen, ohne sich anzumelden.
+
+_BLATT_VERBOTEN = str.maketrans({c: "-" for c in '[]:*?/\\'})
+
+_EXPORT_KOPF = [
+    ("rank", "Rang"), ("name", "Firma"), ("city", "Ort"), ("country", "Land"),
+    ("sub_segment", "Untersegment"), ("score", "Punktzahl bei Erstellung"),
+    ("arm", "Arm"), ("anrufen", "Anrufen?"),
+    ("contacted_at", "Kontaktiert am"), ("channel", "Kanal"),
+    ("outcome", "Ergebnis"), ("note", "Notiz"), ("company_id", "Firmen-ID"),
+    ("entry_id", "Zeilen-ID"),
+]
+
+
+def export_xlsx(list_id: int | None = None) -> bytes:
+    """Listen, Arme und Ergebnisse als .xlsx — eine Mappe, je Liste ein Blatt.
+
+    Die Kontrollgruppe reist MIT und trägt in einer eigenen Spalte ein klares
+    NEIN. Sie wegzulassen wäre die bequeme Lösung und die falsche: wer die
+    Datei bekommt und die Kontrollgruppe nicht sieht, ruft sie irgendwann über
+    einen anderen Weg doch an — und dann ist die einzige Messung hin, die den
+    ganzen Versuch falsifizierbar macht.
+    """
+    import io
+
+    import openpyxl
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    listen = [l for l in list_lists() if list_id is None or l["id"] == list_id]
+    if not listen:
+        raise ValueError("Keine Liste zum Exportieren")
+
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    kopf_stil = Font(bold=True, color="FFFFFF")
+    kopf_fuell = PatternFill("solid", fgColor="4F5CE5")
+    warn_fuell = PatternFill("solid", fgColor="FDE7E7")
+
+    for liste in listen:
+        # Excel erlaubt 31 Zeichen je Blattname und verbietet sieben davon.
+        # Eine Übersetzungstabelle statt eines regulären Ausdrucks: die Zeichen
+        # stehen dann lesbar da, statt in einer Zeichenklasse voller
+        # Maskierungen zu verschwinden.
+        titel = (f"{liste['id']} {liste['name']}".translate(_BLATT_VERBOTEN))[:31]
+        ws = wb.create_sheet(titel)
+        ws.append([label for _, label in _EXPORT_KOPF])
+        for zelle in ws[1]:
+            zelle.font = kopf_stil
+            zelle.fill = kopf_fuell
+            zelle.alignment = Alignment(vertical="center")
+        ws.freeze_panes = "A2"
+
+        for e in entries(liste["id"]):
+            kontrolle = e["arm"] == "kontrolle"
+            ws.append([
+                e["rank"], e["name"], e["city"], e["country"], e["sub_segment"],
+                round(e["score"], 1) if e["score"] is not None else None,
+                "Kontrollgruppe" if kontrolle else "Zielgruppe",
+                "NEIN — nicht ansprechen" if kontrolle else "ja",
+                (e["contacted_at"] or "")[:10] or None,
+                CHANNELS.get(e["channel"] or "", e["channel"]),
+                OUTCOMES.get(e["outcome"] or "", e["outcome"]),
+                e["note"], e["company_id"], e["entry_id"],
+            ])
+            if kontrolle:
+                for zelle in ws[ws.max_row]:
+                    zelle.fill = warn_fuell
+
+        for spalte, breite in zip("ABCDEFGHIJKLMN",
+                                  (6, 38, 18, 6, 20, 10, 15, 22, 14, 12, 20, 40, 11, 10)):
+            ws.column_dimensions[spalte].width = breite
+
+        # Was die Liste ist, gehört in die Datei — ohne den Kopf ist sie in
+        # einem Monat eine Tabelle ohne Herkunft.
+        ws.append([])
+        ws.append(["Liste", liste["name"]])
+        ws.append(["Quelle", liste.get("source")])
+        ws.append(["Angelegt", (liste.get("created_at") or "")[:19]])
+        ws.append(["Kontrollanteil", liste.get("holdout_share")])
+        ws.append(["Ziehung (seed)", liste.get("seed")])
+        ws.append(["Hinweis", "Die rot hinterlegten Zeilen sind die Kontrollgruppe. "
+                              "Sie werden bewusst NICHT angesprochen — sonst ist die "
+                              "Wirkung der Ansprache nicht mehr messbar."])
+
+    puffer = io.BytesIO()
+    wb.save(puffer)
+    return puffer.getvalue()

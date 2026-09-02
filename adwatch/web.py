@@ -622,6 +622,29 @@ def lists_route():
             "channels": outcomes.CHANNELS}
 
 
+@app.get("/api/lists/export")
+def lists_export_route(list_id: int | None = None):
+    """Listen, Arme und Ergebnisse als .xlsx.
+
+    Der Grund steht in outcomes.export_xlsx: E-Mails und Verkaufschancen sind
+    ein Spiegel des CRM und in Stunden wiederherstellbar, menschliche
+    Vertriebsentscheidungen nicht. Ausserdem kann eine Kollegin eine Datei
+    abarbeiten, ohne sich an der App anzumelden — und genau daran haengt
+    gerade die Messung.
+    """
+    from . import outcomes
+    try:
+        data = outcomes.export_xlsx(list_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    name = f"adwatch_listen{'_' + str(list_id) if list_id else ''}.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
 @app.post("/api/lists")
 def create_list_route(payload: ListCreateIn):
     from . import outcomes

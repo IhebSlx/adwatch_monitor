@@ -5159,3 +5159,55 @@ def test_der_chatbot_schlaegt_laeufe_vor_und_startet_nie(temp_db, monkeypatch):
     # 4. Ohne Schritt gibt es keinen Lauf
     ohne = _json.loads(fragen.w_lauf_vorschlagen({"country": ["DE"]}, []))
     assert "fehler" in ohne
+
+
+def test_der_listen_export_nimmt_die_kontrollgruppe_mit(temp_db, monkeypatch):
+    """Der Export ist eine Sicherung des einzigen Exemplars — und ein
+    Arbeitsblatt fuer Kollegen ohne App-Zugang.
+
+    Die eine Eigenschaft, die er nicht verlieren darf: die Kontrollgruppe reist
+    MIT und ist als "nicht ansprechen" gekennzeichnet. Sie wegzulassen waere
+    bequem und falsch — wer die Datei bekommt und die Kontrollgruppe nicht
+    sieht, ruft sie irgendwann ueber einen anderen Weg doch an, und dann ist
+    die einzige Messung hin, die den Versuch falsifizierbar macht.
+    """
+    import io as _io
+
+    import openpyxl
+
+    from adwatch import outcomes
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add_all([Company(name=f"Firma {i}", country="DE", segment="Handel")
+               for i in range(20)])
+    s.commit()
+    ids = [c.id for c in s.scalars(__import__("sqlalchemy").select(Company))]
+    s.close()
+    monkeypatch.setattr(outcomes, "SessionLocal", temp_db.SessionLocal)
+
+    outcomes.create_list("Testliste", "manuell",
+                         [{"company_id": i, "score": 50.0} for i in ids],
+                         holdout_share=0.25, seed=7)
+
+    wb = openpyxl.load_workbook(_io.BytesIO(outcomes.export_xlsx()))
+    ws = wb[wb.sheetnames[0]]
+    kopf = [c.value for c in ws[1]]
+    zeilen = [r for r in ws.iter_rows(min_row=2, values_only=True) if r[1]]
+
+    assert "Anrufen?" in kopf, "die Spalte, auf die es ankommt"
+    arm_i, ruf_i = kopf.index("Arm"), kopf.index("Anrufen?")
+    kontrolle = [r for r in zeilen if r[arm_i] == "Kontrollgruppe"]
+    ziel = [r for r in zeilen if r[arm_i] == "Zielgruppe"]
+
+    assert kontrolle, "die Kontrollgruppe muss im Export stehen, nicht fehlen"
+    assert len(kontrolle) + len(ziel) == 20, "keine Zeile darf verloren gehen"
+    assert all("NEIN" in (r[ruf_i] or "") for r in kontrolle), \
+        "jede Kontrollzeile sagt ausdruecklich NEIN"
+    assert all(r[ruf_i] == "ja" for r in ziel)
+
+    # Die Ziehung muss nachvollziehbar sein — ohne Anteil und Startwert ist der
+    # Export als Beleg wertlos.
+    fuss = {r[0]: r[1] for r in ws.iter_rows(min_row=2, values_only=True) if r[0] and not r[1] is None}
+    assert fuss.get("Kontrollanteil") == 0.25
+    assert fuss.get("Ziehung (seed)") == 7
