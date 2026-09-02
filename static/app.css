@@ -1513,31 +1513,9 @@ tr.arm-kontrolle td { color: var(--muted); }
    Kachelserver ist damit unnötig; es bleibt bei der Quelle, die AdWatch heute
    schon erreicht. */
 #custMap, #objMap { background: var(--map-bg); }
-.leaflet-tile-pane { filter: var(--tile-filter); }
-[data-theme="dunkel"] .leaflet-container { background: var(--map-bg); }
-/* Popup und Bedienelemente gehören zur App, nicht zur Karte — sie bekommen
-   die Haut der App, sonst sitzt ein weißer Kasten auf dunklem Grund. */
-[data-theme="dunkel"] .leaflet-popup-content-wrapper,
-[data-theme="dunkel"] .leaflet-popup-tip {
-  background: rgba(16, 21, 42, .92); color: var(--ink);
-  border: 1px solid var(--border-strong);
-  box-shadow: 0 14px 34px rgba(2, 4, 16, .75);
-  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-}
-[data-theme="dunkel"] .leaflet-popup-content a { color: var(--accent-ink); }
-[data-theme="dunkel"] .leaflet-bar a,
-[data-theme="dunkel"] .leaflet-control-attribution {
-  background: rgba(16, 21, 42, .88); color: var(--muted);
-  border-color: var(--border);
-}
-[data-theme="dunkel"] .leaflet-bar a { color: var(--ink); }
-[data-theme="dunkel"] .leaflet-control-attribution a { color: var(--muted); }
-/* Cluster-Blasen: Glut statt Pastell */
-[data-theme="dunkel"] .marker-cluster div {
-  background: rgba(139, 92, 246, .55); color: #fff;
-  box-shadow: 0 0 22px -4px var(--accent);
-}
-[data-theme="dunkel"] .marker-cluster { background: rgba(139, 92, 246, .18); }
+/* Der Filter auf der Kachelebene ist Geschichte: CARTO liefert eine
+   echte dunkle Karte. Invertiertes OSM ergab olivgrünes Land und
+   lachsfarbene Straßen — lesbar war das nie. */
 
 /* --- Hautschalter in der Seitenleiste --- */
 .theme-switch {
@@ -1766,3 +1744,69 @@ tr.konv-ueber td:first-child { box-shadow: inset 3px 0 0 var(--ok); font-weight:
 tr.konv-unter td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
 tr.konv-ueber .konv-bar i { background: linear-gradient(90deg, var(--ok), var(--ok)); }
 tr.konv-unter .konv-bar i { background: linear-gradient(90deg, var(--danger), var(--danger)); }
+
+/* ===================== Karte: Ringe statt Blasen ==========================
+   Eine violette Blase mit „413" sagt nur, WIE VIELE dort liegen. Der Ring
+   sagt, WELCHE — gewonnen, offen, verloren — auf derselben Fläche. Das ist
+   der ganze Unterschied zwischen einer Zählung und einer Auskunft. */
+.ring-cluster { cursor: pointer; line-height: 0; }
+.ring-cluster .ring-svg {
+  display: block; overflow: visible;
+  filter: drop-shadow(0 4px 12px rgba(2, 4, 16, .65));
+  transition: transform .14s ease;
+}
+.ring-cluster:hover .ring-svg { transform: scale(1.09); }
+.ring-cluster text { font-variant-numeric: tabular-nums; pointer-events: none; }
+
+/* MapLibre-Bedienelemente in die Haut der App holen */
+.maplibregl-ctrl-group {
+  background: var(--card) !important; border: 1px solid var(--border) !important;
+  border-radius: var(--radius-sm) !important; overflow: hidden;
+  box-shadow: var(--shadow-sm) !important;
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.maplibregl-ctrl-group button + button { border-top: 1px solid var(--border) !important; }
+.maplibregl-ctrl-group button span { filter: var(--ml-icon, none); }
+[data-theme="dunkel"] .maplibregl-ctrl-group button span { filter: invert(1) brightness(1.4); }
+.maplibregl-ctrl-attrib {
+  background: color-mix(in srgb, var(--card) 88%, transparent) !important;
+  color: var(--muted) !important; font-size: 10px; border-radius: 6px 0 0 0;
+}
+.maplibregl-ctrl-attrib a { color: var(--muted) !important; }
+.maplibregl-ctrl-scale {
+  background: color-mix(in srgb, var(--card) 80%, transparent) !important;
+  border-color: var(--border) !important; color: var(--muted) !important;
+  border-radius: 0 4px 4px 0; font-size: 10.5px;
+}
+
+/* Popup: gehört zur App, nicht zur Karte */
+.maplibregl-popup.karte-pop .maplibregl-popup-content {
+  background: var(--card); color: var(--ink);
+  border: 1px solid var(--border-strong); border-radius: 12px;
+  padding: 10px 14px; box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+}
+.maplibregl-popup.karte-pop .maplibregl-popup-tip { display: none; }
+.kp-t { font-size: 13px; font-weight: 600; }
+.kp-s { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.kp-a { font-size: 10.5px; color: var(--accent-ink); margin-top: 6px; }
+
+/* Grundkarten-Umschalter: unten rechts unter dem Flach|Höhe-Schalter.
+   Er ist da, weil eine automatische Rückfallkette dreimal im falschen Moment
+   ausgelöst hat. Ein Klick ist ehrlicher als eine Kaskade, die rät. */
+.map-basis {
+  position: absolute; right: 14px; bottom: 14px; z-index: 500;
+  display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.map-basis button {
+  border: 0; background: transparent; cursor: pointer; font: inherit;
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  padding: 4px 11px; border-radius: 999px;
+}
+.map-basis button:hover { color: var(--ink); }
+.map-basis button.active { background: var(--accent-soft); color: var(--accent-ink); }
+/* Wo beide Schalter sitzen (Objektkarte), rückt der Flach|Höhe-Schalter hoch. */
+#objMapWrap .map-dim { bottom: 56px; }
