@@ -548,6 +548,13 @@
           </div>
         </div>
 
+        <!-- Spaltenfilter für die Kartenansicht. Die Leiste ist eine
+             FERNBEDIENUNG für die Spaltenmenüs der Tabelle, kein zweiter
+             Filtersatz: jeder Knopf klickt den echten Spaltenkopf an und
+             schiebt danach dasselbe Menü unter sich. Dadurch kann die Karte
+             gar nicht weniger können als die Liste. Befüllt von app.js. -->
+        <div class="col-filters explore-karte-only" id="custColFilters"></div>
+
         <!-- Karte | Liste: dieselben Firmen, derselbe Filter — nur die Darstellung
              wechselt. Umgeschaltet wird oben in #exploreBar; hier liegt nur noch
              der Kartencontainer. Leaflet lädt erst beim ersten Umschalten (lazy)
@@ -724,6 +731,7 @@
              kein CRM-Satz, sondern eine Gruppe von Verkaufschancen, und die
              Koordinate kommt aus der PLZ der BAUADRESSE (geo.assign_project_
              centroids). Die Farbe zeigt den Ausgang, nicht den Firmentyp. -->
+        <div class="col-filters explore-karte-only" id="objColFilters"></div>
         <div id="objMapWrap" class="hidden">
           <!-- Zwei Darstellungen derselben Objekte. FLACH ist Leaflet, wie
                ueberall sonst in der App — bewiesen, laeuft auch dann, wenn ein

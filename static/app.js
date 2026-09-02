@@ -460,13 +460,21 @@
   // holds a capped slice, because filtering 300 of 52.796 and calling it a
   // filter is how the screen ended up claiming 34 won projects out of 8.189.
   const SERVER_COLUMNS = {
+    // Die Schlüssel sind SPALTENNUMMERN der gerenderten Tabelle. Als die Spalte
+    // „Angelegt" dazukam, rutschte alles dahinter um eins — und niemand merkte
+    // es, weil ein Menü ja trotzdem aufging: der Status-Filter hing an
+    // „Angelegt", der Wertfilter an „VCs", der Firmenfilter an „Wert". Sichtbar
+    // wurde das erst, als die Filterleiste über der Karte Kopf und Inhalt
+    // nebeneinander stellte.
+    // Reihenfolge: 0 Objekt · 1 Angelegt · 2 Status · 3 VCs · 4 Wert ·
+    //              5 Firmen · 6 Architekten · 7 Verlustgründe
     objekteWrap: {
       0: {kind: "text",   param: "q",           label: "Objekt, Firma oder Architekt"},
-      1: {kind: "select", select: "#objekteStatus", label: "Status"},
-      3: {kind: "number", param: "min_value",   label: "Wert mindestens (€)"},
-      4: {kind: "text",   param: "q",           label: "Firma enthält"},
-      5: {kind: "text",   param: "q",           label: "Architekt enthält"},
-      6: {kind: "text",   param: "lost_reason", label: "Verlustgrund (exakt)"},
+      2: {kind: "select", select: "#objekteStatus", label: "Status"},
+      4: {kind: "number", param: "min_value",   label: "Wert mindestens (€)"},
+      5: {kind: "text",   param: "q",           label: "Firma enthält"},
+      6: {kind: "text",   param: "q",           label: "Architekt enthält"},
+      7: {kind: "text",   param: "lost_reason", label: "Verlustgrund (exakt)"},
     },
     chancenTableWrap: {
       1: {kind: "text",   param: "segment",     label: "Segment (exakt)"},
@@ -1626,7 +1634,7 @@
   //
   // Die Breite wird deshalb aus der Zoomstufe gerechnet — rund fuenf Pixel,
   // auf jeder Stufe.
-  const SAEULE_PX = 3;   // schlank: es soll eine Silhouette werden, kein Klotzfeld
+  const SAEULE_PX = 4;   // schlank, aber auf Kontinentmassstab noch zu sehen
   function halbeBreite(zoom) {
     return (SAEULE_PX / 2) * 360 / (256 * Math.pow(2, zoom));
   }
@@ -1687,9 +1695,21 @@
     m.addSource("obj", { type: "geojson", tolerance: 0,
                          data: saeulenGeoJson(pins, m.getZoom()) });
     // Ein Schein am Boden, damit auch niedrige Säulen auffindbar bleiben
+    // Der Schein am Boden ist das, was ein Objekt AUFFINDBAR macht, bevor man
+    // nah genug ist, um die Säule zu erkennen. Beim ersten Anlauf war er zu
+    // schwach (Deckkraft 0,26, Radius erst ab Zoom 4) — man musste weit
+    // hineinzoomen, bis überhaupt etwas zu sehen war. Er beginnt jetzt schon
+    // auf Kontinentmaßstab und trägt einen harten Kern, damit ein einzelnes
+    // Projekt in Portugal genauso auffällt wie ein Bündel im Ruhrgebiet.
+    m.addLayer({ id: "obj-schein", type: "circle", source: "obj", paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 5, 5, 9, 8, 15, 12, 26],
+      "circle-color": ["get", "f"], "circle-blur": 1.1,
+      "circle-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.5, 8, 0.34, 12, 0.22] } });
     m.addLayer({ id: "obj-boden", type: "circle", source: "obj", paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 4, 11, 18],
-      "circle-color": ["get", "f"], "circle-blur": 1.2, "circle-opacity": 0.26 } });
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 1.7, 5, 2.4, 9, 3.4, 13, 5],
+      "circle-color": ["get", "f"], "circle-opacity": 0.95,
+      "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 6, 0, 9, 0.6],
+      "circle-stroke-color": "rgba(255,255,255,.55)" } });
     m.addLayer({ id: "obj-saeule", type: "fill-extrusion", source: "obj", paint: {
       "fill-extrusion-color": ["get", "f"],
       // Hoehen sind METER, und Meter schrumpfen beim Herauszoomen. Bei Zoom 4,6
@@ -1851,6 +1871,57 @@
       && !$("#objMap3d").classList.contains("hidden");
   }
 
+  // ================= SPALTENFILTER ÜBER DER KARTE =========================
+  // Die Kartenansicht soll genau so filtern können wie die Liste. Der billige
+  // Weg wäre gewesen, die Filter ein zweites Mal zu bauen — und ab dem Tag
+  // hätten Liste und Karte auseinanderdriften können, jedes Mal wenn jemand
+  // eine Spalte ergänzt.
+  //
+  // Stattdessen ist die Leiste eine FERNBEDIENUNG: jeder Knopf klickt den
+  // echten Spaltenkopf an, dessen Menü ohnehin existiert, und schiebt danach
+  // dasselbe #thMenu unter sich. Beide Tabellen benutzen dieses eine Menü, also
+  // funktioniert der Griff für Firmen wie für Projekte. Was die Tabelle kann,
+  // kann die Karte damit zwangsläufig auch.
+  //
+  // Nötig ist das Verschieben, weil der Spaltenkopf in der Kartenansicht
+  // ausgeblendet ist: getBoundingClientRect liefert dann Nullen, und das Menü
+  // klebte oben links in der Ecke.
+  function spaltenFilterLeiste(leisteId, tabelleSel) {
+    const box = $(leisteId);
+    const tabelle = $(tabelleSel);
+    if (!box || !tabelle) return;
+    // Nicht auf die Klasse "th-has-menu" prüfen: sie wird von
+    // makeTableInteractive gesetzt, und bei der Projekttabelle geschieht das
+    // ERST NACH dem Rendern — die Leiste blieb dadurch leer. Ausgeschlossen
+    // werden nur Knopf- und Auswahlspalten sowie leere Köpfe.
+    const koepfe = $$("thead th", tabelle).filter(th =>
+      !th.hasAttribute("data-nomenu")
+      && !th.classList.contains("col-selhead")
+      && !th.classList.contains("col-dot")
+      && th.textContent.replace("▾", "").trim());
+    box.innerHTML = koepfe.map((th, i) =>
+      `<button type="button" data-i="${i}" class="${th.classList.contains("th-filtered") ? "filtered" : ""}">`
+      + `${esc(th.textContent.replace("▾", "").trim())}<span class="caret">▾</span></button>`).join("");
+    $$("button", box).forEach(knopf => knopf.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const th = koepfe[Number(knopf.dataset.i)];
+      if (!th) return;
+      th.click();
+      const menu = $("#thMenu");
+      if (!menu || menu.classList.contains("hidden")) return;
+      const r = knopf.getBoundingClientRect();
+      const w = menu.offsetWidth || 300;
+      menu.style.top = Math.round(r.bottom + 6) + "px";
+      menu.style.left = Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 12))) + "px";
+    }));
+  }
+
+  // Nach dem Rendern, nicht waehrenddessen: die Tabelle bekommt ihre
+  // Menue-Verdrahtung erst, wenn der Browser sie gesetzt hat.
+  function spaltenFilterSpaeter(leisteId, tabelleSel) {
+    requestAnimationFrame(() => spaltenFilterLeiste(leisteId, tabelleSel));
+  }
+
   // ================= EXPLORER: Karte|Liste × Firmen|Projekte ==============
   // Firmen und Projekte sind zwei Panels geblieben (#tab-customers,
   // #tab-objekte) — sie tragen viel Verdrahtung, die ein Umbau nur riskiert
@@ -1882,6 +1953,7 @@
     // nicht mit einem Filter losziehen, den die Tabelle gleich noch ändert.
     if (firmen) {
       await ensureCustomersLoaded();
+      spaltenFilterSpaeter("#custColFilters", "#customersTable");
       if (karte) await showCustMap();
     } else {
       await ensureObjekteLoaded();
@@ -3593,6 +3665,9 @@
       </table>`;
     $$("#objekteWrap tr[data-projekt]").forEach(tr =>
       tr.addEventListener("click", () => openProjektDrawer(tr.dataset.projekt)));
+    // Die Tabelle wird bei jedem Laden neu gebaut — die Fernbedienung zeigt
+    // sonst auf Spaltenköpfe, die es nicht mehr gibt.
+    spaltenFilterSpaeter("#objColFilters", "#objekteWrap table");
   }
 
   // ---- Objekt drawer: everything ever linked to one project ---------------
@@ -4662,6 +4737,8 @@
       const keys = _COL_FILTER_KEYS[th.dataset.col] || [];
       th.classList.toggle("th-filtered", keys.some(k => _filterActive(f, k)));
     });
+    // dieselbe Markierung an der Fernbedienung über der Karte
+    spaltenFilterLeiste("#custColFilters", "#customersTable");
   }
 
   function renderCustomers(data, append = false) {
