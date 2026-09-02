@@ -1006,7 +1006,11 @@
   // weiss, wovon. Daraus wird hier ein Satz: 1,40 -> "40 % haeufiger". Die Zahl
   // bleibt als Tooltip erhalten, damit nachrechnen kann, wer will.
   // Prozent deutsch: 56.1 -> "56,1 %". toFixed liefert immer einen Punkt.
-  const pct = (v, n = 1) => `${(v * 100).toFixed(n).replace(".", ",")} %`;
+  // null ist NICHT null Prozent. Ohne diese Unterscheidung stand in der
+  // Konversionstabelle "0,0 %" fuer Gruppen, zu denen schlicht nichts
+  // gemessen wurde — eine erfundene Zahl an der Stelle einer fehlenden.
+  const pct = (v, n = 1) =>
+    (v == null || Number.isNaN(v)) ? "—" : `${(v * 100).toFixed(n).replace(".", ",")} %`;
 
   function liftSatz(l) {
     if (!isFinite(l) || l <= 0) return "—";
@@ -1883,6 +1887,103 @@
   function obj3dSichtbar() {
     return objMap3d && !$("#objMapWrap").classList.contains("hidden")
       && !$("#objMap3d").classList.contains("hidden");
+  }
+
+  // ================= KONVERSION: Angebot -> Auftrag ========================
+  // Die Tabelle zeigt ZWEI Masse nebeneinander, weil eines allein in die Irre
+  // fuehrt (Begruendung in insights/konversion.py). Und sie zeigt das
+  // Konfidenzintervall als Balken, nicht als Klammerzahl: 37,5 % auf 120
+  // Faellen und 21,6 % auf 13.453 sehen als Zahl gleich sicher aus und sind es
+  // nicht. Ein Balken, der doppelt so breit ist, sagt das ohne einen Satz.
+  let konvGeladen = false;
+
+  async function ladeKonversion() {
+    const wrap = $("#konvWrap");
+    const dim = $("#konvDimension").value || "segment";
+    const land = ($("#konvLand").value || "").trim();
+    const min = Number($("#konvMin").value) || 30;
+    wrap.innerHTML = `<p class="muted" style="padding:12px">Wird geladen …</p>`;
+    let d;
+    try {
+      d = await api(`/api/konversion?dimension=${encodeURIComponent(dim)}`
+        + `&min_entschieden=${min}` + (land ? `&land=${encodeURIComponent(land)}` : ""));
+    } catch (e) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Fehler: ${esc(e.message)}</p>`;
+      return;
+    }
+
+    // Die Auswahl erst hier fuellen: die Liste der Dimensionen kommt vom Server,
+    // damit sie nicht an zwei Orten gepflegt werden muss.
+    const sel = $("#konvDimension");
+    if (!sel.options.length && d.dimensionen) {
+      sel.innerHTML = Object.entries(d.dimensionen)
+        .map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("");
+      sel.value = d.dimension;
+    }
+
+    $("#konvKpis").innerHTML = `
+      <div class="kpi"><div class="kpi-label">Grundlinie Gewinnrate</div>
+        <div class="kpi-value">${pct(d.basis_gewinnrate)}</div>
+        <div class="sub">${deN(d.entschieden)} entschiedene Verkaufschancen</div></div>
+      <div class="kpi"><div class="kpi-label">Angeboten</div>
+        <div class="kpi-value" title="${eur(d.angeboten)}">${eurShort(d.angeboten)}</div>
+        <div class="sub">Summe der Angebotswerte</div></div>
+      <div class="kpi"><div class="kpi-label">Davon fakturiert</div>
+        <div class="kpi-value" title="${eur(d.fakturiert)}">${eurShort(d.fakturiert)}</div>
+        <div class="sub">${pct(d.basis_euro_quote)} — Untergrenze, siehe Hinweis</div></div>
+      <div class="kpi"><div class="kpi-label">Beleg-Deckung</div>
+        <div class="kpi-value">${pct(d.beleg_deckung_gesamt)}</div>
+        <div class="sub">so viele Chancen tragen einen SAP-Link</div></div>`;
+    $("#konvBasis").textContent = d.basis_gewinnrate != null
+      ? `Grundlinie ${pct(d.basis_gewinnrate)} — markiert wird nur, wer sie sicher über- oder unterschreitet`
+      : "";
+
+    const zeilen = d.zeilen || [];
+    if (!zeilen.length) {
+      wrap.innerHTML = `<p class="muted" style="padding:12px">Keine Gruppe erreicht
+        ${min} entschiedene Verkaufschancen. Schwelle senken oder Land weglassen.</p>`;
+      return;
+    }
+    const maxRate = Math.max(...zeilen.map(z => z.gewinnrate_hi || 0), d.basis_gewinnrate || 0);
+    const x = (v) => `${((v || 0) / (maxRate || 1) * 100).toFixed(1)}%`;
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr>
+          <th>${esc(d.titel)}</th>
+          <th class="num" title="Nur entschiedene Chancen — offene sind noch nichts">Entschieden</th>
+          <th class="num">Gewinnrate</th>
+          <th data-nosort title="Der Balken ist das 95-%-Intervall. Breit heißt: wenig Fälle.">Sicherheit</th>
+          <th class="num" title="Fakturiert je angeboten — Untergrenze, siehe Hinweis">Euro-Quote</th>
+          <th class="num">Angeboten</th>
+          <th class="num" title="Anteil der Chancen mit SAP-Beleglink">Belege</th>
+        </tr></thead>
+        <tbody>${zeilen.map(z => `
+          <tr class="${z.ueber_basis ? "konv-ueber" : (z.unter_basis ? "konv-unter" : "")}">
+            <td>${esc(String(z.gruppe))}${z.belastbar ? ""
+              : ` <span class="chip c-dim" title="unter ${d.min_entschieden} entschiedenen Chancen — als Beleg zu dünn">dünn</span>`}</td>
+            <td class="num">${deN(z.entschieden)}</td>
+            <td class="num"><b>${pct(z.gewinnrate)}</b></td>
+            <td class="konv-bar-zelle">
+              <span class="konv-bar" title="95-%-Intervall: ${pct(z.gewinnrate_lo)} bis ${pct(z.gewinnrate_hi)}">
+                <i style="left:${x(z.gewinnrate_lo)};width:${x((z.gewinnrate_hi || 0) - (z.gewinnrate_lo || 0))}"></i>
+                <u style="left:${x(d.basis_gewinnrate)}"></u>
+              </span></td>
+            <td class="num">${pct(z.euro_quote)}</td>
+            <td class="num" title="${eur(z.angeboten)}">${eurShort(z.angeboten)}</td>
+            <td class="num">${pct(z.beleg_deckung)}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+  }
+
+  function ensureKonversionLoaded() {
+    if (konvGeladen) return;
+    konvGeladen = true;
+    ["#konvDimension", "#konvLand", "#konvMin"].forEach(id => {
+      const el = $(id);
+      if (el) el.addEventListener("change", ladeKonversion);
+    });
+    ladeKonversion();
   }
 
   // ================= SPALTENFILTER ÜBER DER KARTE =========================
@@ -2855,6 +2956,7 @@
       if (name === "listen") ensureListenLoaded();
       if (name === "chancen") ensureChancenLoaded();
       if (name === "pruefen") ensurePruefenLoaded();
+      if (name === "konversion") ensureKonversionLoaded();
       if (name === "profil") { ensureProfilesLoaded(); loadIcpStatus(); }
       if (name === "reports") {
         // If a Companies filter is active, default the report to use it — so

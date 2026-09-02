@@ -1740,3 +1740,29 @@ body.explore-karte .col-filters {
 .lk-zahlen dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
 .lk-aktionen { display: flex; align-items: center; gap: 10px; }
 .lk-status { font-size: 12px; }
+
+/* ===================== Konversion: Sicherheit als Balken ==================
+   37,5 % auf 120 Fällen und 21,6 % auf 13.453 sehen als Zahl gleich sicher
+   aus. Der Balken ist das 95-%-Intervall — doppelt so breit heißt halb so
+   sicher, und das sagt er ohne einen erklärenden Satz. Der senkrechte Strich
+   ist die Grundlinie: liegt der Balken ganz rechts davon, ist der Unterschied
+   nicht mehr Zufall. */
+.konv-bar-zelle { width: 210px; min-width: 160px; }
+.konv-bar {
+  position: relative; display: block; height: 16px; border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+.konv-bar i {
+  position: absolute; top: 4px; height: 8px; border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  min-width: 3px;
+}
+.konv-bar u {
+  position: absolute; top: -2px; height: 20px; width: 2px;
+  background: var(--muted); opacity: .75;
+}
+[data-theme="dunkel"] .konv-bar i { box-shadow: 0 0 10px -2px var(--accent); }
+tr.konv-ueber td:first-child { box-shadow: inset 3px 0 0 var(--ok); font-weight: 600; }
+tr.konv-unter td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+tr.konv-ueber .konv-bar i { background: linear-gradient(90deg, var(--ok), var(--ok)); }
+tr.konv-unter .konv-bar i { background: linear-gradient(90deg, var(--danger), var(--danger)); }

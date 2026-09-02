@@ -81,6 +81,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
         Zielkunden
       </button>
+      <button class="tab" data-tab="konversion" data-label="Konversion">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>
+        Konversion
+      </button>
       <button class="tab" data-tab="chancen" data-label="Rückgewinnung">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"/></svg>
         Rückgewinnung
@@ -763,6 +767,38 @@
         <div id="objekteWrap" class="table-wrap explore-liste-only">
           <p class="muted" style="padding:12px">Wird geladen …</p>
         </div>
+      </div>
+    </section>
+
+    <!-- ================= TAB: Konversion ================= -->
+    <section id="tab-konversion" class="tab-panel">
+      <header class="page-head">
+        <h1>Konversion — was von dem, was wir anbieten, ankommt</h1>
+        <p>Jedes andere Profil in der App ist auf <b>Gewinnen</b> trainiert. Hier steht
+          daneben, was <b>fakturiert</b> wurde — eine gewonnene Chance über 20.000 € und eine
+          über 400.000 € zählen in einer Gewinnrate gleich viel, im Vertrieb nicht.</p>
+      </header>
+      <div id="konvKpis" class="kpi-row"></div>
+      <div class="card">
+        <div class="filter-bar">
+          <label class="muted" style="display:inline-flex;align-items:center;gap:6px">Aufteilen nach
+            <select id="konvDimension"></select>
+          </label>
+          <label class="muted" style="display:inline-flex;align-items:center;gap:6px">Land
+            <input id="konvLand" placeholder="alle" style="width:80px" autocomplete="off">
+          </label>
+          <label class="muted" style="display:inline-flex;align-items:center;gap:6px">ab
+            <input id="konvMin" type="number" value="30" min="1" style="width:70px"> entschiedenen
+          </label>
+          <span class="spacer"></span>
+          <span id="konvBasis" class="muted"></span>
+        </div>
+        <p class="hint">Die <b>Gewinnrate</b> hängt an keinem Beleg und trägt deshalb die
+          Rangfolge. Die <b>Euro-Quote</b> ist näher an der Frage, aber eine <b>Untergrenze</b>:
+          nur ein Teil der Verkaufschancen trägt einen SAP-Beleglink, und eine gewonnene ohne
+          Link zählt mit 0 €. Wie groß der blinde Fleck ist, sagt die Spalte „Belege".
+          Markiert wird eine Zeile erst, wenn ihr Intervall die Grundlinie nicht mehr enthält.</p>
+        <div id="konvWrap" class="table-wrap"><p class="muted" style="padding:12px">Wird geladen …</p></div>
       </div>
     </section>
 

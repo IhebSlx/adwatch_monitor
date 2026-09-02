@@ -5211,3 +5211,69 @@ def test_der_listen_export_nimmt_die_kontrollgruppe_mit(temp_db, monkeypatch):
     fuss = {r[0]: r[1] for r in ws.iter_rows(min_row=2, values_only=True) if r[0] and not r[1] is None}
     assert fuss.get("Kontrollanteil") == 0.25
     assert fuss.get("Ziehung (seed)") == 7
+
+
+def test_konversion_behauptet_nur_was_das_intervall_traegt(temp_db, monkeypatch):
+    """Angebot -> Auftrag je Gruppe, mit Konfidenzintervall statt nackter Quote.
+
+    Der Punkt dieses Moduls ist nicht die Quote, sondern ihre Unsicherheit:
+    37,5 % auf 120 Faellen und 21,6 % auf 13.453 sehen als Zahl gleich sicher
+    aus. Deshalb wird eine Gruppe erst als ueber/unter der Grundlinie markiert,
+    wenn ihr 95-%-Intervall die Grundlinie NICHT mehr enthaelt.
+    """
+    from adwatch.insights import konversion
+    from adwatch.models import Company, CrmOpportunity
+
+    # Wilson zuerst gegen bekannte Werte: 50 von 100 -> rund 40,4 % bis 59,6 %
+    lo, hi = konversion.wilson(50, 100)
+    assert 0.40 < lo < 0.41 and 0.59 < hi < 0.60
+    # Wenige Faelle -> breites Intervall; viele Faelle -> schmales
+    assert (konversion.wilson(5, 10)[1] - konversion.wilson(5, 10)[0]) > \
+           (konversion.wilson(500, 1000)[1] - konversion.wilson(500, 1000)[0])
+    # Randfall: kein Versuch heisst "wir wissen nichts", nicht "0 %"
+    assert konversion.wilson(0, 0) == (0.0, 1.0)
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(crm_id="F-GUT", name="Gut GmbH", segment="Wohnungswirtschaft"),
+        Company(crm_id="F-MIT", name="Mittel GmbH", segment="Handel"),
+        Company(crm_id="F-PRIV", name="Privat", segment="Private Endkunden"),
+    ])
+    vcs = []
+    # Wohnungswirtschaft: 90 von 100 gewonnen -> klar ueber der Grundlinie
+    for i in range(100):
+        vcs.append(CrmOpportunity(
+            crm_id=f"W{i}", parent_account_crm_id="F-GUT", quoted_value=1000.0,
+            invoiced_value=(800.0 if i < 90 else 0.0),
+            state=("gewonnen" if i < 90 else "verloren")))
+    # Handel: 10 von 100 gewonnen -> klar darunter
+    for i in range(100):
+        vcs.append(CrmOpportunity(
+            crm_id=f"H{i}", parent_account_crm_id="F-MIT", quoted_value=1000.0,
+            invoiced_value=(500.0 if i < 10 else 0.0),
+            state=("gewonnen" if i < 10 else "verloren")))
+    # Private Endkunden duerfen in keiner Auswertung auftauchen
+    vcs.append(CrmOpportunity(crm_id="P1", parent_account_crm_id="F-PRIV",
+                              quoted_value=99999.0, state="gewonnen"))
+    s.add_all(vcs); s.commit(); s.close()
+    monkeypatch.setattr(konversion, "SessionLocal", temp_db.SessionLocal)
+
+    d = konversion.nach("segment", min_entschieden=10)
+    gruppen = {z["gruppe"]: z for z in d["zeilen"]}
+    assert "Private Endkunden" not in gruppen, "Privatkunden gehoeren in keine Auswertung"
+    assert d["basis_gewinnrate"] == 0.5, "90 + 10 von 200 entschiedenen"
+
+    gut, mit = gruppen["Wohnungswirtschaft"], gruppen["Handel"]
+    assert gut["gewinnrate"] == 0.9 and mit["gewinnrate"] == 0.1
+    assert gut["ueber_basis"] is True and gut["unter_basis"] is False
+    assert mit["unter_basis"] is True and mit["ueber_basis"] is False
+    # Euro-Quote: 90 x 800 von 100.000 angeboten
+    assert gut["euro_quote"] == 0.72 and mit["euro_quote"] == 0.05
+    # Belegdeckung sagt, wie gross der blinde Fleck ist
+    assert gut["beleg_deckung"] == 0.9 and mit["beleg_deckung"] == 0.1
+    # Die Rangfolge folgt der Gewinnrate
+    assert [z["gruppe"] for z in d["zeilen"]] == ["Wohnungswirtschaft", "Handel"]
+
+    # Eine Gruppe knapp an der Grundlinie darf NICHT markiert werden.
+    # 50 von 100 bei einer Grundlinie von 50 % -> das Intervall enthaelt sie.
+    assert not konversion.wilson(50, 100)[0] > 0.5

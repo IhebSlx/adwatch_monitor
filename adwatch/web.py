@@ -577,6 +577,15 @@ def map_projekt_pins_route(status: str | None = None, min_members: int = 1,
                             min_value=min_value, lost_reason=lost_reason)
 
 
+@app.get("/api/konversion")
+def konversion_route(dimension: str = "segment", land: str | None = None,
+                     min_entschieden: int = 30):
+    """Angebot → Auftrag je Gruppe. Siehe insights/konversion.py: zwei Maße,
+    weil eines allein lügt, und ein Konfidenzintervall je Zeile."""
+    from .insights import konversion
+    return konversion.nach(dimension, land, min_entschieden)
+
+
 # --- IPP: Ideales Projekt-Profil + Triage der offenen Projekte -------------
 @app.get("/api/ipp")
 def ipp_profile_route(force: bool = False):
