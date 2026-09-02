@@ -1570,3 +1570,123 @@ tr.arm-kontrolle td { color: var(--muted); }
 [data-theme="dunkel"] input[type="file"]::file-selector-button:hover {
   border-color: var(--border-strong); color: var(--accent-ink);
 }
+
+/* ===================== KARTENANSICHT: die Karte ist die Seite =============
+   Im Entwurf schwebt die Bedienung ueber der Karte, statt sie in einen Kasten
+   zu sperren. Umgesetzt wird das NICHT mit einem zweiten Layout, sondern indem
+   der Kasten in dieser einen Ansicht durchsichtig wird — dieselbe Struktur,
+   dieselben IDs, nur ohne Rahmen. So bleibt die Listenansicht unberuehrt. */
+body.explore-karte .tab-panel.active > .card {
+  background: transparent; border-color: transparent; box-shadow: none;
+  padding: 0; backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+body.explore-karte .tab-panel.active > .card::before { display: none; }
+/* Die Ueberschrift bleibt — sie sagt, ob man Firmen oder Baustellen sieht,
+   und das ist auf einer Karte voller Punkte die halbe Auskunft. Nur enger. */
+body.explore-karte .page-head { margin-bottom: 12px; }
+body.explore-karte .page-head p { display: none; }
+/* "Firmen" steht schon als Ueberschrift da, "Explorer" darunter sagt nichts
+   dazu -- in der Kartenansicht ist jede Zeile Platz, die die Karte verliert. */
+body.explore-karte .tab-panel.active > .card > h2 { display: none; }
+
+/* Der Filterstreifen wird zur schwebenden Glasleiste. */
+body.explore-karte .filter-bar,
+body.explore-karte .toolbar {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 999px; padding: 7px 10px 7px 14px; margin-bottom: 12px;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+body.explore-karte .filter-bar input,
+body.explore-karte .filter-bar select { background: transparent; border-color: transparent; }
+body.explore-karte .filter-bar input:focus { background: var(--bg-subtle); }
+
+/* Die Karte nimmt, was uebrig ist. 100vh minus Kopfzeilen — nicht 68vh, das
+   liess unten immer einen toten Streifen stehen. */
+body.explore-karte #custMap,
+body.explore-karte #objMap {
+  height: calc(100vh - 210px); min-height: 380px;
+  border-radius: var(--radius-lg);
+}
+body.explore-karte #custMapWrap,
+body.explore-karte #objMapWrap { position: relative; }
+
+/* Legende und Kennzahlen schweben AUF der Karte statt darunter zu sitzen. */
+body.explore-karte .map-legend {
+  position: absolute; left: 14px; bottom: 14px; z-index: 500;
+  gap: 14px; padding: 8px 16px; margin: 0;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 999px; box-shadow: var(--shadow-md); font-size: 11.5px;
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+body.explore-karte #objekteKpis {
+  position: absolute; right: 14px; top: 14px; z-index: 500;
+  display: flex; flex-direction: column; gap: 9px; width: 208px; margin: 0;
+}
+body.explore-karte #objekteKpis .kpi { padding: 11px 14px; }
+body.explore-karte #objekteKpis .kpi-value { font-size: 22px; margin-top: 2px; }
+body.explore-karte #objekteKpis .sub { font-size: 10.5px; }
+/* Auf schmalen Fenstern wuerden die Kacheln die Karte auffressen. */
+@media (max-width: 1100px) {
+  body.explore-karte #objekteKpis { position: static; width: auto;
+    flex-direction: row; flex-wrap: wrap; margin-bottom: 12px; }
+}
+
+/* Fit-Wert als Zahl UND Anteil, ohne zweite Spalte. */
+.fit-bar {
+  display: inline-block; width: 40px; height: 4px; margin-left: 7px;
+  vertical-align: middle; border-radius: 2px; overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+}
+.fit-bar i {
+  display: block; height: 100%; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+}
+[data-theme="dunkel"] .fit-bar i { box-shadow: 0 0 10px -2px var(--accent); }
+
+/* ===================== Projektkarte: flach | Höhe =========================
+   Der Umschalter sitzt AUF der Karte, oben rechts — dort, wo man ihn sucht,
+   und dort, wo er keine Zeile Layout kostet. */
+.map-dim {
+  /* unten rechts: oben rechts stehen die Kennzahlen, unten links die Legende,
+     oben links Leaflets Zoomknoepfe. Die vierte Ecke ist die freie. */
+  position: absolute; bottom: 14px; right: 14px; z-index: 500;
+  display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.map-dim button {
+  border: 0; background: transparent; cursor: pointer; font: inherit;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  padding: 5px 13px; border-radius: 999px;
+}
+.map-dim button:hover { color: var(--ink); }
+.map-dim button.active { background: var(--accent); color: #fff; }
+[data-theme="dunkel"] .map-dim button.active {
+  background: rgba(139, 92, 246, .4); box-shadow: 0 0 18px -6px var(--accent);
+}
+#objMap3d {
+  height: 68vh; min-height: 420px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  z-index: 0; position: relative; background: var(--map-bg);
+  overflow: hidden;
+}
+body.explore-karte #objMap3d {
+  height: calc(100vh - 210px); min-height: 380px; border-radius: var(--radius-lg);
+}
+/* MapLibres eigene Bedienelemente an die Haut angleichen */
+[data-theme="dunkel"] .maplibregl-ctrl-attrib,
+[data-theme="dunkel"] .maplibregl-ctrl-group {
+  background: rgba(16, 21, 42, .88) !important; color: var(--muted);
+}
+[data-theme="dunkel"] .maplibregl-ctrl-attrib a { color: var(--muted) !important; }
+[data-theme="dunkel"] .maplibregl-popup-content {
+  background: rgba(16, 21, 42, .93); color: var(--ink);
+  border: 1px solid var(--border-strong); border-radius: 11px;
+  padding: 9px 13px; box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+[data-theme="dunkel"] .maplibregl-popup-tip { border-top-color: rgba(16, 21, 42, .93); }
+.ml-pop-t { font-weight: 600; font-size: 12.5px; }
+.ml-pop-s { font-size: 11px; color: var(--muted); margin-top: 2px; }

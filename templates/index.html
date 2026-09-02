@@ -11,6 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="/static/vendor/maplibre/maplibre-gl.css">
 <link rel="stylesheet" href="/static/app.css">
 <script>
   /* Vor dem ersten Anstrich: die gespeicherte Haut setzen. Stuende das in
@@ -724,12 +725,23 @@
              Koordinate kommt aus der PLZ der BAUADRESSE (geo.assign_project_
              centroids). Die Farbe zeigt den Ausgang, nicht den Firmentyp. -->
         <div id="objMapWrap" class="hidden">
+          <!-- Zwei Darstellungen derselben Objekte. FLACH ist Leaflet, wie
+               ueberall sonst in der App — bewiesen, laeuft auch dann, wenn ein
+               Firmennetz nur die alte Kachelquelle durchlaesst. HOCH ist
+               MapLibre: gekippte Kamera, und jedes Objekt wird zu einer Saeule,
+               deren HOEHE der Projektwert ist. Startet flach; die hohe Ansicht
+               faellt selbsttaetig zurueck, wenn ihre Grundkarte nicht kommt. -->
+          <div class="map-dim" id="objDim">
+            <button type="button" data-dim="flach" class="active" title="Karte von oben">▦ Flach</button>
+            <button type="button" data-dim="hoch" title="Gekippte Ansicht — Höhe = Projektwert">◨ Höhe</button>
+          </div>
           <div id="objMap"></div>
+          <div id="objMap3d" class="hidden"></div>
           <div class="map-legend">
             <span><i class="map-dot dot-gewonnen"></i> gewonnen</span>
             <span><i class="map-dot dot-offen"></i> offen</span>
             <span><i class="map-dot dot-verloren"></i> verloren</span>
-            <span class="muted">Pin-Position = PLZ-Zentroid der Bauadresse (stadtgenau)</span>
+            <span class="muted" id="objMapHinweis">Pin-Position = PLZ-Zentroid der Bauadresse (stadtgenau)</span>
           </div>
         </div>
 
@@ -1253,6 +1265,7 @@
 <link rel="stylesheet" href="/static/vendor/leaflet/MarkerCluster.Default.css">
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/vendor/leaflet/leaflet.markercluster.js"></script>
+<script src="/static/vendor/maplibre/maplibre-gl.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

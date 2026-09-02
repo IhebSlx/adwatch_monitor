@@ -60,10 +60,16 @@
     return `<span class="state-chip state-${esc(state)}" title="${esc(CUSTOMER_STATE_LABEL[state] || state)}">${esc(CUSTOMER_STATE_SHORT[state] || state)}</span>`;
   }
 
-  function fitCell(fit) {
+  function fitCell(fit, mitBalken = false) {
     if (fit == null) return '<span class="muted">—</span>';
     const cls = fit >= 85 ? "fit-high" : (fit >= 60 ? "fit-mid" : "fit-low");
-    return `<span class="fit-badge ${cls}">${Math.round(fit)}</span>`;
+    const zahl = `<span class="fit-badge ${cls}">${Math.round(fit)}</span>`;
+    if (!mitBalken) return zahl;
+    // Der Balken beantwortet die Frage, die die Zahl offen laesst: 67 wovon?
+    // Nur in der Tabelle, wo Zeilen untereinander stehen und der Vergleich
+    // ueberhaupt etwas heisst -- im Steckbrief steht die Zahl allein.
+    return `${zahl}<span class="fit-bar" aria-hidden="true"><i style="width:${
+      Math.max(0, Math.min(100, fit)).toFixed(0)}%"></i></span>`;
   }
 
   const RUN_STATUS_LABEL = { ok: "ok", no_active_ads: "no active ads",
@@ -1308,6 +1314,25 @@
   });
   let MAP_TYPE_COLOR = mapFarben();
 
+  // Wohin die Karte beim Oeffnen schaut.
+  //
+  // fitBounds ueber ALLE Punkte ergab eine Weltansicht: ein paar Dutzend
+  // Adressen liegen in Asien und Amerika, und zwei Punkte auf zwei Kontinenten
+  // zwingen die Karte auf Weltmassstab, waehrend 99 % der Firmen als ein
+  // einziger Fleck darin verschwinden. Deshalb wird auf das mittlere 98 %
+  // eingepasst -- die Ausreisser bleiben da, man sieht sie beim Herauszoomen,
+  // sie bestimmen nur nicht mehr den ersten Eindruck.
+  function kernAusschnitt(punkte) {
+    if (!punkte.length) return null;
+    const q = (werte, p) => werte[Math.min(werte.length - 1,
+      Math.max(0, Math.round((werte.length - 1) * p)))];
+    const lat = punkte.map(p => p.lat).sort((a, b) => a - b);
+    const lng = punkte.map(p => p.lng).sort((a, b) => a - b);
+    return L.latLngBounds(
+      [q(lat, 0.01), q(lng, 0.01)],
+      [q(lat, 0.99), q(lng, 0.99)]);
+  }
+
   function updateMapCount() {
     if (!custMap) return;
     const b = custMap.getBounds();
@@ -1377,7 +1402,8 @@
       // seine endgueltige Groesse bekommen; ohne das rechnete fitBounds mit den
       // alten Massen und die Karte stand auf Weltansicht statt auf Europa.
       custMap.invalidateSize();
-      custMap.fitBounds(L.latLngBounds(d.pins.map(p => [p.lat, p.lng])).pad(0.08));
+      const aus = kernAusschnitt(d.pins);
+      if (aus) custMap.fitBounds(aus.pad(0.06));
     }
     updateMapCount();
   }
@@ -1526,7 +1552,8 @@
       // seine endgueltige Groesse bekommen; ohne das rechnete fitBounds mit den
       // alten Massen und die Karte stand auf Weltansicht statt auf Europa.
       objMap.invalidateSize();
-      objMap.fitBounds(L.latLngBounds(d.pins.map(p => [p.lat, p.lng])).pad(0.08));
+      const aus = kernAusschnitt(d.pins);
+      if (aus) objMap.fitBounds(aus.pad(0.06));
     }
     updateObjMapCount(d.ohne_koordinate);
   }
@@ -1552,10 +1579,276 @@
     }
     setTimeout(() => objMap.invalidateSize(), 0);
     await loadObjMapPins();
+    // Wer zuletzt in der Höhe war, landet auch wieder dort. Die flache Karte
+    // wird trotzdem zuerst aufgebaut: sie ist der Rückfallpfad und muss
+    // bereitstehen, bevor die hohe Ansicht es versuchen darf.
+    let dim = "flach";
+    try { dim = localStorage.getItem("adwatch.objDim") || "flach"; } catch { /* privat */ }
+    if (dim === "hoch") objDim("hoch");
   }
 
+  // ================= PROJEKTKARTE IN DER HÖHE ==============================
+  // Dieselben Objekte, gekippte Kamera, und der Projektwert wird zur HÖHE.
+  // Das ist der einzige Ort in der App, an dem 3D etwas aussagt statt zu
+  // schmücken: München, Hamburg und Berlin werden zu Silhouetten der
+  // Nachfrage, und ein hoher Turm ist buchstäblich ein großes Projekt.
+  //
+  // MapLibre liegt lokal in static/vendor, wie Leaflet auch — kein CDN. Von
+  // außen kommt nur die Grundkarte, und genau die ist der wackelige Teil:
+  // Vektorkacheln werden in einem Worker geladen, den manche Firmennetze
+  // anders behandeln als ein <img>. Deshalb die Kette
+  //     Vektor (schön) → Raster abgedunkelt (bewährt) → zurück auf Flach
+  // und nicht die Annahme, dass schon alles durchkommt.
+  const VEKTOR_STIL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+  // Wenn die Vektor-Grundkarte nicht kommt: GAR KEINE Grundkarte.
+  //
+  // Der erste Versuch war ein abgedunkeltes Rasterbild — es sah in drei
+  // Anlaeufen ausgewaschen aus, weil weder raster-brightness noch eine
+  // Deckschicht zuverlaessig griffen. Ein blasser Kompromiss ist hier die
+  // schlechtere Antwort: die Aussage dieser Ansicht sind die SAEULEN, und die
+  // stehen auf tiefem Grund besser als auf einer halbhellen Karte. Ausserdem
+  // braucht dieser Weg keinen einzigen fremden Server.
+  const LEER_STIL = {
+    version: 8, sources: {},
+    layers: [{ id: "grund", type: "background",
+               paint: { "background-color": "#05060f" } }],
+  };
+  let objMap3d = null, obj3dStil = null;
+
+  // Ein Punkt kann nicht extrudiert werden — fill-extrusion braucht Flaechen.
+  // Also bekommt jedes Objekt ein Quadrat um seine Koordinate.
+  //
+  // Und dieses Quadrat muss mit dem Zoom MITWACHSEN. Feste 0,0045 Grad (rund
+  // 500 m) waren bei Zoom 4,6 ganze 0,12 Pixel breit; die Kachelvereinfachung
+  // der GeoJSON-Quelle warf sie darum komplett weg, und die Karte blieb leer,
+  // obwohl Quelle, Ebene und 2.844 Objekte nachweislich da waren. Gemessen:
+  // mit 1,2-Grad-Quadraten zeichnete dieselbe Ebene sofort 204 Flaechen.
+  //
+  // Die Breite wird deshalb aus der Zoomstufe gerechnet — rund fuenf Pixel,
+  // auf jeder Stufe.
+  const SAEULE_PX = 3;   // schlank: es soll eine Silhouette werden, kein Klotzfeld
+  function halbeBreite(zoom) {
+    return (SAEULE_PX / 2) * 360 / (256 * Math.pow(2, zoom));
+  }
+
+  function saeulenGeoJson(pins, zoom) {
+    const d = halbeBreite(zoom);
+    return { type: "FeatureCollection", features: pins.map(p => {
+      const dx = d / Math.max(0.2, Math.cos(p.lat * Math.PI / 180));
+      return { type: "Feature",
+        properties: {
+          // Wurzelaehnliche Stauchung: linear waere das 6-Mio-Projekt 200-mal so
+          // hoch wie ein 30.000-Euro-Auftrag und alles andere ein Teppich.
+          h: Math.max(2500, Math.pow(p.value || 1, 0.62) * 22),
+          f: OBJ_TYPE_COLOR[p.typ] || "#64708a",
+          name: p.name, city: p.city || "", wert: p.value || 0, n: p.members },
+        geometry: { type: "Polygon", coordinates: [[
+          [p.lng - dx, p.lat - d], [p.lng + dx, p.lat - d],
+          [p.lng + dx, p.lat + d], [p.lng - dx, p.lat + d], [p.lng - dx, p.lat - d]]] } };
+    }) };
+  }
+
+  // Die zuletzt gezeichneten Objekte, damit ein Zoomwechsel die Quadrate neu
+  // masseln kann, ohne erneut zum Server zu gehen.
+  let obj3dPins = [], obj3dZoom = null;
+
+  function obj3dNeuMasseln() {
+    if (!objMap3d || !obj3dPins.length) return;
+    const z = objMap3d.getZoom();
+    // Erst ab einer halben Zoomstufe neu bauen — sonst rechnet die Karte
+    // waehrend jedes Zoomens 2.844 Polygone neu.
+    if (obj3dZoom !== null && Math.abs(z - obj3dZoom) < 0.5) return;
+    obj3dZoom = z;
+    const q = objMap3d.getSource("obj");
+    if (q) q.setData(saeulenGeoJson(obj3dPins, z));
+  }
+
+  function obj3dEbenen(m, pins) {
+    try { _obj3dEbenen(m, pins); }
+    catch (e) {
+      // Lautlos scheitern war hier der eigentliche Fehler: die Ebene fehlte,
+      // die Karte sah nur leer aus, und nichts sagte warum.
+      console.error("Saeulenebene:", e);
+      obj3dHinweis("Höhen-Ansicht nicht verfügbar: " + e.message);
+      objDim("flach");
+    }
+  }
+
+  function _obj3dEbenen(m, pins) {
+    if (m.getSource("obj")) {
+      obj3dPins = pins; obj3dZoom = m.getZoom();
+      m.getSource("obj").setData(saeulenGeoJson(pins, m.getZoom()));
+      return;
+    }
+    obj3dPins = pins;
+    obj3dZoom = m.getZoom();
+    // tolerance: 0 schaltet die Douglas-Peucker-Vereinfachung ab. Bei kleinen
+    // Quadraten entscheidet sie sonst, dass ein Objekt "unwesentlich" ist.
+    m.addSource("obj", { type: "geojson", tolerance: 0,
+                         data: saeulenGeoJson(pins, m.getZoom()) });
+    // Ein Schein am Boden, damit auch niedrige Säulen auffindbar bleiben
+    m.addLayer({ id: "obj-boden", type: "circle", source: "obj", paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 4, 11, 18],
+      "circle-color": ["get", "f"], "circle-blur": 1.2, "circle-opacity": 0.26 } });
+    m.addLayer({ id: "obj-saeule", type: "fill-extrusion", source: "obj", paint: {
+      "fill-extrusion-color": ["get", "f"],
+      // Hoehen sind METER, und Meter schrumpfen beim Herauszoomen. Bei Zoom 4,6
+      // ist ein Pixel rund 4 km breit: eine Saeule von 3.000 m waere weniger
+      // als ein Pixel hoch — beim ersten Anlauf war die Karte deshalb gekippt
+      // und leer. Der Faktor haelt die Silhouette ueber alle Zoomstufen
+      // ungefaehr gleich gross, statt sie zwischen unsichtbar und absurd
+      // wechseln zu lassen.
+      // Der Zoom-Ausdruck MUSS aussen stehen. Innen in ["*", ...] verschachtelt
+      // lehnt MapLibre ihn ab, addLayer wirft, und die Saeulenebene fehlt
+      // kommentarlos — die Karte war gekippt und leer, ohne eine Meldung.
+      // Geeicht an der Wirklichkeit, nicht geschaetzt: das teuerste Objekt hat
+      // eine Grundhoehe von rund 205.000, und bei Zoom 4,6 ist ein Pixel etwa
+      // 4,1 km breit. Faktor 2,4 macht daraus knapp 130 px — eine Silhouette,
+      // die ins Bild passt. Je Zoomstufe halbiert sich der Faktor, damit die
+      // Silhouette gleich gross bleibt, statt beim Hineinzoomen ins Weltall zu
+      // wachsen. Beim ersten Anlauf stand hier 32, und die Saeulen schossen
+      // 1.500 px ueber den oberen Bildrand hinaus.
+      "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"],
+        2,  ["*", ["get", "h"], 13],
+        4,  ["*", ["get", "h"], 3.3],
+        6,  ["*", ["get", "h"], 0.9],
+        8,  ["*", ["get", "h"], 0.22],
+        10, ["*", ["get", "h"], 0.056],
+        12, ["*", ["get", "h"], 0.014],
+        14, ["*", ["get", "h"], 0.0035]],
+      "fill-extrusion-base": 0,
+      "fill-extrusion-opacity": 0.88,
+      "fill-extrusion-vertical-gradient": true } });
+
+    const pop = new maplibregl.Popup({ closeButton: false, offset: 8 });
+    m.on("mousemove", "obj-saeule", e => {
+      const f = e.features[0].properties;
+      m.getCanvas().style.cursor = "pointer";
+      pop.setLngLat(e.lngLat).setHTML(
+        `<div class="ml-pop-t">${esc(f.name)}</div>` +
+        `<div class="ml-pop-s">${esc(f.city)} · ${eur(Number(f.wert))} · ` +
+        `${f.n} Verkaufschance${Number(f.n) === 1 ? "" : "n"}</div>`).addTo(m);
+    });
+    m.on("mouseleave", "obj-saeule", () => { m.getCanvas().style.cursor = ""; pop.remove(); });
+    m.on("zoomend", obj3dNeuMasseln);
+  }
+
+  // Die Kamera auf die Daten richten, nicht auf eine feste Mitte.
+  //
+  // Zwei Dinge, die eine flache Karte nicht braucht: oben muss Platz bleiben,
+  // weil die Saeulen nach oben wachsen und sonst aus dem Bild ragen, und rechts,
+  // weil dort die Kennzahlen schweben. Eingepasst wird wie bei den flachen
+  // Karten auf das mittlere 98 % — sonst zieht ein einzelnes Objekt in Asien
+  // die Ansicht auf Weltmassstab.
+  function obj3dEinpassen(pins) {
+    if (!pins.length) return;
+    const q = (w, x) => w[Math.min(w.length - 1, Math.max(0, Math.round((w.length - 1) * x)))];
+    const lat = pins.map(p => p.lat).sort((a, b) => a - b);
+    const lng = pins.map(p => p.lng).sort((a, b) => a - b);
+    // Der Rand muss zum Fenster passen, nicht zur Wunschvorstellung. Feste
+    // 150 px oben und 230 px rechts waren auf einem kleinen Fenster mehr als
+    // der Container hoch war — fitBounds zoomte auf Stufe 2 heraus, und die
+    // Saeulen verschwanden in der Welt.
+    const el = objMap3d.getContainer();
+    const rand = {
+      top: Math.min(140, el.clientHeight * 0.20),
+      bottom: Math.min(50, el.clientHeight * 0.08),
+      left: Math.min(50, el.clientWidth * 0.06),
+      right: Math.min(230, el.clientWidth * 0.20),
+    };
+    objMap3d.fitBounds(
+      [[q(lng, 0.01), q(lat, 0.01)], [q(lng, 0.99), q(lat, 0.99)]],
+      { pitch: 52, bearing: -17, duration: 1400, maxZoom: 9, padding: rand });
+  }
+
+  function obj3dHinweis(text) {
+    const el = $("#objMapHinweis");
+    if (el) el.textContent = text;
+  }
+
+  async function zeigeObj3d() {
+    if (typeof maplibregl === "undefined") { objDim("flach", "3D-Bibliothek fehlt"); return; }
+    const d = await api(`/api/map/projekt-pins?${objekteQuery()}`).catch(() => null);
+    if (!d) { objDim("flach", "Objekte konnten nicht geladen werden"); return; }
+    const pins = d.pins.filter(p => p.value);
+    if (!objMap3d) {
+      objMap3d = new maplibregl.Map({
+        container: "objMap3d", style: VEKTOR_STIL,
+        center: [10.0, 50.4], zoom: 4.6, pitch: 55, bearing: -17,
+        attributionControl: { compact: true },
+      });
+      objMap3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
+      window._obj3d = objMap3d;   // Debug-Griff, wie window._custMap
+      obj3dStil = "vektor";
+      objMap3d.on("style.load", () => obj3dEbenen(objMap3d, pins));
+      // Kommt die Vektor-Grundkarte nicht, wird auf Raster gewechselt. Geprüft
+      // wird der geladene ZUSTAND, nicht das style.load-Ereignis: der Stil kann
+      // ankommen und die Kacheln trotzdem ausbleiben.
+      setTimeout(() => {
+        if (obj3dStil !== "vektor" || objMap3d.loaded()) return;
+        obj3dStil = "leer";
+        objMap3d.setStyle(LEER_STIL);
+        // NICHT auf 'styledata' oder 'style.load' warten: das erste feuert
+        // mehrfach und zu frueh (addSource wirft dann), das zweite feuert nach
+        // setStyle gar nicht zuverlaessig. Beim ersten Anlauf stand deshalb die
+        // Grundkarte allein da — gekippt, aber ohne eine einzige Saeule.
+        const warte = setInterval(() => {
+          if (!objMap3d.isStyleLoaded()) return;
+          clearInterval(warte);
+          obj3dEbenen(objMap3d, pins);
+        }, 150);
+        setTimeout(() => clearInterval(warte), 20000);
+        obj3dHinweis("Grundkarte nicht erreichbar — Säulen auf leerem Grund. Höhe = Projektwert.");
+      }, 6000);
+    } else {
+      obj3dEbenen(objMap3d, pins);
+    }
+    objMap3d.resize();
+    obj3dEinpassen(pins);
+    const ohne = d.ohne_koordinate || 0;
+    $("#exploreCount").textContent =
+      `${deN(pins.length)} Objekte mit Wert und Bauadresse`
+      + (ohne ? ` · ${deN(ohne)} ohne Adresse` : "");
+  }
+
+  // Umschalter flach | hoch. Der flache Weg bleibt unangetastet — er ist der
+  // Rückfallpfad, und ein Rückfallpfad, der selbst umgebaut wurde, ist keiner.
+  function objDim(dim, grund) {
+    const hoch = dim === "hoch";
+    $$("#objDim button").forEach(b => b.classList.toggle("active", (b.dataset.dim === dim)));
+    $("#objMap")?.classList.toggle("hidden", hoch);
+    $("#objMap3d")?.classList.toggle("hidden", !hoch);
+    try { localStorage.setItem("adwatch.objDim", dim); } catch { /* privater Modus */ }
+    if (grund) { toast(grund, "error"); obj3dHinweis(grund); return; }
+    if (hoch) { zeigeObj3d(); }
+    else {
+      obj3dHinweis("Pin-Position = PLZ-Zentroid der Bauadresse (stadtgenau)");
+      if (objMap) {
+        // Erst im naechsten Bild nachmessen: die Klasse "hidden" ist gerade
+        // gefallen, aber der Browser hat noch nicht neu gesetzt. Ohne die
+        // Verzoegerung rechnete Leaflet mit einem Container der Groesse 0 und
+        // die Karte blieb nach dem Zurueckschalten auf Weltansicht stehen.
+        //
+        // Schluessel leeren, sonst greift die Deduplizierung: der Filter ist
+        // derselbe, also passierte sonst gar nichts.
+        requestAnimationFrame(() => {
+          objMap.invalidateSize();
+          objPinsKey = null;
+          loadObjMapPins().catch(() => {});
+        });
+      }
+    }
+  }
+  $$("#objDim button").forEach(b =>
+    b.addEventListener("click", () => objDim(b.dataset.dim)));
+
   function objMapSichtbar() {
-    return objMap && !$("#objMapWrap").classList.contains("hidden");
+    return objMap && !$("#objMapWrap").classList.contains("hidden")
+      && !$("#objMap").classList.contains("hidden");
+  }
+  function obj3dSichtbar() {
+    return objMap3d && !$("#objMapWrap").classList.contains("hidden")
+      && !$("#objMap3d").classList.contains("hidden");
   }
 
   // ================= EXPLORER: Karte|Liste × Firmen|Projekte ==============
@@ -3273,6 +3566,7 @@
     // weiter die Pins des vorigen Filters, während die KPIs darüber schon die
     // neue Auswahl zählten — zwei Wahrheiten auf einem Bildschirm.
     if (objMapSichtbar()) loadObjMapPins();
+    if (obj3dSichtbar()) zeigeObj3d();
 
     const rows = data.rows || [];
     if (!rows.length) {
@@ -4388,7 +4682,7 @@
         <td class="col-dot"><span class="dot dot-${r.resolution_status}" title="${esc(STATUS_LABEL[r.resolution_status] || r.resolution_status)}"></span></td>
         <td class="cell-name">${esc(r.name)}</td>
         <td>${customerStateChip(r.customer_state)}</td>
-        <td class="num">${fitCell(r.fit_score)}</td>
+        <td class="num">${fitCell(r.fit_score, true)}</td>
         <td class="num">${r.active_ads == null ? '<span class="muted">—</span>' : (r.active_ads > 0 ? `<strong>${r.active_ads}</strong>` : '<span class="muted">0</span>')}</td>
         <td class="cell-ort">${esc(r.city || "")}</td>
         <td class="num">${eur(r.revenue_y0)}</td>
