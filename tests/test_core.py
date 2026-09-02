@@ -5100,3 +5100,62 @@ def test_das_land_der_baustelle_wird_erschlossen_nie_geraten(temp_db, monkeypatc
     assert r["geocoded"] == 2 and r["no_match"] == 1
     # zweimal laufen lassen aendert nichts mehr
     assert geo.assign_project_centroids() == r, "der Lauf ist wiederholbar"
+
+
+def test_der_chatbot_schlaegt_laeufe_vor_und_startet_nie(temp_db, monkeypatch):
+    """Der Agent darf den Umfang bestimmen, nicht den Startknopf druecken.
+
+    Ein Lauf kostet echtes Geld und laeuft stundenlang; ein missverstandenes
+    "mach das mal fuer alle" waeren 46.810 Firmen. Deshalb liefert das Werkzeug
+    einen VORSCHLAG mit Umfang und Kosten -- und keine gestartete Arbeit.
+
+    Zweitens, und das ist der eigentliche Fallstrick: customers._apply_filters
+    ignoriert unbekannte Schluessel STILL. Beim ersten Test schrieb das Modell
+    `postal_prefix: "8"` fuer Bayern, der Server kannte den Schluessel nicht,
+    und der Vorschlag haette "Bayern" behauptet, waehrend er ganz Deutschland
+    getroffen haette. Ein Filter, der nicht wirkt, muss laut sein.
+    """
+    import json as _json
+    from adwatch import customers, fragen
+    from adwatch.models import Company
+
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name="Haendler DE 1", country="DE", segment="Handel"),
+        Company(name="Haendler DE 2", country="DE", segment="Handel"),
+        Company(name="Architekt DE", country="DE", segment="Architekten"),
+        Company(name="Privat DE", country="DE", segment="Private Endkunden"),
+    ])
+    s.commit(); s.close()
+    monkeypatch.setattr(customers, "SessionLocal", temp_db.SessionLocal)
+
+    # 1. Ein unbekannter Filter wird abgelehnt, nicht stillschweigend geschluckt
+    fehler = _json.loads(fragen.w_lauf_vorschlagen(
+        {"country": ["DE"], "postal_prefix": "8"}, ["anreichern"]))
+    assert "postal_prefix" in fehler["fehler"], \
+        "ein Filter, der nicht wirkt, muss als Fehler zurueckkommen"
+    assert "vorschlag" not in fehler
+
+    # 2. Ein gueltiger Filter liefert einen Vorschlag -- Private Endkunden sind
+    #    ausgeschlossen, auch wenn niemand danach gefragt hat
+    v = _json.loads(fragen.w_lauf_vorschlagen(
+        {"country": ["DE"], "segment": ["Handel"]}, ["anreichern", "identitaet"], "Test"))
+    assert v["vorschlag"] is True
+    assert v["im_lauf"] == 2, "nur die beiden Haendler"
+    assert "Private Endkunden" in v["filter"]["exclude_segment"]
+    assert v["plan"] == {"enrich": True, "identity": True}
+    assert [k["usd"] for k in v["kosten"]] == [round(0.004 * 2, 2), round(0.005 * 2, 2)]
+    # KEINE Firmen-IDs im Vorschlag: 2.000 Zahlen durch das Modell zu schicken
+    # kostet Token, und der Kuerzungsschutz von _j() warf sie beim ersten
+    # Versuch auf 500 herunter, waehrend daneben "2.000 im Lauf" stand.
+    assert "company_ids" not in v
+    assert "gekuerzt" not in v, "der Vorschlag darf nie gekappt werden"
+
+    # 3. Ein Filter ohne Treffer schlaegt nichts vor, statt einen leeren Lauf
+    leer = _json.loads(fragen.w_lauf_vorschlagen(
+        {"country": ["XX"]}, ["anreichern"]))
+    assert leer["vorschlag"] is False
+
+    # 4. Ohne Schritt gibt es keinen Lauf
+    ohne = _json.loads(fragen.w_lauf_vorschlagen({"country": ["DE"]}, []))
+    assert "fehler" in ohne

@@ -2082,6 +2082,59 @@
     return el;
   }
 
+  // Der Chatbot schlaegt Laeufe VOR, gestartet werden sie hier per Knopf.
+  //
+  // Warum nicht das Modell starten lassen: ein Lauf kostet echtes Geld und
+  // laeuft stundenlang; "mach das mal fuer alle" waeren 46.810 Firmen. Das
+  // Modell macht, was es gut kann — aus einem Satz einen Filter bauen —, Python
+  // zaehlt und schaetzt, und der Mensch drueckt. Verschickt wird der FILTER,
+  // nicht eine Liste von IDs: der Server loest ihn im Moment des Klicks auf,
+  // die Menge ist damit garantiert aktuell.
+  function laufKarte(v) {
+    if (!v || !v.vorschlag) return "";
+    const summe = (v.kosten || []).reduce((a, k) => a + (k.usd || 0), 0);
+    const offen = (v.kosten || []).some(k => k.usd == null);
+    const schritte = (v.schritte || []).map(s => `<span class="chip">${esc(s)}</span>`).join(" ");
+    return `<div class="lauf-karte" data-lauf='${esc(JSON.stringify(
+        { filter: v.filter, plan: v.plan, label: v.label, deckel: v.deckel || 2000 }))}'>
+      <div class="lk-kopf">Lauf vorgeschlagen — noch nicht gestartet</div>
+      <div class="lk-schritte">${schritte}</div>
+      <dl class="lk-zahlen">
+        <dt>Firmen im Lauf</dt><dd>${deN(v.im_lauf)}${
+          v.gekappt ? ` <span class="muted">(von ${deN(v.treffer_gesamt)} Treffern — auf ${deN(v.deckel)} begrenzt)</span>` : ""}</dd>
+        <dt>Geschätzte Kosten</dt><dd>${summe > 0 ? "$" + summe.toFixed(2) : "—"}${
+          offen ? ' <span class="muted">+ Apify je Abruf</span>' : ""}</dd>
+      </dl>
+      <div class="lk-aktionen">
+        <button class="btn btn-primary btn-sm lk-start">Lauf starten</button>
+        <span class="lk-status muted"></span>
+      </div>
+    </div>`;
+  }
+
+  function wireLaufKarte(wurzel, v) {
+    if (!v || !v.vorschlag) return;
+    const karte = $(".lauf-karte", wurzel);
+    const knopf = $(".lk-start", karte || wurzel);
+    if (!karte || !knopf) return;
+    knopf.addEventListener("click", async () => {
+      knopf.disabled = true;
+      const status = $(".lk-status", karte);
+      status.textContent = "Wird gestartet …";
+      try {
+        const job = await api("/api/pipeline-jobs/aus-filter", "POST",
+                              JSON.parse(karte.dataset.lauf));
+        status.textContent = `Läuft — ${job.total || ""} Schritte. Fortschritt in „Logs".`;
+        karte.classList.add("gestartet");
+        toast("Lauf gestartet.", "info");
+      } catch (e) {
+        knopf.disabled = false;
+        status.textContent = "";
+        toast(e.message, "error");
+      }
+    });
+  }
+
   async function chatSenden(text) {
     text = (text || "").trim();
     if (!text || CHAT.laeuft) return;
@@ -2100,9 +2153,10 @@
       const meta = (d.verlauf || []).map(v =>
         `<span class="wz${v.fehler ? " err" : ""}" title="${esc(JSON.stringify(v.params || {}))}${
           v.fehler ? " — FEHLER: " + esc(v.fehler) : ""}">${esc(v.werkzeug)}</span>`).join("");
-      bot.innerHTML = mdToHtml(d.antwort) +
+      bot.innerHTML = mdToHtml(d.antwort) + laufKarte(d.vorschlag) +
         `<div class="chat-meta">${meta}<span>${esc(d.model)}</span>` +
         `<span>≈ $${d.kosten_usd}</span><span>${d.dauer_s}s</span></div>`;
+      wireLaufKarte(bot, d.vorschlag);
       CHAT.verlauf.push({ frage: text, antwort: d.antwort });
       $("#chatModell").textContent = d.model;
     } catch (e) {

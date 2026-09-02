@@ -299,6 +299,120 @@ def w_markt_bild(land: str | None = None) -> str:
     return _j(pipeline.board(land or None))
 
 
+# --- Einen Lauf VORSCHLAGEN -------------------------------------------------
+# Der Agent darf den Umfang bestimmen, nicht den Startknopf druecken.
+#
+# Ein Lauf kostet echtes Geld (Anreicherung und Identitaetspruefung je rund
+# halber Cent pro Firma, Ad lookup ueber Apify) und laeuft ueber Stunden. Ein
+# missverstandener Satz wie "mach das mal fuer alle" waeren 46.810 Firmen. Also
+# macht das Modell genau das, was es gut kann -- aus einem Satz einen Filter
+# bauen -- und Python macht den Rest: zaehlen, schaetzen, auflisten. Gestartet
+# wird erst per Knopf in der Oberflaeche.
+#
+# Die Filtersprache ist DIESELBE wie im Firmen-Explorer (customers._apply_filters),
+# damit ein Vorschlag genau die Menge trifft, die man dort auch sehen wuerde.
+# Genau die Schluessel, die customers._apply_filters wirklich auswertet.
+# Steht hier etwas Falsches drin, faellt es beim naechsten Vorschlag auf; fehlt
+# hier etwas, kann das Modell es nicht benutzen. Beides ist besser als ein
+# Filter, der nichts tut.
+_FILTER_SCHLUESSEL = {
+    "ids", "q", "kv", "segment", "sub_segment", "sales_channel", "country",
+    "lead_source", "solarlux_relevance", "office_type", "decision_role",
+    "solarlux_fit", "exclude_kv", "exclude_segment", "exclude_sub_segment",
+    "customer_state", "ad_activity", "ad_source", "assessment",
+    "enrichment_status", "fit_min", "has_website", "no_website",
+    "include_consumers", "page_id_state", "resolution_status", "tracked",
+    "revenue_history", "revenue_min", "revenue_max",
+    "products_str", "competitor_brands_str", "mentions_solarlux_str",
+}
+
+_SCHRITT_NAMEN = {
+    "anreichern": ("enrich", "Daten anreichern", 0.004),
+    "identitaet": ("identity", "Identitätsprüfung", 0.005),
+    "anzeigen": ("ads", "Ad lookup", None),
+    "bericht": ("report", "Bericht erstellen", 0.0),
+}
+
+
+def w_lauf_vorschlagen(filter: dict | None, schritte: list[str],
+                       label: str | None = None) -> str:
+    from .customers import query_companies
+
+    f = dict(filter or {})
+    # Nicht verhandelbar, egal was im Satz stand: Privatadressen und eigene
+    # Toechter gehoeren in keinen Lauf.
+    aus = list(f.get("exclude_segment") or [])
+    if "Private Endkunden" not in aus:
+        aus.append("Private Endkunden")
+    f["exclude_segment"] = aus
+
+    # Unbekannte Schluessel werden von _apply_filters STILL ignoriert. Beim
+    # ersten Test schrieb das Modell `postal_prefix: "8"` fuer Bayern, der
+    # Server kannte den Schluessel nicht, und der Vorschlag haette "Bayern"
+    # behauptet, waehrend er ganz Deutschland getroffen haette. Ein Filter, der
+    # nicht wirkt, muss LAUT sein — sonst genehmigt jemand einen Lauf fuer eine
+    # Menge, die er nie gesehen hat.
+    fremd = [k for k in f if k not in _FILTER_SCHLUESSEL]
+    if fremd:
+        return _j({"fehler": f"Diese Filter kennt der Server nicht: {fremd}. "
+                             "Sie wuerden stillschweigend ignoriert.",
+                   "erlaubt": sorted(_FILTER_SCHLUESSEL),
+                   "hinweis": "Fuer Regionen gibt es keinen Filter — nutze `q` "
+                              "(sucht in Name und SAP-Nummer) oder frag nach."})
+
+    unbekannt = [s for s in schritte if s not in _SCHRITT_NAMEN]
+    if unbekannt:
+        return _j({"fehler": f"unbekannte Schritte: {unbekannt}",
+                   "erlaubt": list(_SCHRITT_NAMEN)})
+    if not schritte:
+        return _j({"fehler": "kein Schritt gewählt"})
+
+    gesamt = query_companies(f, page_size=1).get("total", 0)
+    if not gesamt:
+        return _j({"vorschlag": False,
+                   "hinweis": "Dieser Filter trifft keine einzige Firma — "
+                              "nichts zu starten.", "filter": f})
+
+    # Deckel: mehr als das laeuft tagelang und kostet entsprechend. Wird er
+    # erreicht, steht das im Vorschlag, statt still zu kappen.
+    DECKEL = 2000
+    anzahl = min(gesamt, DECKEL)
+
+    plan: dict = {}
+    kosten = []
+    for s in schritte:
+        key, name, pro = _SCHRITT_NAMEN[s]
+        if key == "ads":
+            plan["ads"] = ["meta"]
+            kosten.append({"schritt": name, "hinweis": "über Apify, Preis je Abruf"})
+        elif key == "report":
+            plan["report"] = "full"
+            kosten.append({"schritt": name, "usd": 0.0})
+        else:
+            plan[key] = True
+            kosten.append({"schritt": name, "usd": round(pro * anzahl, 2)})
+
+    return _j({
+        "vorschlag": True,
+        "label": label or "Lauf aus dem Chatbot",
+        "filter": f,
+        "treffer_gesamt": gesamt,
+        "im_lauf": anzahl,
+        "gekappt": gesamt > DECKEL,
+        "schritte": [_SCHRITT_NAMEN[s][1] for s in schritte],
+        "plan": plan,
+        "kosten": kosten,
+        # BEWUSST keine Firmen-IDs: 2.000 Zahlen durch das Modell zu schicken
+        # kostet Token und bringt nichts — und der Kuerzungsschutz von _j() warf
+        # sie beim ersten Versuch stillschweigend auf 500 herunter, waehrend
+        # daneben "2.000 im Lauf" stand. Der Startknopf schickt den FILTER, und
+        # der Server loest ihn im selben Moment auf.
+        "deckel": DECKEL,
+        "hinweis": "NICHT gestartet. Der Vorschlag erscheint im Chat als Karte "
+                   "mit Startknopf — erst ein Klick löst den Lauf aus.",
+    })
+
+
 WERKZEUGE = [
     {"name": "datenbestand",
      "description": "IMMER zuerst aufrufen, wenn SQL geplant ist: Tabellen, Spalten "
@@ -349,6 +463,26 @@ WERKZEUGE = [
          "top": {"type": "integer"}}, "required": ["profil"]},
      "fn": lambda **kw: w_profil_rangliste(kw.get("profil", ""), kw.get("land"),
                                            kw.get("top", 15))},
+    {"name": "lauf_vorschlagen",
+     "description": "Einen Pipeline-Lauf für eine gefilterte Firmenmenge VORSCHLAGEN "
+                    "(Anreicherung, Identitätsprüfung, Ad lookup, Bericht). Startet "
+                    "NICHTS — liefert Umfang, Kosten und einen Startknopf für den "
+                    "Menschen. Für Sätze wie 'reichere alle Händler in Bayern an' "
+                    "oder 'mach einen Ad lookup für die Architekten in DE'. "
+                    "Der Filter spricht dieselbe Sprache wie der Firmen-Explorer: "
+                    "country ['DE'], segment ['Handel'], sub_segment, sales_channel, "
+                    "customer_state 'active'|'new'|'lapsed'|'never', ad_activity, "
+                    "enrichment_status 'none', has_website true, no_website true, "
+                    "revenue_min, fit_min, q (Freitext). Private Endkunden und "
+                    "Konzern-Töchter werden immer ausgeschlossen.",
+     "input_schema": {"type": "object", "properties": {
+         "filter": {"type": "object", "description": "Filterobjekt wie im Explorer"},
+         "schritte": {"type": "array", "items": {"type": "string",
+             "enum": ["anreichern", "identitaet", "anzeigen", "bericht"]}},
+         "label": {"type": "string", "description": "Name des Laufs, optional"}},
+         "required": ["schritte"]},
+     "fn": lambda **kw: w_lauf_vorschlagen(kw.get("filter"), kw.get("schritte", []),
+                                           kw.get("label"))},
     {"name": "markt_bild",
      "description": "Marktübersicht je Land: Gesamtbestand, Trichter, aktive Kunden, "
                     "Herkunft (CRM vs. entdeckt).",
@@ -364,6 +498,11 @@ ARBEITSWEISE:
 - Nutze die Werkzeuge für JEDE Zahl. Erfinde nie eine Zahl und rate nie. Wenn kein Werkzeug die Antwort liefert, sag das offen.
 - Erst eingrenzen, dann lesen: hole nie mehr Zeilen als nötig.
 - Vor eigener SQL immer zuerst `datenbestand` aufrufen.
+
+LÄUFE STARTEN:
+- Du startest NICHTS. Willst du einen Lauf (Anreicherung, Identitätsprüfung, Ad lookup, Bericht), rufst du `lauf_vorschlagen` mit einem Filter auf. Das Ergebnis ist ein Vorschlag mit Umfang und Kosten; gestartet wird er per Knopf vom Menschen.
+- Sag im Text, WAS der Filter trifft und wie viele Firmen das sind. Behaupte nie, ein Lauf sei gestartet.
+- Ist der Filter unklar ("die guten Händler"), frag nach, statt zu raten. Ein zu weiter Filter kostet echtes Geld.
 
 REGELN, DIE JEDE ZAHL BETREFFEN (im Projekt teuer gelernt):
 - Belege/crm_order_events sind ANGEBOTE, keine Rechnungen. Sag nie "kauft" oder "Umsatz", wenn die Zahl aus Belegen stammt — sag "fragt an" / "Angebotsvolumen". Echte Umsätze existieren im Bestand NICHT.
@@ -416,6 +555,10 @@ def fragen(frage: str, verlauf: list | None = None,
     messages.append({"role": "user", "content": frage})
 
     werkzeug_log: list[dict] = []
+    # Der letzte Vorschlag reist getrennt vom Text zur Oberfläche: dort wird er
+    # zur Karte mit Startknopf. Im Antworttext stünde er nur als Prosa, und
+    # eine Zahl in Prosa kann man nicht anklicken.
+    vorschlag: dict | None = None
     tin = tout = 0
     t0 = time.monotonic()
 
@@ -430,6 +573,7 @@ def fragen(frage: str, verlauf: list | None = None,
             antwort = "".join(b.text for b in msg.content
                               if getattr(b, "type", None) == "text").strip()
             return {"antwort": antwort or "(keine Antwort)", "verlauf": werkzeug_log,
+                    "vorschlag": vorschlag,
                     "tokens_in": tin, "tokens_out": tout,
                     "kosten_usd": _kosten_usd(model, tin, tout), "model": model,
                     "dauer_s": round(time.monotonic() - t0, 1)}
@@ -446,6 +590,13 @@ def fragen(frage: str, verlauf: list | None = None,
             except Exception as exc:  # noqa: BLE001 — der Agent soll den Fehler SEHEN
                 out = json.dumps({"fehler": str(exc)[:300]}, ensure_ascii=False)
                 fehler = str(exc)[:200]
+            if call.name == "lauf_vorschlagen" and not fehler:
+                try:
+                    _v = json.loads(out)
+                    if _v.get("vorschlag"):
+                        vorschlag = _v
+                except Exception:  # noqa: BLE001 — kaputtes JSON darf den Lauf nicht kippen
+                    pass
             werkzeug_log.append({"werkzeug": call.name, "params": call.input,
                             "dauer_s": round(time.monotonic() - t1, 2),
                             "fehler": fehler})
@@ -458,6 +609,6 @@ def fragen(frage: str, verlauf: list | None = None,
 
     return {"antwort": "Abgebrochen: zu viele Werkzeug-Runden. Die Frage enger "
                        "stellen oder in zwei Fragen teilen.",
-            "verlauf": werkzeug_log, "tokens_in": tin, "tokens_out": tout,
+            "verlauf": werkzeug_log, "vorschlag": vorschlag, "tokens_in": tin, "tokens_out": tout,
             "kosten_usd": _kosten_usd(model, tin, tout), "model": model,
             "dauer_s": round(time.monotonic() - t0, 1)}

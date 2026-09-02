@@ -1718,3 +1718,25 @@ body.explore-karte .col-filters {
   content: ''; width: 6px; height: 6px; border-radius: 50%;
   background: var(--accent); box-shadow: 0 0 8px var(--accent);
 }
+
+/* ===================== Laufkarte im Chatbot ===============================
+   Ein Vorschlag, kein Vollzug: die Karte sagt Umfang und Kosten und wartet
+   auf einen Klick. Deshalb sieht sie aus wie ein Formular, nicht wie eine
+   Erfolgsmeldung. */
+.lauf-karte {
+  margin: 12px 0 4px; padding: 13px 15px; border-radius: var(--radius);
+  border: 1px solid var(--chip-warn-line); background: var(--chip-warn-bg);
+}
+.lauf-karte.gestartet { border-color: var(--chip-ok-line); background: var(--chip-ok-bg); }
+.lk-kopf { font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--chip-warn-fg); font-weight: 700; margin-bottom: 9px; }
+.lauf-karte.gestartet .lk-kopf { color: var(--chip-ok-fg); }
+.lk-schritte { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.lk-schritte .chip { font-size: 11px; padding: 2px 9px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--border); color: var(--ink-soft); }
+.lk-zahlen { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+  margin: 0 0 11px; font-size: 12.5px; }
+.lk-zahlen dt { color: var(--muted); }
+.lk-zahlen dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
+.lk-aktionen { display: flex; align-items: center; gap: 10px; }
+.lk-status { font-size: 12px; }

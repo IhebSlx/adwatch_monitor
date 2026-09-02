@@ -1199,6 +1199,40 @@ def create_pipeline_job_route(payload: PipelineIn):
         raise HTTPException(409, str(e))
 
 
+class PipelineAusFilterIn(BaseModel):
+    filter: dict
+    plan: dict
+    label: str | None = None
+    deckel: int = 2000
+
+
+@app.post("/api/pipeline-jobs/aus-filter")
+def create_pipeline_job_from_filter_route(payload: PipelineAusFilterIn):
+    """Denselben Lauf starten, aber aus einem FILTER statt einer ID-Liste.
+
+    Der Chatbot schlägt Läufe vor, indem er einen Filter formuliert — er kennt
+    keine Firmen-IDs, und 2.000 davon durch das Modell zu schicken wäre teuer
+    und fehleranfällig. Aufgelöst wird der Filter deshalb hier, im selben
+    Moment, in dem der Mensch auf Starten drückt: die Menge ist dann garantiert
+    aktuell und garantiert dieselbe, die der Explorer unter diesem Filter zeigt.
+
+    Private Endkunden bleiben ausgeschlossen, egal was im Filter steht.
+    """
+    from .customers import top_ids
+
+    f = dict(payload.filter or {})
+    aus = list(f.get("exclude_segment") or [])
+    if "Private Endkunden" not in aus:
+        aus.append("Private Endkunden")
+    f["exclude_segment"] = aus
+
+    ids = top_ids(f, "fit_score", "desc", max(1, min(payload.deckel, 5000)))
+    if not ids:
+        raise HTTPException(400, "Dieser Filter trifft keine Firma")
+    return create_pipeline_job_route(
+        PipelineIn(company_ids=ids, plan=payload.plan, label=payload.label))
+
+
 @app.get("/api/companies/{company_id}/enrichment")
 def get_enrichment_route(company_id: int):
     from .enrich import service as enrich_service
