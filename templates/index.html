@@ -11,6 +11,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/vendor/leaflet/MarkerCluster.css">
+<link rel="stylesheet" href="/static/vendor/leaflet/MarkerCluster.Default.css">
 <link rel="stylesheet" href="/static/vendor/maplibre/maplibre-gl.css">
 <link rel="stylesheet" href="/static/app.css">
 <script>
@@ -1310,6 +1313,13 @@
 <!-- Leaflet lokal ausgeliefert (static/vendor) — kein CDN, die App bleibt
      offline-fähig und kein Firmen-Datenverkehr berührt Dritte. Nur die
      OSM-Kacheln selbst kommen von tile.openstreetmap.org. -->
+<!-- Zwei Kartenbibliotheken, und das ist kein Versehen: MapLibre braucht
+     WebGL, Leaflet nicht. Wo WebGL fehlt (Firmenrechner ohne
+     Grafikbeschleunigung, gesperrte Richtlinie), waere die Karte sonst
+     schlicht weg — genau das ist passiert. Geladen werden beide, gebaut
+     wird nur eine. -->
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/vendor/leaflet/leaflet.markercluster.js"></script>
 <script src="/static/vendor/maplibre/maplibre-gl.js"></script>
 <script src="/static/app.js"></script>
 </body>

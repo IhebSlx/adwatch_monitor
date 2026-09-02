@@ -1457,6 +1457,28 @@
     return el;
   }
 
+  // --- Kann dieser Rechner ueberhaupt WebGL? -------------------------------
+  //
+  // MapLibre braucht WebGL zwingend. Leaflet nicht — es zeichnet mit gewoehnlichen
+  // <img>-Kacheln und DOM. Beim Umstieg auf MapLibre ist genau das untergegangen,
+  // und auf einem Rechner ohne Grafikbeschleunigung war die Karte danach nicht
+  // schlechter, sondern WEG: "Failed to initialize WebGL", kein Bild, keine
+  // Bedienelemente, nichts.
+  //
+  // Deshalb wird gefragt, bevor gebaut wird. Das Ergebnis wird gemerkt: einen
+  // WebGL-Kontext anzulegen kostet, und die Antwort aendert sich waehrend einer
+  // Sitzung nicht.
+  let _webgl = null;
+  function webglDa() {
+    if (_webgl !== null) return _webgl;
+    try {
+      const c = document.createElement("canvas");
+      _webgl = !!(c.getContext("webgl2") || c.getContext("webgl")
+                  || c.getContext("experimental-webgl"));
+    } catch { _webgl = false; }
+    return _webgl;
+  }
+
   // --- Eine Karteninstanz --------------------------------------------------
   function karteBauen(id, opt) {
     const zustand = {
@@ -1808,10 +1830,8 @@
   };
 
   async function showCustMap() {
-    if (typeof maplibregl === "undefined") {
-      $("#exploreCount").textContent = "Kartenbibliothek nicht geladen (static/vendor fehlt?)";
-      return;
-    }
+    if (!webglDa() || typeof maplibregl === "undefined")
+      return zeigeLeafletKarte("cust");
     if (!custMap) {
       custMap = karteBauen("custMap", custOpt);
       custMap.m.on("moveend", zaehlerFirmen);
@@ -1881,10 +1901,8 @@
   };
 
   async function showObjMap() {
-    if (typeof maplibregl === "undefined") {
-      $("#exploreCount").textContent = "Kartenbibliothek nicht geladen";
-      return;
-    }
+    if (!webglDa() || typeof maplibregl === "undefined")
+      return zeigeLeafletKarte("obj");
     if (!objMap) {
       objMap = karteBauen("objMap", objOpt);
       objMap.m.on("moveend", zaehlerObjekte);
@@ -1941,6 +1959,129 @@
   }
   const obj3dSichtbar = () => false;   // es gibt keine zweite Instanz mehr
   const zeigeObj3d = () => objDim("hoch");
+
+  // ================= KARTE OHNE WEBGL (Leaflet) ===========================
+  // Der Weg fuer Rechner, auf denen MapLibre nicht laufen kann. Weniger
+  // huebsch — keine Ringe, keine Hoehe, keine Vektorkarte — aber eine Karte.
+  // Dieselben Daten, dieselben Farben, dieselben Klicks.
+  //
+  // Die Grundkarte ist Esris dunkles Raster: gewoehnliche <img>-Kacheln, also
+  // genau das, was ohne Grafikbeschleunigung noch geht.
+  const ESRI_FLAECHE = "https://services.arcgisonline.com/ArcGIS/rest/services/"
+    + "Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}";
+  const ESRI_SCHRIFT = "https://services.arcgisonline.com/ArcGIS/rest/services/"
+    + "Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}";
+
+  const LEAF = { cust: null, obj: null };
+
+  async function zeigeLeafletKarte(welche) {
+    if (typeof L === "undefined") {
+      $("#exploreCount").textContent =
+        "Karte nicht verfügbar: weder WebGL noch Leaflet vorhanden.";
+      return;
+    }
+    const istObj = welche === "obj";
+    const behaelter = istObj ? "objMap" : "custMap";
+    const opt = istObj ? objOpt : custOpt;
+
+    // Die Höhen-Ansicht braucht WebGL — den Schalter dann gar nicht erst zeigen.
+    if (istObj) $("#objDim")?.classList.add("hidden");
+
+    let k = LEAF[welche];
+    if (!k) {
+      const m = L.map(behaelter, { preferCanvas: true, minZoom: 2,
+        worldCopyJump: false, attributionControl: true })
+        .setView([50.5, 10], 4);
+      L.tileLayer(ESRI_FLAECHE, { maxZoom: 16,
+        attribution: "Esri, HERE, Garmin, &copy; OpenStreetMap-Mitwirkende" }).addTo(m);
+      L.tileLayer(ESRI_SCHRIFT, { maxZoom: 16, opacity: 0.8 }).addTo(m);
+      const gruppen = L.markerClusterGroup({
+        chunkedLoading: true, maxClusterRadius: 48,
+        // Die Blase traegt die Farbe der haeufigsten Kategorie. Ein Ring waere
+        // schoener; hier zaehlt, dass ueberhaupt etwas Aussagekraeftiges steht.
+        iconCreateFunction: (cluster) => {
+          const zahlen = opt.kategorien.map(() => 0);
+          cluster.getAllChildMarkers().forEach(mk => { zahlen[mk.options.kat] += 1; });
+          const gesamt = cluster.getChildCount();
+          const beste = zahlen.indexOf(Math.max(...zahlen));
+          const farbe = opt.farben()[beste] || "#8b5cf6";
+          const gr = gesamt >= 1000 ? 46 : gesamt >= 100 ? 40 : 34;
+          return L.divIcon({
+            className: "leaf-cluster",
+            html: `<span style="--c:${farbe}">${gesamt.toLocaleString("de-DE")}</span>`,
+            iconSize: [gr, gr],
+          });
+        },
+      });
+      m.addLayer(gruppen);
+      k = LEAF[welche] = { m, gruppen };
+      m.on("moveend", () => istObj ? zaehlerLeaflet("obj") : zaehlerLeaflet("cust"));
+      window[istObj ? "_objLeaflet" : "_custLeaflet"] = m;
+      $("#exploreCount").textContent =
+        "Ohne Grafikbeschleunigung — einfache Karte, keine Höhen-Ansicht.";
+    }
+    setTimeout(() => k.m.invalidateSize(), 0);
+
+    const punkte = istObj
+      ? (await ladeObjPunkte()) : (await ladeCustPunkte());
+    const farben = opt.farben();
+    k.gruppen.clearLayers();
+    k.gruppen.addLayers(punkte.map(p => {
+      const mk = L.circleMarker([p.lat, p.lng], {
+        radius: 6, weight: 1.4, color: "#fff", kat: p.t,
+        fillColor: farben[p.t] || "#64708a", fillOpacity: 0.9,
+      });
+      mk.bindPopup(opt.popup(p.props || {}));
+      if (opt.klick) mk.on("click", () => opt.klick(p.props || {}));
+      return mk;
+    }));
+    if (punkte.length) {
+      const lat = punkte.map(p => p.lat).sort((a, b) => a - b);
+      const lng = punkte.map(p => p.lng).sort((a, b) => a - b);
+      const q = (w, x) => w[Math.min(w.length - 1, Math.max(0, Math.round((w.length - 1) * x)))];
+      k.m.invalidateSize();
+      k.m.fitBounds([[q(lat, 0.01), q(lng, 0.01)], [q(lat, 0.99), q(lng, 0.99)]],
+                    { padding: [30, 30], maxZoom: 9 });
+    }
+    zaehlerLeaflet(welche);
+  }
+
+  function zaehlerLeaflet(welche) {
+    const k = LEAF[welche];
+    if (!k) return;
+    const istObj = welche === "obj";
+    const punkte = istObj ? objMapPins : custMapPins;
+    const b = k.m.getBounds();
+    const n = punkte.reduce((a, p) => a + (b.contains([p.lat, p.lng]) ? 1 : 0), 0);
+    $("#exploreCount").textContent =
+      `Im Kartenausschnitt: ${deN(n)} von ${deN(punkte.length)} `
+      + (istObj ? "Objekten" : "Firmen")
+      + (istObj && objOhne ? ` · ${deN(objOhne)} ohne Bauadresse` : "")
+      + " · einfache Karte (kein WebGL)";
+  }
+
+  // Die Punkte holen die Leaflet-Karten ueber dieselben Wege wie MapLibre —
+  // ein zweiter Abrufpfad waere ein zweiter Ort, an dem der Filter abweichen kann.
+  async function ladeCustPunkte() {
+    const filters = currentCustomerFilters();
+    const d = await api("/api/map/pins", "POST", { filters }).catch(() => null);
+    if (!d) return custMapPins;
+    const typ = { kunde: 0, architekt: 1, interessent: 2 };
+    custMapPins = d.pins.map(p => ({ lat: p.lat, lng: p.lng, t: typ[p.typ] ?? 2,
+      props: { id: p.id, name: p.name, ort: p.city || "", prec: p.prec } }));
+    return custMapPins;
+  }
+
+  async function ladeObjPunkte() {
+    const d = await api(`/api/map/projekt-pins?${objekteQuery()}`).catch(() => null);
+    if (!d) return objMapPins;
+    const typ = { gewonnen: 0, offen: 1, verloren: 2 };
+    objOhne = d.ohne_koordinate || 0;
+    objMapPins = d.pins.map(p => ({ lat: p.lat, lng: p.lng, t: typ[p.typ] ?? 1,
+      props: { id: p.id, name: p.name, ort: p.city || "",
+               wert: p.value || 0, n: p.members } }));
+    return objMapPins;
+  }
 
   // ================= KONVERSION: Angebot -> Auftrag ========================
   // Die Tabelle zeigt ZWEI Masse nebeneinander, weil eines allein in die Irre
