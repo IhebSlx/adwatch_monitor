@@ -13,12 +13,20 @@ setlocal
 set "APPDIR=%~dp0"
 set "PORT=8000"
 set "URL=http://127.0.0.1:%PORT%/"
-rem  Welches Python? Erst ein .venv im Projekt, dann die Conda-Umgebung,
-rem  zuletzt das, was im PATH steht. So laeuft die Datei auch auf einem
-rem  anderen Rechner, ohne dass jemand einen Pfad anpassen muss.
-set "PYEXE=%APPDIR%.venv\Scripts\python.exe"
-if not exist "%PYEXE%" set "PYEXE=%LOCALAPPDATA%\miniconda3\envs\adtracker\python.exe"
-if not exist "%PYEXE%" set "PYEXE=python"
+rem  Welches Python? NICHT das erste, das existiert, sondern das erste, das
+rem  AdWatch auch starten kann.
+rem
+rem  Die erste Fassung nahm das erste vorhandene. Im Projekt lag ein leeres
+rem  .venv (Python 3.13, nur pip), also gewann das -- und der Start brach mit
+rem  "No module named 'yaml'" ab, waehrend die Conda-Umgebung mit allen 92
+rem  Paketen danebenstand. Vorhandensein ist eben kein Beweis fuer
+rem  Brauchbarkeit; geprueft wird jetzt, ob der Kandidat die Abhaengigkeiten
+rem  der App ueberhaupt importieren kann.
+set "PYEXE="
+call :taugt "%APPDIR%.venv\Scripts\python.exe"
+if not defined PYEXE call :taugt "%LOCALAPPDATA%\miniconda3\envs\adtracker\python.exe"
+if not defined PYEXE call :taugt "python"
+if not defined PYEXE goto keinpython
 
 rem  Zweiter Aufruf dieser Datei mit --server: das ist das Serverfenster selbst.
 if /i "%~1"=="--server" goto server
@@ -77,6 +85,38 @@ rem ---------------------------------------------------------------------------
 :pruefen
 powershell -NoProfile -Command "try{$r=[Net.WebRequest]::Create('%URL%health');$r.Timeout=2000;try{$s=$r.GetResponse()}catch [Net.WebException]{$s=$_.Exception.Response};if(-not $s){exit 1};$t=(New-Object IO.StreamReader($s.GetResponseStream())).ReadToEnd();$s.Close();if($t -match '\"job_running\"\s*:\s*true'){exit 2};if($t -match '\"db\"'){exit 0};exit 1}catch{exit 1}"
 exit /b %errorlevel%
+
+rem ---------------------------------------------------------------------------
+rem  Taugt dieser Kandidat? Er muss existieren UND die Pakete haben, ohne die
+rem  AdWatch gar nicht erst hochkommt. Ein Interpreter, der bloss da ist,
+rem  reicht nicht -- genau daran ist der Start einmal gescheitert.
+rem ---------------------------------------------------------------------------
+:taugt
+set "KANDIDAT=%~1"
+if /i not "%KANDIDAT%"=="python" if not exist "%KANDIDAT%" exit /b 1
+"%KANDIDAT%" -c "import yaml, fastapi, sqlalchemy, uvicorn" >nul 2>&1
+if errorlevel 1 exit /b 1
+set "PYEXE=%KANDIDAT%"
+exit /b 0
+
+rem ---------------------------------------------------------------------------
+rem  Kein brauchbares Python. Die Meldung sagt, wo gesucht wurde und was fehlt,
+rem  statt den Nutzer mit einem Traceback allein zu lassen.
+rem ---------------------------------------------------------------------------
+:keinpython
+echo.
+echo Kein Python gefunden, das AdWatch starten kann.
+echo.
+echo Gesucht wurde in dieser Reihenfolge:
+echo    1. %APPDIR%.venv\Scripts\python.exe
+echo    2. %LOCALAPPDATA%\miniconda3\envs\adtracker\python.exe
+echo    3. python (aus dem PATH)
+echo.
+echo Jeder Kandidat muss "import yaml, fastapi, sqlalchemy, uvicorn" koennen.
+echo Fehlen Pakete, hilft in der richtigen Umgebung:  pip install -r requirements.txt
+echo.
+pause
+exit /b 1
 
 rem ---------------------------------------------------------------------------
 rem  Das Serverfenster. Es bleibt nach dem Ende offen, damit eine Fehlermeldung
