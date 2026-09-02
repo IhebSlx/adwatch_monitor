@@ -311,20 +311,31 @@ def w_markt_bild(land: str | None = None) -> str:
 #
 # Die Filtersprache ist DIESELBE wie im Firmen-Explorer (customers._apply_filters),
 # damit ein Vorschlag genau die Menge trifft, die man dort auch sehen wuerde.
-# Genau die Schluessel, die customers._apply_filters wirklich auswertet.
-# Steht hier etwas Falsches drin, faellt es beim naechsten Vorschlag auf; fehlt
-# hier etwas, kann das Modell es nicht benutzen. Beides ist besser als ein
-# Filter, der nichts tut.
-_FILTER_SCHLUESSEL = {
-    "ids", "q", "kv", "segment", "sub_segment", "sales_channel", "country",
-    "lead_source", "solarlux_relevance", "office_type", "decision_role",
-    "solarlux_fit", "exclude_kv", "exclude_segment", "exclude_sub_segment",
-    "customer_state", "ad_activity", "ad_source", "assessment",
-    "enrichment_status", "fit_min", "has_website", "no_website",
-    "include_consumers", "page_id_state", "resolution_status", "tracked",
-    "revenue_history", "revenue_min", "revenue_max",
-    "products_str", "competitor_brands_str", "mentions_solarlux_str",
-}
+# Welche Filterschluessel es gibt, wird NICHT von Hand gepflegt, sondern aus
+# customers._apply_filters gelesen.
+#
+# Die Handliste hatte genau den Fehler, den die Pruefung verhindern soll: vier
+# Eintraege (products_str, competitor_brands_str, mentions_solarlux_str,
+# assessment) waren gar keine Filter, sondern SPALTENNAMEN des Excel-Exports.
+# Sie standen in der Liste, wurden also durchgewinkt — und _apply_filters
+# ignorierte sie stillschweigend. Ein Vorschlag haette "nur Firmen, die cero
+# fuehren" behauptet und in Wahrheit alle 46.810 getroffen.
+#
+# Aus der Quelle gelesen kann das nicht mehr passieren: kommt ein Filter dazu,
+# darf der Agent ihn sofort benutzen; faellt einer weg, bietet er ihn nicht mehr an.
+def _filter_schluessel() -> set[str]:
+    import inspect
+    from .customers import _apply_filters
+    q = inspect.getsource(_apply_filters)
+    schluessel = set(re.findall(r"""f\.get\(\s*["']([a-z_]+)["']""", q))
+    schluessel |= set(re.findall(r"""f\[\s*["']([a-z_]+)["']\s*\]""", q))
+    # Die Schleifen ueber (Feldname, Spalte) stehen als Tupel im Quelltext.
+    schluessel |= set(re.findall(r"""\(\s*["']([a-z_]+)["']\s*,\s*Company\.""", q))
+    return schluessel
+
+
+_FILTER_SCHLUESSEL = _filter_schluessel()
+
 
 _SCHRITT_NAMEN = {
     "anreichern": ("enrich", "Daten anreichern", 0.004),

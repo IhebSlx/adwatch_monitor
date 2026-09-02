@@ -1553,6 +1553,12 @@
     m.addSource("pins", {
       type: "geojson",
       data: { type: "FeatureCollection", features: [] },
+      // maxzoom begrenzt, wie viele Zoomstufen supercluster im Voraus indiziert.
+      // Ohne die Grenze baut es 0..18 — bei 42.683 Firmen dauerte das im Test
+      // fast eine Minute, in der die Karte leer aussah. Ab Stufe 12 werden
+      // ohnehin Einzelpunkte gezeigt (clusterMaxZoom), darüber wird die
+      // oberste Kachel gestreckt; sichtbar ändert das nichts.
+      maxzoom: 12,
       cluster: true, clusterRadius: 48, clusterMaxZoom: 12,
       // Je Kategorie mitzählen — daraus wird der Ring. Ohne diese Aggregate
       // wüsste der Cluster nur, WIE VIELE, nicht WELCHE.
@@ -1613,9 +1619,18 @@
     });
 
     m.on("moveend", () => ringeZeichnen(zustand, opt));
-    m.on("sourcedata", (e) => { if (e.sourceId === "pins" && e.isSourceLoaded)
-      ringeZeichnen(zustand, opt); });
-    if (zustand.punkte.length) datenSetzen(zustand, opt, zustand.punkte, true);
+    m.on("sourcedata", (e) => {
+      if (e.sourceId !== "pins" || !e.isSourceLoaded) return;
+      ringeZeichnen(zustand, opt);
+      if (opt.fertig) opt.fertig();
+    });
+    // Kommen die Daten VOR dem Stil an, hat datenSetzen sie nur gemerkt und ist
+    // ausgestiegen (die Quelle gab es noch nicht). Hier werden sie nachgereicht
+    // — und zwar MIT Einpassen, falls das noch nie lief: sonst bleibt die Karte
+    // auf der Startansicht stehen, obwohl sie die Daten hat. Genau das war beim
+    // Test der Firmenkarte der Fall.
+    if (zustand.punkte.length)
+      datenSetzen(zustand, opt, zustand.punkte, zustand.eingepasst);
   }
 
   // Ringe sind DOM-Marker, keine Kartenebene: ein Kreisdiagramm lässt sich
@@ -1656,14 +1671,7 @@
     const m = zustand.m;
     zustand.punkte = punkte;
     if (!m.getSource("pins")) return;
-    m.getSource("pins").setData({
-      type: "FeatureCollection",
-      features: punkte.map(p => ({
-        type: "Feature",
-        properties: { t: p.t, ...p.props },
-        geometry: { type: "Point", coordinates: [p.lng, p.lat] },
-      })),
-    });
+    m.getSource("pins").setData(geoJsonAus(punkte));
     // Ringe der alten Daten wegräumen, sonst kleben sie über den neuen.
     for (const id in zustand.aufDemSchirm) zustand.aufDemSchirm[id].remove();
     zustand.marker = {}; zustand.aufDemSchirm = {};
@@ -1674,6 +1682,12 @@
     if (!ohneFlug) einpassen(zustand, punkte);
   }
 
+  function geoJsonAus(punkte) {
+    return { type: "FeatureCollection", features: punkte.map(p => ({
+      type: "Feature", properties: { t: p.t, ...p.props },
+      geometry: { type: "Point", coordinates: [p.lng, p.lat] } })) };
+  }
+
   // Wohin die Karte schaut: auf das mittlere 98 % der Punkte. Über ALLE wäre es
   // eine Weltansicht — ein paar Dutzend Adressen liegen in Asien und Amerika,
   // und zwei Punkte auf zwei Kontinenten zwingen den Maßstab, während 99 % der
@@ -1682,6 +1696,7 @@
   function einpassen(zustand, punkte) {
     const m = zustand.m;
     if (!punkte.length) return;
+    zustand.eingepasst = true;
     const q = (w, x) => w[Math.min(w.length - 1, Math.max(0, Math.round((w.length - 1) * x)))];
     const lat = punkte.map(p => p.lat).sort((a, b) => a - b);
     const lng = punkte.map(p => p.lng).sort((a, b) => a - b);
@@ -1746,8 +1761,14 @@
     if (!custMap) return;
     const b = custMap.m.getBounds();
     const n = custMapPins.reduce((a, p) => a + (b.contains([p.lng, p.lat]) ? 1 : 0), 0);
+    // „…wird gezeichnet" solange die Cluster noch entstehen. Die Zahl stimmt
+    // zwar (sie kommt aus den geladenen Daten, nicht aus der Karte), aber neben
+    // einer noch leeren Karte liest sie sich wie ein Fehler.
+    const fertig = custMap.m.isSourceLoaded("pins")
+      && custMap.m.querySourceFeatures("pins").length > 0;
     $("#exploreCount").textContent =
-      `Im Kartenausschnitt: ${deN(n)} von ${deN(custMapPins.length)} Firmen`;
+      `Im Kartenausschnitt: ${deN(n)} von ${deN(custMapPins.length)} Firmen`
+      + (fertig ? "" : " — wird gezeichnet …");
   }
 
   function loadCustMapPins() {
@@ -1783,6 +1804,7 @@
       + `<div class="kp-s">${esc(f.ort)}${f.prec === "plz" ? " · PLZ-Zentroid" : ""}</div>`
       + `<div class="kp-a">Klicken öffnet das Dossier</div>`,
     klick: (f) => { location.hash = `#/firma/${f.id}`; },
+    fertig: () => zaehlerFirmen(),
   };
 
   async function showCustMap() {
@@ -1854,6 +1876,7 @@
       + ` · ${f.n} Verkaufschance${Number(f.n) === 1 ? "" : "n"}</div>`
       + `<div class="kp-a">Klicken öffnet die Objektakte</div>`,
     klick: (f) => openProjektDrawer(f.id),
+    fertig: () => zaehlerObjekte(),
     hinweis: (text) => { const el = $("#objMapHinweis"); if (el) el.textContent = text; },
   };
 

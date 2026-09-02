@@ -5277,3 +5277,45 @@ def test_konversion_behauptet_nur_was_das_intervall_traegt(temp_db, monkeypatch)
     # Eine Gruppe knapp an der Grundlinie darf NICHT markiert werden.
     # 50 von 100 bei einer Grundlinie von 50 % -> das Intervall enthaelt sie.
     assert not konversion.wilson(50, 100)[0] > 0.5
+
+
+def test_kein_filterschluessel_ohne_wirkung(temp_db, monkeypatch):
+    """Der Chatbot darf nur Filter anbieten, die es wirklich gibt.
+
+    Die Liste der erlaubten Schluessel wurde einmal von Hand gepflegt und trug
+    vier Eintraege, die gar keine Filter waren, sondern SPALTENNAMEN des
+    Excel-Exports: products_str, competitor_brands_str, mentions_solarlux_str,
+    assessment. Sie standen in der Liste, wurden also durchgewinkt -- und
+    _apply_filters ignorierte sie stillschweigend. Ein Vorschlag haette "nur
+    Firmen, die cero fuehren" behauptet und in Wahrheit alle 46.810 getroffen.
+
+    Seitdem wird die Liste aus dem Quelltext von _apply_filters gelesen. Dieser
+    Test haelt fest, dass sie das auch bleibt.
+    """
+    import json as _json
+
+    from adwatch import customers, fragen
+    from adwatch.models import Company
+
+    S = fragen._FILTER_SCHLUESSEL
+    assert len(S) > 20, "die Ableitung aus der Quelle hat offenbar nichts gefunden"
+    for phantom in ("products_str", "competitor_brands_str",
+                    "mentions_solarlux_str", "assessment"):
+        assert phantom not in S, f"{phantom} ist eine Exportspalte, kein Filter"
+    # Stichproben, die es geben MUSS -- sonst hat sich die Ableitung verlaufen
+    for echt in ("country", "segment", "q", "no_website", "fit_min", "customer_state"):
+        assert echt in S, f"{echt} fehlt in der abgeleiteten Liste"
+
+    s = temp_db.SessionLocal()
+    s.add_all([Company(name="A", country="DE", segment="Handel"),
+               Company(name="B", country="AT", segment="Handel")])
+    s.commit(); s.close()
+    monkeypatch.setattr(customers, "SessionLocal", temp_db.SessionLocal)
+
+    # Ein unbekannter Schluessel wird abgelehnt, statt wirkungslos zu bleiben
+    d = _json.loads(fragen.w_lauf_vorschlagen(
+        {"country": ["DE"], "products_str": "cero"}, ["anreichern"]))
+    assert "products_str" in d["fehler"]
+    # Ein echter Schluessel geht durch und wirkt
+    v = _json.loads(fragen.w_lauf_vorschlagen({"country": ["DE"]}, ["anreichern"]))
+    assert v["vorschlag"] is True and v["im_lauf"] == 1
