@@ -1,9 +1,20 @@
-/* AdWatch — modern SaaS shell. Light-only, no build step, no external deps.
-   Layout: fixed left sidebar (brand → nav → fetch controls) + content column.
-   Every class/ID consumed by app.js is preserved — this file restyles, the
-   markup contract stays identical. */
+/* AdWatch — zwei Häute, ein Markup. Kein Build, keine Fremdpakete.
+   Layout: feste Seitenleiste (Marke → Navigation → Abruf) + Inhaltsspalte.
+   Jede Klasse und jede ID, die app.js anfasst, bleibt erhalten — diese Datei
+   kleidet nur ein, der Markup-Vertrag ändert sich nicht.
 
-:root {
+   FARBEN LAUFEN AUSSCHLIESSLICH ÜBER TOKEN. Wer hier unten einen festen
+   Hexwert einträgt, baut eine Stelle, die in der dunklen Haut falsch aussieht
+   und die niemand findet — genau davon standen vor der Umstellung 85 Stück
+   im Stylesheet, überwiegend in den Chips.
+
+   Standard ist DUNKEL. Hell bleibt vollständig erhalten und ist über den
+   Schalter in der Seitenleiste erreichbar (data-theme="hell" am <html>). */
+
+/* Heller Satz: zugleich Grundlage und das, was die helle Haut zurueckholt.
+   Zwei Selektoren statt zweier Bloecke — die Werte stehen nur EINMAL da. */
+:root,
+:root[data-theme="hell"] {
   color-scheme: light;
 
   /* neutrals (cool gray) */
@@ -52,8 +63,90 @@
   --shadow-lg: 0 24px 48px -12px rgba(16, 20, 40, .22), 0 8px 16px -8px rgba(16, 20, 40, .10);
   --accent-grad: linear-gradient(135deg, var(--accent) 0%, #7c6cf0 100%);
 
+  /* Chip-Familien: Hintergrund / Schrift / Rand als Dreiklang. Vorher standen
+     diese Werte 15-mal fest im Stylesheet und hätten je einzeln nachgezogen
+     werden müssen. */
+  --chip-ok-bg: #e9f7ef;    --chip-ok-fg: #1e8f57;   --chip-ok-line: #bfe6cf;
+  --chip-info-bg: #ebf2fb;  --chip-info-fg: #2b6cb0; --chip-info-line: #c4d9f2;
+  --chip-warn-bg: #fdf1e7;  --chip-warn-fg: #b05e1a; --chip-warn-line: #f2d7bd;
+  --chip-bad-bg: #fdecec;   --chip-bad-fg: #9d2626;  --chip-bad-line: #f6cfc9;
+  --chip-mid-bg: #fdf7e7;   --chip-mid-fg: #9a7b12;  --chip-mid-line: #eee0b0;
+  --chip-dim-bg: #eef2f7;   --chip-dim-fg: #44536b;  --chip-dim-line: #dde3ec;
+
+  /* Karte: Grundkacheln je Haut, und die Pin-Farben als Token. app.js liest
+     sie zur Laufzeit aus dem Stylesheet — so tragen Legende und Pin
+     zwangsläufig dieselbe Farbe, statt sie an zwei Orten zu pflegen. */
+  --tile-filter: none;
+  --map-bg: #e8eaf0;
+  --map-kunde: #1c7c3c;  --map-architekt: #8a5220;  --map-interessent: #4f5ce5;
+  --map-gewonnen: #0e9f6e;  --map-offen: #4f5ce5;  --map-verloren: #d92d20;
+
   --sidebar-w: 244px;
 }
+
+/* ===================== DUNKLE HAUT (Standard) =============================
+   Die Tiefe kommt aus drei Dingen, nicht aus einer dunklen Hintergrundfarbe:
+   ein Lichthof hinter dem Inhalt, Glas mit echter Unschärfe, und Ränder, die
+   leicht violett gefärbt sind statt grau. Ohne den Lichthof sieht Dunkel nur
+   ausgeschaltet aus. */
+:root[data-theme="dunkel"] {
+  color-scheme: dark;
+
+  --bg: #05060f;
+  --bg-subtle: #0a0e20;
+  --card: rgba(24, 31, 58, .74);
+  --border: rgba(124, 140, 255, .20);
+  --border-strong: rgba(124, 140, 255, .38);
+
+  --ink: #e8ecff;
+  --ink-soft: #c2cbe8;
+  --muted: #93a4d0;
+  --muted-soft: #6b7aa8;
+
+  --accent: #8b5cf6;
+  --accent-hover: #a78bfa;
+  --accent-soft: rgba(139, 92, 246, .16);
+  --accent-ink: #c4b5fd;
+
+  --side-bg-0: #0b0f21;
+  --side-bg-1: #060814;
+  --side-ink: #e8ecff;
+  --side-muted: #8494c0;
+  --side-line: rgba(124, 140, 255, .14);
+  --side-accent: #c4b5fd;
+
+  --ok: #3ce8b0;
+  --ok-soft: rgba(60, 232, 176, .12);
+  --warn: #f6b954;
+  --warn-soft: rgba(246, 185, 84, .12);
+  --danger: #fb7185;
+  --danger-soft: rgba(251, 113, 133, .12);
+
+  --chip-ok-bg: rgba(60, 232, 176, .11);   --chip-ok-fg: #6ee7c0;   --chip-ok-line: rgba(60, 232, 176, .32);
+  --chip-info-bg: rgba(56, 225, 255, .10); --chip-info-fg: #7dd8f0; --chip-info-line: rgba(56, 225, 255, .30);
+  --chip-warn-bg: rgba(246, 185, 84, .11); --chip-warn-fg: #f0c078; --chip-warn-line: rgba(246, 185, 84, .30);
+  --chip-bad-bg: rgba(251, 113, 133, .11); --chip-bad-fg: #fda4af;  --chip-bad-line: rgba(251, 113, 133, .30);
+  --chip-mid-bg: rgba(246, 185, 84, .09);  --chip-mid-fg: #e3bd7a;  --chip-mid-line: rgba(246, 185, 84, .24);
+  --chip-dim-bg: rgba(124, 140, 255, .08); --chip-dim-fg: #9aa8cf;  --chip-dim-line: rgba(124, 140, 255, .20);
+
+  --shadow-xs: 0 1px 2px rgba(2, 4, 16, .5);
+  --shadow-sm: 0 2px 8px rgba(2, 4, 16, .5);
+  --shadow-md: 0 10px 26px rgba(2, 4, 16, .55);
+  --shadow-lg: 0 24px 56px rgba(2, 4, 16, .72);
+  --accent-grad: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+
+  /* Die Grundkacheln sind hell gezeichnet. Statt eines zweiten Kachelservers
+     werden sie hier umgefärbt — der Filter trifft NUR die Kachelebene, die
+     Pins liegen in einer anderen Leaflet-Ebene und bleiben farbecht. */
+  --tile-filter: invert(1) hue-rotate(188deg) brightness(.82) saturate(.62) contrast(1.06);
+  --map-bg: #04060f;
+  /* auf Schwarz brauchen Pins Leuchtkraft, keine Sattheit — dieselben Töne
+     wie die Chips, damit „grün" auf der Karte und „gewonnen" in der Liste
+     dasselbe heißen */
+  --map-kunde: #3ce8b0;  --map-architekt: #f6b954;  --map-interessent: #8b5cf6;
+  --map-gewonnen: #3ce8b0;  --map-offen: #8b5cf6;  --map-verloren: #fb7185;
+}
+
 
 * { box-sizing: border-box; }
 html, body {
@@ -96,7 +189,7 @@ code {
 }
 .brand-mark {
   width: 34px; height: 34px; border-radius: 10px; flex: none;
-  background: linear-gradient(135deg, #6d74ff 0%, #8e6cf5 100%);
+  background: var(--accent-grad);
   box-shadow: 0 4px 14px -2px rgba(109, 116, 255, .55),
               inset 0 1px 0 rgba(255, 255, 255, .25);
   position: relative;
@@ -125,7 +218,7 @@ code {
 .tab:hover svg { opacity: 1; }
 .tab.active {
   background: linear-gradient(90deg, rgba(109, 116, 255, .18), rgba(109, 116, 255, .10));
-  color: #cdd1ff; font-weight: 600;
+  color: var(--side-accent); font-weight: 600;
   box-shadow: inset 0 0 0 1px rgba(139, 147, 255, .16);
 }
 .tab.active svg { opacity: 1; color: var(--side-accent); }
@@ -189,7 +282,7 @@ main { max-width: 1480px; margin: 0 auto; padding: 30px 36px 88px; }
               inset 0 1px 0 rgba(255, 255, 255, .12);
 }
 .btn-primary:hover {
-  background: linear-gradient(135deg, var(--accent-hover) 0%, #6c5ce0 100%);
+  background: linear-gradient(135deg, var(--accent-hover) 0%, var(--accent) 100%);
   border-color: var(--accent-hover);
   box-shadow: 0 3px 8px -2px color-mix(in srgb, var(--accent) 55%, transparent);
 }
@@ -218,7 +311,7 @@ select { cursor: pointer; }
 .fetch-panel { padding: 16px 32px; background: var(--card); border-bottom: 1px solid var(--border); }
 .fetch-panel-head { font-weight: 600; margin-bottom: 9px; font-size: 13px; }
 .progress-track { height: 6px; background: var(--bg-subtle); border-radius: 99px; overflow: hidden; }
-.progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #7c6cf0); width: 0%; transition: width .3s ease; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-hover)); width: 0%; transition: width .3s ease; }
 .fetch-log {
   margin-top: 11px; max-height: 160px; overflow-y: auto; font-size: 12.5px;
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 11px; background: var(--bg-subtle);
@@ -271,8 +364,8 @@ select { cursor: pointer; }
 .card h2 { font-size: 15px; font-weight: 700; letter-spacing: -0.015em; margin: 0 0 14px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .hint { font-size: 12.5px; color: var(--muted); margin: 9px 0 0; line-height: 1.6; }
 /* report scope hint when a Companies filter will be applied — make it stand out */
-.hint.hint-scoped { color: var(--accent, #2b6cb0); font-weight: 600;
-  background: color-mix(in srgb, var(--accent, #2b6cb0) 8%, transparent);
+.hint.hint-scoped { color: var(--accent); font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   border-radius: var(--radius-sm, 6px); padding: 6px 9px; }
 
 /* ============================== tables ============================== */
@@ -294,7 +387,7 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 7.5px 9px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
 thead th {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 700;
-  background: #fafbfc; position: sticky; top: 0; z-index: 2;
+  background: var(--bg-subtle); position: sticky; top: 0; z-index: 2;
   border-bottom: 1px solid var(--border-strong);
   box-shadow: 0 1px 0 var(--border);
 }
@@ -372,7 +465,7 @@ tr.id-locked-row td { background: color-mix(in srgb, var(--accent) 4.5%, transpa
 /* score bars */
 .score-cell { display: flex; align-items: center; gap: 9px; }
 .score-track { width: 62px; height: 5px; border-radius: 99px; background: var(--bg-subtle); overflow: hidden; }
-.score-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #7c6cf0); border-radius: 99px; }
+.score-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-hover)); border-radius: 99px; }
 .score-num { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; width: 24px; }
 
 .delta-up { color: var(--ok); font-weight: 650; }
@@ -447,7 +540,7 @@ tr.id-locked-row td { background: color-mix(in srgb, var(--accent) 4.5%, transpa
 .job-status-failed, .job-status-cancelled { background: var(--danger-soft); color: var(--danger); }
 .job-status-interrupted, .job-status-cancelling { background: var(--warn-soft); color: var(--warn); }
 .job-progress-track { height: 6px; background: var(--bg-subtle); border-radius: 99px; overflow: hidden; margin-top: 10px; }
-.job-progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #7c6cf0); transition: width .25s ease; }
+.job-progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-hover)); transition: width .25s ease; }
 .job-log { max-height: 140px; overflow-y: auto; font-size: 12px; font-family: ui-monospace, monospace; color: var(--muted); margin-top: 10px; }
 .job-log div { padding: 1px 0; }
 
@@ -506,7 +599,7 @@ a.link:hover { text-decoration: underline; }
 .action-bar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
   padding: 11px 13px; margin-bottom: 12px;
-  background: linear-gradient(90deg, var(--accent-soft), #f4effe);
+  background: linear-gradient(90deg, var(--accent-soft), transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   border-radius: 12px; box-shadow: var(--shadow-xs);
   animation: fade-in .15s ease;
@@ -554,7 +647,7 @@ a.link:hover { text-decoration: underline; }
 /* progress bar + live streaming feed inside the card */
 .job-strip-bar { height: 6px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .job-strip-bar-fill {
-  height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), #7c6cf0);
+  height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent-hover));
   width: 0%; transition: width .4s ease;
 }
 .job-strip-feed {
@@ -737,7 +830,7 @@ a.link:hover { text-decoration: underline; }
   display: inline-block; font-size: 10.5px; font-weight: 650; padding: 1px 7px; border-radius: 999px;
   background: var(--bg-subtle); color: var(--accent); border: 1px solid var(--border); vertical-align: middle;
 }
-.tag-saved { background: #e9f7ef; color: #1e8f57; border-color: #bfe6cf; }
+.tag-saved { background: var(--chip-ok-bg); color: var(--chip-ok-fg); border-color: var(--chip-ok-line); }
 .saved-report {
   display: flex; justify-content: space-between; align-items: center; gap: 14px;
   padding: 11px 0; border-bottom: 1px solid var(--border);
@@ -798,24 +891,24 @@ tbody tr.row-out > td {
   display: inline-block; font-size: 10.5px; font-weight: 650; padding: 1.5px 8px;
   border-radius: 999px; border: 1px solid var(--border); white-space: nowrap;
 }
-.state-active  { background: #e9f7ef; color: #1e8f57; border-color: #bfe6cf; }
-.state-new     { background: #ebf2fb; color: #2b6cb0; border-color: #c4d9f2; }
-.state-lapsed  { background: #fdf1e7; color: #b05e1a; border-color: #f2d7bd; }
+.state-active  { background: var(--chip-ok-bg); color: var(--chip-ok-fg); border-color: var(--chip-ok-line); }
+.state-new     { background: var(--chip-info-bg); color: var(--chip-info-fg); border-color: var(--chip-info-line); }
+.state-lapsed  { background: var(--chip-warn-bg); color: var(--chip-warn-fg); border-color: var(--chip-warn-line); }
 .state-never   { background: var(--bg-subtle); color: var(--muted); }
 /* Objekt- und Verkaufschancen-Status. Deliberately the same three tokens the
    rest of the app already uses for good/bad/pending, so a green chip means the
    same thing in every table. `offen` is amber rather than blue: it is a pending
    outcome, not a neutral fact, and the blue is already spoken for by 'new'. */
-.state-gewonnen { background: var(--ok-soft);     color: var(--ok);     border-color: #bfe6cf; }
-.state-verloren { background: var(--danger-soft); color: var(--danger); border-color: #f6cfc9; }
-.state-offen    { background: var(--warn-soft);   color: var(--warn);   border-color: #f2d7bd; }
+.state-gewonnen { background: var(--ok-soft);     color: var(--ok);     border-color: var(--chip-ok-line); }
+.state-verloren { background: var(--danger-soft); color: var(--danger); border-color: var(--chip-bad-line); }
+.state-offen    { background: var(--warn-soft);   color: var(--warn);   border-color: var(--chip-warn-line); }
 .fit-badge {
   display: inline-block; min-width: 30px; text-align: center; font-weight: 700;
   font-variant-numeric: tabular-nums; font-size: 12px; padding: 1.5px 7px;
   border-radius: 999px; border: 1px solid var(--border);
 }
-.fit-high { background: #e9f7ef; color: #1e8f57; border-color: #bfe6cf; }
-.fit-mid  { background: #fdf7e7; color: #9a7b12; border-color: #eee0b0; }
+.fit-high { background: var(--chip-ok-bg); color: var(--chip-ok-fg); border-color: var(--chip-ok-line); }
+.fit-mid  { background: var(--chip-mid-bg); color: var(--chip-mid-fg); border-color: var(--chip-mid-line); }
 .fit-low  { background: var(--bg-subtle); color: var(--muted); }
 
 .fit-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 12.5px; }
@@ -1002,9 +1095,9 @@ th.sorted-desc .th-caret::after { content: " ↓"; color: var(--accent); }
    failed send is visually distinct from a successful one in a long list. */
 .ev-tag { display: inline-block; padding: 1px 7px; border-radius: 10px;
           font-size: 11px; font-weight: 600; white-space: nowrap; }
-.ev-created { background: #eef2f7; color: #44536b; }
-.ev-sent    { background: #e6f5ec; color: #1d6b3d; }
-.ev-failed  { background: #fdecec; color: #9d2626; }
+.ev-created { background: var(--chip-dim-bg); color: var(--chip-dim-fg); }
+.ev-sent    { background: var(--chip-ok-bg); color: var(--chip-ok-fg); }
+.ev-failed  { background: var(--chip-bad-bg); color: var(--chip-bad-fg); }
 #reportEventsTable td { vertical-align: top; }
 #reportEventsTable td.nowrap { white-space: nowrap; }
 
@@ -1013,11 +1106,11 @@ th.sorted-desc .th-caret::after { content: " ↓"; color: var(--accent); }
    computed from 100% unless the UI says otherwise. */
 .icp-steps { margin: 6px 0 10px; padding-left: 22px; line-height: 1.55; font-size: 13.5px; }
 .icp-steps li { margin-bottom: 7px; }
-.icp-plain { background: #f2f6ff; border-left: 3px solid #4f5ce5; padding: 9px 12px;
+.icp-plain { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: 9px 12px;
              border-radius: 4px; font-size: 13.5px; line-height: 1.55; margin: 4px 0 10px; }
-.tag-warn { background: #fdf0e3; color: #8a5220; }
+.tag-warn { background: var(--chip-warn-bg); color: var(--chip-warn-fg); }
 .icp-feature-weak .fit-bar-fill { opacity: .45; }
-.icp-feature-weak .fit-row-pct { color: #8a5220; }
+.icp-feature-weak .fit-row-pct { color: var(--chip-warn-fg); }
 
 /* ===================== Phase 1: Navigation in Arbeitsmodi ===================== */
 /* Gruppen-Überschriften: erst entscheiden (Arbeit), dann nachschlagen (Daten),
@@ -1072,8 +1165,8 @@ body.nav-collapsed .nav-badge {
 .pipe-fill { height: 100%; border-radius: 999px; background: var(--accent-grad); }
 .pipe-counts { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5;
                font-variant-numeric: tabular-nums; }
-.pipe-warn { color: #8a5220; font-weight: 600; }
-.pipe-lock { font-size: 12px; color: #8a5220; white-space: nowrap; }
+.pipe-warn { color: var(--chip-warn-fg); font-weight: 600; }
+.pipe-lock { font-size: 12px; color: var(--chip-warn-fg); white-space: nowrap; }
 .pipe-action { white-space: nowrap; text-align: right; }
 @media (max-width: 900px) {
   .pipe-row { grid-template-columns: 100px 1fr; }
@@ -1083,15 +1176,15 @@ body.nav-collapsed .nav-badge {
 
 /* ===================== Phase 3: Dossier — Beweis-Chips ===================== */
 /* Website-Identität: der Status trägt seine Farbe, der Beweis steht daneben. */
-.idw-verified { background: #e6f6ec; color: #1c7c3c; }
-.idw-review   { background: #fdf0e3; color: #8a5220; }
-.idw-notfound { background: #f1f2f6; color: #64708a; }
-.idw-conflict { background: #fdecec; color: #b3261e; }
-.idw-unknown  { background: #f1f2f6; color: #64708a; }
+.idw-verified { background: var(--chip-ok-bg); color: var(--chip-ok-fg); }
+.idw-review   { background: var(--chip-warn-bg); color: var(--chip-warn-fg); }
+.idw-notfound { background: var(--chip-dim-bg); color: var(--chip-dim-fg); }
+.idw-conflict { background: var(--chip-bad-bg); color: var(--chip-bad-fg); }
+.idw-unknown  { background: var(--chip-dim-bg); color: var(--chip-dim-fg); }
 /* Steckbrief: belegt (Fakt von der Seite) vs KI-Einschätzung (Ableitung) —
    dieselbe Unterscheidung wie im PDF-Bericht, eine Sprache an beiden Orten. */
-.tag-belegt { background: #e6f6ec; color: #1c7c3c; }
-.tag-ki     { background: #eef0fd; color: #3a44b5; }
+.tag-belegt { background: var(--chip-ok-bg); color: var(--chip-ok-fg); }
+.tag-ki     { background: var(--accent-soft); color: var(--accent-ink); }
 
 /* ===================== Explorer: Karte|Liste über Firmen|Projekte =========
    Zwei Ebenen, die sich nicht verwechseln dürfen. Deshalb tragen sie
@@ -1147,17 +1240,18 @@ body.explore-karte .explore-liste-only { display: none !important; }
 }
 .map-dot {
   display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-  margin-right: 5px; border: 1.5px solid #fff; box-shadow: 0 0 0 1px var(--border);
+  margin-right: 5px; border: 1.5px solid var(--card);
+  box-shadow: 0 0 0 1px var(--border), 0 0 9px currentColor;
 }
-.dot-kunde { background: #1c7c3c; }
-.dot-architekt { background: #8a5220; }
-.dot-interessent { background: #4f5ce5; }
+.dot-kunde { background: var(--map-kunde); }
+.dot-architekt { background: var(--map-architekt); }
+.dot-interessent { background: var(--map-interessent); }
 /* Projektkarte: die Farbe sagt den AUSGANG. Bewusst dieselben Grün-/Rot-Töne
    wie die Status-Chips in der Tabelle (--ok / --danger), damit „grün" auf der
    Karte und „gewonnen" in der Liste dasselbe heißen. */
-.dot-gewonnen { background: #0e9f6e; }
-.dot-offen { background: #4f5ce5; }
-.dot-verloren { background: #d92d20; }
+.dot-gewonnen { background: var(--map-gewonnen); }
+.dot-offen { background: var(--map-offen); }
+.dot-verloren { background: var(--map-verloren); }
 
 /* ===================== Phase 5: Warteschlangen-Tastatur + Aktivität ===================== */
 /* fokussierte Zeile in Entscheidungen: klarer Rand, kein Farbrausch */
@@ -1168,7 +1262,7 @@ body.explore-karte .explore-liste-only { display: none !important; }
 /* Aktivitätsanzeiger in der Seitenleiste: dezenter Chip, klickbar */
 .nav-activity {
   border: 1px solid var(--side-line); border-radius: 999px;
-  background: rgba(255, 255, 255, .07); color: #cdd1ff;
+  background: var(--side-line); color: var(--side-accent);
   font: inherit; font-size: 12px; font-weight: 600;
   padding: 5px 12px; cursor: pointer;
   font-variant-numeric: tabular-nums;
@@ -1185,11 +1279,11 @@ body.nav-collapsed .nav-activity { font-size: 10px; padding: 4px 6px; }
   display: inline-block; padding: 2px 9px; border-radius: 999px;
   font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
 }
-.qual-stark   { background: #e6f6ec; color: #1c7c3c; }
-.qual-mittel  { background: #eef0fd; color: #3a44b5; }
-.qual-schwach { background: #fdf0e3; color: #8a5220; }
+.qual-stark   { background: var(--chip-ok-bg); color: var(--chip-ok-fg); }
+.qual-mittel  { background: var(--accent-soft); color: var(--accent-ink); }
+.qual-schwach { background: var(--chip-warn-bg); color: var(--chip-warn-fg); }
 /* Merkmale unter Lift 1 sind Gegenanzeigen — gedämpft, nicht versteckt */
-tr.feat-neg td { color: #8a5220; }
+tr.feat-neg td { color: var(--chip-warn-fg); }
 /* Dezil-Balken: die Gewinnquote je Punktzahl-Zehntel, links schlecht -> rechts gut */
 .decile-bars { display: flex; align-items: flex-end; gap: 4px; height: 96px; margin: 12px 0 4px; }
 .decile { flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
@@ -1213,7 +1307,7 @@ tr.arm-kontrolle td { color: var(--muted); }
              margin: 8px 0; font-size: 12.5px; }
 /* Eingehende Mails sind das seltenere und wertvollere Ereignis — Nachfrage
    statt Aufwand. Sie bekommen deshalb die betonte Kante. */
-.mail-item.mail-in { border-left-color: #1c7c3c; background: #f6fbf7; }
+.mail-item.mail-in { border-left-color: var(--ok); background: var(--chip-ok-bg); }
 .mail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .mail-text { color: var(--ink-soft); line-height: 1.5; white-space: pre-wrap;
              max-height: 6.5em; overflow: hidden; }
@@ -1247,13 +1341,13 @@ tr.arm-kontrolle td { color: var(--muted); }
   border-bottom: 1px solid var(--border); padding: 6px 14px 6px 0; text-align: left; white-space: nowrap;
 }
 .chat-turn.bot th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-.chat-fehler { color: #b4232a; }
+.chat-fehler { color: var(--danger); }
 
 /* Beleg unter der Antwort: da, aber leise — man liest ihn, wenn man zweifelt. */
 .chat-meta { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
              font-size: 11.5px; color: var(--muted-soft); }
 .chat-meta .wz { background: var(--bg-subtle); border-radius: 999px; padding: 2px 8px; }
-.chat-meta .wz.err { background: #fdecec; color: #b4232a; }
+.chat-meta .wz.err { background: var(--chip-bad-bg); color: var(--chip-bad-fg); }
 
 .chat-denkt { display: flex; gap: 5px; padding: 4px 0; }
 .chat-denkt i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-soft);
@@ -1306,3 +1400,173 @@ tr.arm-kontrolle td { color: var(--muted); }
 .people-row b { font-size: 13.5px; font-weight: 600; }
 .people-row .muted { font-size: 12.5px; }
 .people-row .sub { font-size: 11.5px; color: var(--muted-soft); }
+
+/* ===================== DUNKLE HAUT: Tiefe ==================================
+   Alles hier hängt an [data-theme="dunkel"]. Die helle Haut bleibt damit
+   Zeile für Zeile das, was sie vorher war — wer zurückschaltet, bekommt das
+   alte Bild und nicht eine aufgehellte Fassung des neuen.
+
+   Die Tiefe kommt aus drei Dingen, nicht aus einer dunklen Hintergrundfarbe:
+   ein Lichthof hinter dem Inhalt, Glas mit echter Unschärfe, und Ränder, die
+   leicht violett gefärbt sind statt grau. Ohne den Lichthof sieht Dunkel nur
+   ausgeschaltet aus. */
+
+[data-theme="dunkel"] body {
+  background-image: radial-gradient(1200px 780px at 52% 6%, #101736 0%, #070a18 55%, #05060f 100%);
+  background-attachment: fixed;
+}
+/* Punktraster: liegt über dem Verlauf, unter allem anderen, und wird zum Rand
+   hin ausgeblendet — ein Raster über die volle Fläche wirkt wie Millimeter-
+   papier, nicht wie Tiefe. */
+[data-theme="dunkel"] body::before {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image: radial-gradient(rgba(120, 140, 255, .10) 1px, transparent 1.2px);
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(1000px 700px at 52% 8%, #000 0%, transparent 78%);
+  mask-image: radial-gradient(1000px 700px at 52% 8%, #000 0%, transparent 78%);
+}
+/* Nur ueber das Punktraster heben, NICHT positionieren: die Seitenleiste ist
+   bereits position:fixed. Ein pauschales `position: relative` warf sie zurueck
+   in den Fluss, sie schob den Inhalt um ihre eigene Hoehe nach unten, und die
+   App sah aus, als waere die rechte Seite leer. */
+[data-theme="dunkel"] .sidebar { z-index: 2; }
+[data-theme="dunkel"] .content { position: relative; z-index: 1; }
+
+/* --- Seitenleiste: ein violetter Schein hinter der Marke --- */
+[data-theme="dunkel"] .sidebar { overflow: hidden; }
+[data-theme="dunkel"] .sidebar::after {
+  content: ''; position: absolute; top: -90px; left: -70px; width: 290px; height: 290px;
+  background: radial-gradient(circle, rgba(139, 92, 246, .28), transparent 68%);
+  pointer-events: none; z-index: 0;
+}
+[data-theme="dunkel"] .sidebar > * { position: relative; z-index: 1; }
+[data-theme="dunkel"] .tab.active {
+  background: linear-gradient(90deg, rgba(139, 92, 246, .26), rgba(139, 92, 246, .04));
+  box-shadow: inset 2px 0 0 var(--accent), 0 0 24px -12px var(--accent);
+}
+
+/* --- Karten aus Glas --- */
+[data-theme="dunkel"] .card,
+[data-theme="dunkel"] .kpi,
+[data-theme="dunkel"] .fetch-plan,
+[data-theme="dunkel"] .notice {
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  position: relative;
+}
+/* der Lichtabfall von oben links — derselbe Griff wie im Prototyp */
+[data-theme="dunkel"] .card::before,
+[data-theme="dunkel"] .kpi::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(110% 60% at 8% 0%, rgba(139, 92, 246, .10), transparent 60%);
+}
+[data-theme="dunkel"] .card > *,
+[data-theme="dunkel"] .kpi > * { position: relative; z-index: 1; }
+
+/* --- Tabellen: bewusst KEIN Glas ---
+   46.810 Zeilen hinter Unschärfe wären unlesbar. Feste Fläche, klebriger Kopf,
+   Ziffern in gleicher Breite, und beim Überfahren eine Kante statt einer
+   Farbfläche. */
+[data-theme="dunkel"] .table-wrap { background: rgba(10, 14, 32, .55); }
+[data-theme="dunkel"] table thead th {
+  background: rgba(10, 14, 32, .94);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+[data-theme="dunkel"] table tbody td { border-bottom-color: rgba(124, 140, 255, .09); }
+[data-theme="dunkel"] table tbody tr:hover {
+  background: linear-gradient(90deg, rgba(139, 92, 246, .13), rgba(139, 92, 246, .01));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+[data-theme="dunkel"] .num, [data-theme="dunkel"] td.num, [data-theme="dunkel"] th.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Chips: der Punkt glüht --- */
+[data-theme="dunkel"] .state-chip::before,
+[data-theme="dunkel"] .map-dot { box-shadow: 0 0 9px currentColor; }
+
+/* --- Schublade: Glas mit Tiefe --- */
+[data-theme="dunkel"] .company-drawer {
+  background: linear-gradient(180deg, rgba(17, 22, 46, .93), rgba(10, 13, 30, .95));
+  backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -30px 0 70px rgba(2, 4, 16, .75);
+}
+
+/* --- Explorer-Leiste: schwebt, statt zu sitzen --- */
+[data-theme="dunkel"] .segmented {
+  background: rgba(16, 21, 42, .62); border-color: var(--border);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-sm);
+}
+[data-theme="dunkel"] .segmented button.active {
+  background: rgba(139, 92, 246, .34); color: #fff;
+  box-shadow: 0 0 18px -6px var(--accent);
+}
+[data-theme="dunkel"] .segmented-sub { background: transparent; box-shadow: none; }
+[data-theme="dunkel"] .segmented-sub button.active { background: transparent; box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* ===================== KARTE ==============================================
+   Der Filter trifft NUR die Kachelebene. Leaflet hält Kacheln, Marker und
+   Popups in getrennten Panes — deshalb werden die Pins nicht mitinvertiert,
+   und genau darum steht hier kein Filter auf dem Container. Ein zweiter
+   Kachelserver ist damit unnötig; es bleibt bei der Quelle, die AdWatch heute
+   schon erreicht. */
+#custMap, #objMap { background: var(--map-bg); }
+.leaflet-tile-pane { filter: var(--tile-filter); }
+[data-theme="dunkel"] .leaflet-container { background: var(--map-bg); }
+/* Popup und Bedienelemente gehören zur App, nicht zur Karte — sie bekommen
+   die Haut der App, sonst sitzt ein weißer Kasten auf dunklem Grund. */
+[data-theme="dunkel"] .leaflet-popup-content-wrapper,
+[data-theme="dunkel"] .leaflet-popup-tip {
+  background: rgba(16, 21, 42, .92); color: var(--ink);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 14px 34px rgba(2, 4, 16, .75);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+[data-theme="dunkel"] .leaflet-popup-content a { color: var(--accent-ink); }
+[data-theme="dunkel"] .leaflet-bar a,
+[data-theme="dunkel"] .leaflet-control-attribution {
+  background: rgba(16, 21, 42, .88); color: var(--muted);
+  border-color: var(--border);
+}
+[data-theme="dunkel"] .leaflet-bar a { color: var(--ink); }
+[data-theme="dunkel"] .leaflet-control-attribution a { color: var(--muted); }
+/* Cluster-Blasen: Glut statt Pastell */
+[data-theme="dunkel"] .marker-cluster div {
+  background: rgba(139, 92, 246, .55); color: #fff;
+  box-shadow: 0 0 22px -4px var(--accent);
+}
+[data-theme="dunkel"] .marker-cluster { background: rgba(139, 92, 246, .18); }
+
+/* --- Hautschalter in der Seitenleiste --- */
+.theme-switch {
+  display: flex; gap: 2px; padding: 3px; margin: 0 0 10px;
+  background: var(--side-line); border-radius: 999px;
+}
+.theme-switch button {
+  flex: 1; border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: 11px; font-weight: 600; color: var(--side-muted);
+  padding: 5px 0; border-radius: 999px;
+}
+.theme-switch button.active { background: var(--accent); color: #fff; }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="dunkel"] body::before { display: none; }
+}
+
+/* Datei-Auswahl: der eingebaute Knopf des Browsers bleibt sonst weiss und
+   sitzt als heller Fleck in der dunklen Karte. `color-scheme` allein reicht
+   dafuer nicht, das Pseudo-Element muss ausdruecklich eingekleidet werden. */
+[data-theme="dunkel"] input[type="file"] {
+  color: var(--muted);
+}
+[data-theme="dunkel"] input[type="file"]::file-selector-button {
+  background: var(--bg-subtle); color: var(--ink);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 5px 12px; margin-right: 10px; cursor: pointer;
+  font: inherit; font-size: 12.5px;
+}
+[data-theme="dunkel"] input[type="file"]::file-selector-button:hover {
+  border-color: var(--border-strong); color: var(--accent-ink);
+}

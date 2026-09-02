@@ -1296,7 +1296,17 @@
   // kommen von tile.openstreetmap.org. Private Endkunden filtert der SERVER
   // (scope) — ihre Adressen sind Privatwohnungen und gehören auf keine Karte.
   let custMap = null, custClusters = null, custMapPins = [];
-  const MAP_TYPE_COLOR = { kunde: "#1c7c3c", architekt: "#8a5220", interessent: "#4f5ce5" };
+  // Die Pin-Farben stehen im Stylesheet, nicht hier. Sonst tragen Legende
+  // (CSS) und Pin (JS) zwei Wahrheiten, und beim Hautwechsel zieht nur eine
+  // von beiden mit.
+  const hautFarbe = (name, ersatz) =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim() || ersatz;
+  const mapFarben = () => ({
+    kunde: hautFarbe("--map-kunde", "#1c7c3c"),
+    architekt: hautFarbe("--map-architekt", "#8a5220"),
+    interessent: hautFarbe("--map-interessent", "#4f5ce5"),
+  });
+  let MAP_TYPE_COLOR = mapFarben();
 
   function updateMapCount() {
     if (!custMap) return;
@@ -1362,8 +1372,13 @@
     // Bounds aus den DATEN, nicht aus der Cluster-Gruppe: chunkedLoading fügt
     // Marker asynchron hinzu, getBounds() ist direkt nach addLayers noch leer
     // und fitBounds wirft dann ("reading 'lat'") — gemessen beim ersten Test.
-    if (d.pins.length)
+    if (d.pins.length) {
+      // Erst nachmessen, dann einpassen. Der Container hat waehrend des Abrufs
+      // seine endgueltige Groesse bekommen; ohne das rechnete fitBounds mit den
+      // alten Massen und die Karte stand auf Weltansicht statt auf Europa.
+      custMap.invalidateSize();
       custMap.fitBounds(L.latLngBounds(d.pins.map(p => [p.lat, p.lng])).pad(0.08));
+    }
     updateMapCount();
   }
 
@@ -1429,7 +1444,12 @@
   // Farbdeutung (Ausgang statt Firmentyp). Ein gemeinsamer Layer müsste beides
   // gleichzeitig behaupten.
   let objMap = null, objClusters = null, objMapPins = [];
-  const OBJ_TYPE_COLOR = { gewonnen: "#0e9f6e", offen: "#4f5ce5", verloren: "#d92d20" };
+  const objFarben = () => ({
+    gewonnen: hautFarbe("--map-gewonnen", "#0e9f6e"),
+    offen: hautFarbe("--map-offen", "#4f5ce5"),
+    verloren: hautFarbe("--map-verloren", "#d92d20"),
+  });
+  let OBJ_TYPE_COLOR = objFarben();
 
   // Genau der Filter, den auch die Projektliste schickt — inklusive der
   // Spaltenmenü-Parameter. Eine zweite Zusammenstellung hier wäre die zweite
@@ -1501,8 +1521,13 @@
       });
       return m;
     }));
-    if (d.pins.length)
+    if (d.pins.length) {
+      // Erst nachmessen, dann einpassen. Der Container hat waehrend des Abrufs
+      // seine endgueltige Groesse bekommen; ohne das rechnete fitBounds mit den
+      // alten Massen und die Karte stand auf Weltansicht statt auf Europa.
+      objMap.invalidateSize();
       objMap.fitBounds(L.latLngBounds(d.pins.map(p => [p.lat, p.lng])).pad(0.08));
+    }
     updateObjMapCount(d.ohne_koordinate);
   }
 
@@ -1570,6 +1595,34 @@
       if (karte) await showObjMap();
     }
   }
+
+  // ================= HAUT (dunkel | hell) =================================
+  // Gesetzt wird sie am <html>, damit das Stylesheet allein die Arbeit macht.
+  // Zwei Dinge muessen JS trotzdem nachziehen: die Pin-Farben (sie stehen in
+  // Leaflet-Objekten, nicht im DOM, und aendern sich nicht von selbst) und die
+  // Browserleisten-Farbe.
+  function hautSetzen(haut, neuZeichnen = true) {
+    document.documentElement.dataset.theme = haut;
+    try { localStorage.setItem("adwatch.haut", haut); } catch { /* privater Modus */ }
+    $$("#themeSwitch button").forEach(b => b.classList.toggle("active", b.dataset.haut === haut));
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = haut === "dunkel" ? "#05060f" : "#4f5ce5";
+    MAP_TYPE_COLOR = mapFarben();
+    OBJ_TYPE_COLOR = objFarben();
+    if (!neuZeichnen) return;
+    // Die Pins tragen ihre Farbe als Leaflet-Option — ein Hautwechsel erreicht
+    // sie nur, wenn sie neu gezeichnet werden. Der Schluessel wird geleert,
+    // sonst greift die Deduplizierung und es passiert gar nichts.
+    if (custMap && !$("#custMapWrap")?.classList.contains("hidden")) {
+      custPinsKey = null; loadCustMapPins().catch(() => {});
+    }
+    if (objMapSichtbar()) { objPinsKey = null; loadObjMapPins().catch(() => {}); }
+  }
+  $$("#themeSwitch button").forEach(b =>
+    b.addEventListener("click", () => hautSetzen(b.dataset.haut)));
+  // Startzustand: das Markup hat die Haut schon gesetzt (kein Aufblitzen),
+  // hier wird nur der Schalter darauf ausgerichtet.
+  hautSetzen(document.documentElement.dataset.theme === "hell" ? "hell" : "dunkel", false);
 
   $$("#exploreAnsicht button").forEach(b => b.addEventListener("click", () => {
     EXPLORE.ansicht = b.dataset.ansicht;

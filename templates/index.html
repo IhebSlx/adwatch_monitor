@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="de" data-theme="dunkel">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,6 +12,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="/static/app.css">
+<script>
+  /* Vor dem ersten Anstrich: die gespeicherte Haut setzen. Stuende das in
+     app.js, saehe man beim Laden fuer einen Wimpernschlag die helle Fassung. */
+  try {
+    var h = localStorage.getItem("adwatch.haut");
+    if (h === "hell" || h === "dunkel") document.documentElement.dataset.theme = h;
+  } catch (e) { /* privater Modus */ }
+</script>
 </head>
 <body>
 <div id="app">
@@ -100,6 +108,10 @@
       <!-- Läuft irgendwo ein Job, sagt es die Seitenleiste — egal welcher Tab
            offen ist. Klick führt zu den Logs. Befüllt von pollActivity(). -->
       <button id="navActivity" class="nav-activity hidden" title="Laufender Job — Klick öffnet Logs"></button>
+      <div class="theme-switch" id="themeSwitch" title="Dunkle oder helle Oberfläche">
+        <button type="button" data-haut="dunkel">Dunkel</button>
+        <button type="button" data-haut="hell">Hell</button>
+      </div>
       <div class="source-switch" id="sourceSwitch" title="Welche Anzeigen-Plattform(en) abrufen">
         <label><input type="checkbox" id="sourceMeta" checked> Meta</label>
         <label><input type="checkbox" id="sourceGoogle"> Google</label>
