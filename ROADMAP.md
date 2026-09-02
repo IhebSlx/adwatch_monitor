@@ -96,12 +96,38 @@ permission at all. Not built yet; flagged here as a decision, not a plan.
 
 | # | Item | Gated on |
 |---|---|---|
-| 16 | Prove discovered leads convert — 245 target / 61 control, 0 contacted | sales working the lists; calendar time |
-| 8 | Remaining Dataverse reads: Leads, activities, Gold tier, account `createdon` | in progress (email pull running) |
+| 16 | **Prove discovered leads convert** — 293 in lists, **1 contacted** since 18.08. | sales working the lists |
+| 17 | Angebot → Auftrag je Segment auswerten (SAP-Beleg-Join liegt ungenutzt) | nothing — the data is in the database |
+| 2 | Export von Listen, Armen und Ergebnissen (dieses Dokument, §2) | nothing |
 | 10 | Ads-vs-enrichment consistency check — the second identity scrutiny | Apify credits |
-| 12 | Twin search prototype — lookalike leads from the internet | #16 reading out first; sourcing works, conversion unproven |
+| 12 | Twin search prototype — lookalike leads from the internet | #16 reading out first |
 | 1 | Dataverse write-back (this document, §1) | write permissions |
 | 7 | Split `app.js` into ES modules | nothing — housekeeping |
+
+**Erledigt seit der letzten Fassung:** #8 (Dataverse-Lesen: 438.979 E-Mails über
+44/44 Monate, 236.710 Leads, `createdon`, SAP-Beleg-Join auf Projektebene) ·
+Projektwert = primäre Verkaufschance statt Summe · Explorer (Karte × Liste ×
+Firmen × Projekte) · dunkle Haut mit hellem Rückweg · Projektkarte in der Höhe ·
+Spaltenfilter über der Karte · Chatbot schlägt Läufe vor.
+
+---
+
+## 3a. Was auf deiner Seite liegt
+
+Nichts davon kann die App selbst erledigen. Sie ist an allen vier Stellen
+fertig und wartet.
+
+| Was | Warum es wartet | Wenn es kommt |
+|---|---|---|
+| **Die 245 Anrufe** | 1 von 293 seit dem 18.08. | #16 liest aus, #12 wird baubar |
+| **Personen-Flow** (`FLOW_URL_GRAPH_USERS`) | fünf Minuten in Power Automate, Anleitung in `docs/FLOW-PERSONENSUCHE.md` | Empfänger werden gesucht statt abgetippt; Teams-Link je Person |
+| **Apify-Guthaben** | leer | #10, und der Ad lookup als zweite Prüfung |
+| **Dataverse-Schreibrecht** | nicht erteilt | §1, die Rückgabe der Ergebnisse ins CRM |
+
+Der Personen-Flow ist der billigste davon: die Suche, der Endpunkt und die
+Auswahlliste stehen bereits im Code, `verfuegbar()` meldet nur `False`, weil
+die URL fehlt. Ohne ihn bleibt das Empfängerfeld ein Eingabefeld — es bricht
+nichts, es ist nur Tipparbeit.
 
 Note the ordering of #12 behind #16 on purpose. Twin search is the terminal
 feature of the whole vision, and sourcing candidates already demonstrably works.
