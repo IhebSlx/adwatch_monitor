@@ -1366,11 +1366,18 @@
         tiles: [`${ESRI}/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}`] },
     },
     layers: [
-      { id: "grund", type: "background", paint: { "background-color": "#04060f" } },
-      { id: "flaeche", type: "raster", source: "flaeche",
-        paint: { "raster-opacity": 0.9 } },
-      { id: "schrift", type: "raster", source: "schrift",
-        paint: { "raster-opacity": 0.75 } },
+      { id: "grund", type: "background", paint: { "background-color": "#0c1230" } },
+      // raster-brightness-min hebt die TIEFEN an (es bildet [0,1] auf
+      // [min,max] ab, kappt also nicht). Esris „Dark Gray" liegt fast komplett
+      // im Schwarzbereich — ohne diese Anhebung sieht man Land und Wasser nicht
+      // auseinander. Die Beschriftungsebene bekommt mehr, weil sie die
+      // Orientierung traegt.
+      { id: "flaeche", type: "raster", source: "flaeche", paint: {
+          "raster-opacity": 1, "raster-brightness-min": 0.22,
+          "raster-contrast": 0.1, "raster-saturation": -0.25 } },
+      { id: "schrift", type: "raster", source: "schrift", paint: {
+          "raster-opacity": 1, "raster-brightness-min": 0.45,
+          "raster-contrast": 0.2 } },
     ],
   };
 
@@ -1388,22 +1395,29 @@
     (s.layers || []).forEach(l => {
       const id = l.id, art = l.type;
       try {
-        if (art === "background") m.setPaintProperty(id, "background-color", "#080d1e");
+        // Land deutlich ueber Wasser: ohne diesen Abstand ist eine dunkle Karte
+        // ein schwarzes Feld, auf dem niemand erkennt, wo Deutschland aufhoert.
+        if (art === "background") m.setPaintProperty(id, "background-color", "#0c1230");
         else if (/water|ocean|sea|bathym/i.test(id) && art === "fill")
-          m.setPaintProperty(id, "fill-color", "#050813");
+          m.setPaintProperty(id, "fill-color", "#070c1c");
         else if (/land|earth|park|wood|forest|grass|sand/i.test(id) && art === "fill")
-          m.setPaintProperty(id, "fill-color", "#0d1428");
+          m.setPaintProperty(id, "fill-color", "#1e2a52");
         else if (/building/i.test(id) && art === "fill")
-          m.setPaintProperty(id, "fill-color", "#141d38");
+          m.setPaintProperty(id, "fill-color", "#243055");
         else if (/boundary|admin|border/i.test(id) && art === "line") {
-          m.setPaintProperty(id, "line-color", "rgba(124,140,255,.34)");
-          m.setPaintProperty(id, "line-width", 0.9);
+          // Landesgrenzen sind die wichtigste Orientierung auf dieser Karte —
+          // sie duerfen kraeftiger sein als alles andere im Hintergrund.
+          const land = /country|0|admin_0|nation/i.test(id);
+          m.setPaintProperty(id, "line-color",
+            land ? "rgba(178,193,255,.95)" : "rgba(130,148,255,.45)");
+          m.setPaintProperty(id, "line-width", land ? 1.9 : 0.9);
         } else if (/road|highway|transport|bridge|tunnel|rail/i.test(id) && art === "line") {
-          m.setPaintProperty(id, "line-color", "rgba(96,116,180,.45)");
-          m.setPaintProperty(id, "line-opacity", 0.3);
+          m.setPaintProperty(id, "line-color", "rgba(110,130,195,.5)");
+          m.setPaintProperty(id, "line-opacity", 0.35);
         } else if (art === "symbol") {
-          m.setPaintProperty(id, "text-color", "rgba(168,183,224,.66)");
-          m.setPaintProperty(id, "text-halo-color", "rgba(4,6,14,.92)");
+          m.setPaintProperty(id, "text-color", "rgba(205,216,245,.92)");
+          m.setPaintProperty(id, "text-halo-color", "rgba(6,10,22,.95)");
+          m.setPaintProperty(id, "text-halo-width", 1.4);
         }
       } catch { /* Ebene kennt die Eigenschaft nicht */ }
     });
@@ -1470,6 +1484,10 @@
   // Sitzung nicht.
   let _webgl = null;
   function webglDa() {
+    // ?ohnewebgl=1 erzwingt den einfachen Weg. Ohne diesen Schalter laesst er
+    // sich auf einem Rechner MIT Grafikbeschleunigung gar nicht ansehen — und
+    // ein Weg, den man nicht ansehen kann, wird auch nicht gepflegt.
+    if (new URLSearchParams(location.search).get("ohnewebgl") === "1") return false;
     if (_webgl !== null) return _webgl;
     try {
       const c = document.createElement("canvas");
@@ -1992,9 +2010,14 @@
       const m = L.map(behaelter, { preferCanvas: true, minZoom: 2,
         worldCopyJump: false, attributionControl: true })
         .setView([50.5, 10], 4);
-      L.tileLayer(ESRI_FLAECHE, { maxZoom: 16,
+      // Zwei Ebenen mit EIGENEN Klassen, damit das Stylesheet sie getrennt
+      // aufhellen kann: die Flaeche darf ruhig bleiben, Grenzen und Ortsnamen
+      // muessen lesbar sein. Esris „Dark Gray" ist als neutraler Hintergrund
+      // fuer Daten gebaut und deshalb absichtlich kontrastarm — als Karte, auf
+      // der man sich zurechtfinden soll, ist sie so zu flau.
+      L.tileLayer(ESRI_FLAECHE, { maxZoom: 16, className: "karte-flaeche",
         attribution: "Esri, HERE, Garmin, &copy; OpenStreetMap-Mitwirkende" }).addTo(m);
-      L.tileLayer(ESRI_SCHRIFT, { maxZoom: 16, opacity: 0.8 }).addTo(m);
+      L.tileLayer(ESRI_SCHRIFT, { maxZoom: 16, className: "karte-schrift" }).addTo(m);
       const gruppen = L.markerClusterGroup({
         chunkedLoading: true, maxClusterRadius: 48,
         // Die Blase traegt die Farbe der haeufigsten Kategorie. Ein Ring waere
@@ -2039,9 +2062,23 @@
       const lat = punkte.map(p => p.lat).sort((a, b) => a - b);
       const lng = punkte.map(p => p.lng).sort((a, b) => a - b);
       const q = (w, x) => w[Math.min(w.length - 1, Math.max(0, Math.round((w.length - 1) * x)))];
-      k.m.invalidateSize();
-      k.m.fitBounds([[q(lat, 0.01), q(lng, 0.01)], [q(lat, 0.99), q(lng, 0.99)]],
-                    { padding: [30, 30], maxZoom: 9 });
+      // Erst einpassen, wenn der Container WIRKLICH eine Groesse hat.
+      //
+      // invalidateSize() direkt davor reicht nicht: der Kartencontainer war
+      // gerade erst eingeblendet, der Browser hatte noch nicht neu gesetzt, und
+      // Leaflet rechnete mit 0x0. fitBounds landete dann auf maxZoom, zentriert
+      // auf die Mitte des Kastens — die Karte zeigte einen Landkreis statt
+      // Europa. Gemessen: Zoom exakt 9 (die Obergrenze), Mitte exakt der
+      // Boxmittelpunkt. Deshalb wird gewartet, bis clientWidth steht.
+      const einpassen = (versuch = 0) => {
+        k.m.invalidateSize();
+        if (k.m.getContainer().clientWidth < 50 && versuch < 20)
+          return requestAnimationFrame(() => einpassen(versuch + 1));
+        k.m.fitBounds([[q(lat, 0.01), q(lng, 0.01)], [q(lat, 0.99), q(lng, 0.99)]],
+                      { padding: [30, 30], maxZoom: 9 });
+        zaehlerLeaflet(welche);
+      };
+      requestAnimationFrame(() => einpassen());
     }
     zaehlerLeaflet(welche);
   }

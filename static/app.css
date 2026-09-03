@@ -1839,3 +1839,18 @@ tr.konv-unter .konv-bar i { background: linear-gradient(90deg, var(--danger), va
   color: var(--muted); font-size: 10px;
 }
 [data-theme="dunkel"] .leaflet-control-attribution a { color: var(--muted); }
+
+/* ===================== Karte lesbarer machen ==============================
+   Esris „Dark Gray" ist als neutraler Untergrund für Daten gebaut: Land und
+   Wasser liegen beide bei fast Schwarz, Grenzen sind Andeutungen. Als Karte,
+   auf der man sich zurechtfinden soll, ist das zu flau.
+
+   Aufgehellt wird nur die KACHELEBENE — die Pins liegen in einer anderen
+   Leaflet-Ebene und behalten ihre Farbe. Beschriftung und Grenzen bekommen
+   mehr als die Fläche: die Fläche darf ruhig bleiben, die Orientierung nicht. */
+.karte-flaeche { filter: brightness(1.75) contrast(1.08) saturate(.7); }
+.karte-schrift { filter: brightness(1.9) contrast(1.3); }
+/* In der hellen Haut ist die dunkle Grundkarte fehl am Platz — dort bleibt sie
+   unangetastet, damit „Hell" wirklich hell ist. */
+[data-theme="hell"] .karte-flaeche { filter: invert(1) brightness(1.05) contrast(.95); }
+[data-theme="hell"] .karte-schrift { filter: invert(1) brightness(.9); }
