@@ -1375,9 +1375,21 @@
       { id: "flaeche", type: "raster", source: "flaeche", paint: {
           "raster-opacity": 1, "raster-brightness-min": 0.22,
           "raster-contrast": 0.1, "raster-saturation": -0.25 } },
+      // Ein background-Layer darf ueberall in der Reihenfolge stehen, auch
+      // OBEN. Halbdurchsichtig ueber den Kacheln faerbt er die graue Karte ins
+      // Blaue -- der einzige Weg, denn Esris "Dark Gray" ist echtes Graustufen-
+      // material: raster-saturation und raster-hue-rotate koennen aus Grau
+      // keine Farbe machen, wo keine ist.
+      // Nur ein Hauch. Bei 0,34 legte sich ein Schleier ueber alles und nahm der
+      // Karte den Kontrast, den die Aufhellung gerade erst gebracht hatte —
+      // eine gleichmaessige Einfaerbung faerbt Land und Meer eben gleich und
+      // trennt daher nichts. Wer echtes blaues Meer will, nimmt „Karte":
+      // dort sind Wasser und Land getrennte Flaechen und getrennt faerbbar.
+      { id: "blaustich", type: "background", paint: {
+          "background-color": "#14406f", "background-opacity": 0.16 } },
       { id: "schrift", type: "raster", source: "schrift", paint: {
-          "raster-opacity": 1, "raster-brightness-min": 0.45,
-          "raster-contrast": 0.2 } },
+          "raster-opacity": 0.92, "raster-brightness-min": 0.30,
+          "raster-contrast": 0.15 } },
     ],
   };
 
@@ -1397,13 +1409,17 @@
       try {
         // Land deutlich ueber Wasser: ohne diesen Abstand ist eine dunkle Karte
         // ein schwarzes Feld, auf dem niemand erkennt, wo Deutschland aufhoert.
-        if (art === "background") m.setPaintProperty(id, "background-color", "#0c1230");
+        // Meer BLAU, Land schiefergrau. Vorher war beides dunkles Blau, nur in
+        // zwei Abstufungen — das liest sich nicht als Karte, sondern als Fläche
+        // mit Kanten. Der Farbunterschied macht die Küstenlinie zur Grenze,
+        // ohne dass eine Linie sie zeichnen muss.
+        if (art === "background") m.setPaintProperty(id, "background-color", "#0c2444");
         else if (/water|ocean|sea|bathym/i.test(id) && art === "fill")
-          m.setPaintProperty(id, "fill-color", "#070c1c");
+          m.setPaintProperty(id, "fill-color", "#0e2c55");
         else if (/land|earth|park|wood|forest|grass|sand/i.test(id) && art === "fill")
-          m.setPaintProperty(id, "fill-color", "#1e2a52");
+          m.setPaintProperty(id, "fill-color", "#1b2138");
         else if (/building/i.test(id) && art === "fill")
-          m.setPaintProperty(id, "fill-color", "#243055");
+          m.setPaintProperty(id, "fill-color", "#252c47");
         else if (/boundary|admin|border/i.test(id) && art === "line") {
           // Landesgrenzen sind die wichtigste Orientierung auf dieser Karte —
           // sie duerfen kraeftiger sein als alles andere im Hintergrund.
@@ -1415,7 +1431,7 @@
           m.setPaintProperty(id, "line-color", "rgba(110,130,195,.5)");
           m.setPaintProperty(id, "line-opacity", 0.35);
         } else if (art === "symbol") {
-          m.setPaintProperty(id, "text-color", "rgba(205,216,245,.92)");
+          m.setPaintProperty(id, "text-color", "rgba(186,199,232,.78)");
           m.setPaintProperty(id, "text-halo-color", "rgba(6,10,22,.95)");
           m.setPaintProperty(id, "text-halo-width", 1.4);
         }

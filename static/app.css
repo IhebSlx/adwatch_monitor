@@ -1848,8 +1848,13 @@ tr.konv-unter .konv-bar i { background: linear-gradient(90deg, var(--danger), va
    Aufgehellt wird nur die KACHELEBENE — die Pins liegen in einer anderen
    Leaflet-Ebene und behalten ihre Farbe. Beschriftung und Grenzen bekommen
    mehr als die Fläche: die Fläche darf ruhig bleiben, die Orientierung nicht. */
-.karte-flaeche { filter: brightness(1.75) contrast(1.08) saturate(.7); }
-.karte-schrift { filter: brightness(1.9) contrast(1.3); }
+/* sepia() bringt ueberhaupt erst Saettigung in ein Graustufenbild, danach
+   dreht hue-rotate() sie ins Blaue. Ohne den Umweg bliebe die Karte grau:
+   aus Grau laesst sich mit saturate() keine Farbe holen, die nicht da ist. */
+.karte-flaeche {
+  filter: brightness(1.55) sepia(.3) hue-rotate(178deg) saturate(1.35) contrast(1.05);
+}
+.karte-schrift { filter: brightness(1.5) contrast(1.15) opacity(.85); }
 /* In der hellen Haut ist die dunkle Grundkarte fehl am Platz — dort bleibt sie
    unangetastet, damit „Hell" wirklich hell ist. */
 [data-theme="hell"] .karte-flaeche { filter: invert(1) brightness(1.05) contrast(.95); }
