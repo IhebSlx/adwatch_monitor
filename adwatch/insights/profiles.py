@@ -52,11 +52,11 @@ MIN_SUPPORT = 25          # Träger je Ausprägung, sonst Anekdote
 # Rangfolge für belastbarer hält, als sie ist.
 QUALITY = {
     "kalt":       {"auc": 0.629, "geo_holdout": 0.588, "top_decile_lift": 1.61,
-                   "verdict": "schwach — Vorsortierung, keine Rangliste"},
+                   "verdict": "schwach — taugt zur Branchenwahl, nicht zur Reihenfolge"},
     "funnel":     {"auc": 0.753, "top_decile_lift": 3.83,
-                   "verdict": "stark — direkt abtelefonierbar"},
+                   "verdict": "stark — von oben nach unten abtelefonierbar"},
     "bestand":    {"auc": 0.797, "top_decile_lift": 1.92,
-                   "verdict": "stark — unterstes Fünftel ist die Abbruchgefahr"},
+                   "verdict": "stark — die untersten 20 % brechen am ehesten ab"},
 }
 
 

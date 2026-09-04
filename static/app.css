@@ -1859,3 +1859,13 @@ tr.konv-unter .konv-bar i { background: linear-gradient(90deg, var(--danger), va
    unangetastet, damit „Hell" wirklich hell ist. */
 [data-theme="hell"] .karte-flaeche { filter: invert(1) brightness(1.05) contrast(.95); }
 [data-theme="hell"] .karte-schrift { filter: invert(1) brightness(.9); }
+
+/* Klartext neben dem Balken: „besser" statt „das Intervall enthält die
+   Grundlinie nicht mehr". Der Balken bleibt für die, die es genau wissen
+   wollen — das Wort ist für die Entscheidung. */
+.konv-bar-zelle { display: flex; align-items: center; gap: 10px; }
+.konv-urteil { font-size: 11px; white-space: nowrap; min-width: 92px; }
+.u-ueber  { color: var(--ok); font-weight: 600; }
+.u-unter  { color: var(--danger); font-weight: 600; }
+.u-gleich { color: var(--muted); }
+.u-dünn   { color: var(--muted-soft); font-style: italic; }

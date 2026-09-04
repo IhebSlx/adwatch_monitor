@@ -1141,8 +1141,12 @@
     $("#profileQuality").innerHTML = qualityBadge("AUC", d.quality.auc, d.quality.verdict);
     $("#profileBody").innerHTML = `
       <div class="icp-plain" style="border-left-color:#8a5220">
-        <b>Vorsortierung, keine Rangliste.</b> ${esc(d.hinweis)} Ein Fensterbauer ist ein besserer
-        Erstkontakt als ein Baustoffhändler — aber Rang 3 ist nicht besser als Rang 30.
+        <b>Diese Liste sagt dir die BRANCHE, nicht die Firma.</b>
+        Über diese Firmen ist nichts bekannt — wir haben nie mit ihnen gesprochen.
+        Das Einzige, was hier gemessen wurde, ist: aus welchen Gewerken kommen
+        überhaupt Anfragen. <b>Such dir also die Branche aus, nicht die Zeile.</b>
+        Wen du innerhalb einer Branche zuerst anrufst, ist egal — die Reihenfolge
+        darin ist geraten.
       </div>
       <p class="hint">Grundgesamtheit ${d.n.toLocaleString("de-DE")} Händler ohne bisheriges
         Angebot (${d.country}), Basisrate ${pct(d.base_rate)}. Gemessene
@@ -2142,6 +2146,16 @@
   // Konfidenzintervall als Balken, nicht als Klammerzahl: 37,5 % auf 120
   // Faellen und 21,6 % auf 13.453 sehen als Zahl gleich sicher aus und sind es
   // nicht. Ein Balken, der doppelt so breit ist, sagt das ohne einen Satz.
+  // Der Balken sagt es genau, dieses Wort sagt es sofort. Beides steht da,
+  // weil "das Intervall enthaelt die Grundlinie nicht mehr" zwar praezise ist,
+  // aber niemand so denkt, wenn er entscheidet, wen er anruft.
+  function urteilWort(z) {
+    if (!z.belastbar) return `<span class="u-dünn">zu wenige Fälle</span>`;
+    if (z.ueber_basis) return `<span class="u-ueber">besser</span>`;
+    if (z.unter_basis) return `<span class="u-unter">schlechter</span>`;
+    return `<span class="u-gleich">kein Unterschied</span>`;
+  }
+
   let konvGeladen = false;
 
   async function ladeKonversion() {
@@ -2200,7 +2214,7 @@
           <th>${esc(d.titel)}</th>
           <th class="num" title="Nur entschiedene Chancen — offene sind noch nichts">Entschieden</th>
           <th class="num">Gewinnrate</th>
-          <th data-nosort title="Der Balken ist das 95-%-Intervall. Breit heißt: wenig Fälle.">Sicherheit</th>
+          <th data-nosort title="Der Balken zeigt, wie sicher die Zahl ist; der Strich ist der Gesamtschnitt. Liegt der Balken ganz rechts davon, ist die Gruppe wirklich besser.">Besser als der Schnitt?</th>
           <th class="num" title="Fakturiert je angeboten — Untergrenze, siehe Hinweis">Euro-Quote</th>
           <th class="num">Angeboten</th>
           <th class="num" title="Anteil der Chancen mit SAP-Beleglink">Belege</th>
@@ -2212,10 +2226,11 @@
             <td class="num">${deN(z.entschieden)}</td>
             <td class="num"><b>${pct(z.gewinnrate)}</b></td>
             <td class="konv-bar-zelle">
-              <span class="konv-bar" title="95-%-Intervall: ${pct(z.gewinnrate_lo)} bis ${pct(z.gewinnrate_hi)}">
+              <span class="konv-bar" title="Zwischen ${pct(z.gewinnrate_lo)} und ${pct(z.gewinnrate_hi)} — je breiter, desto weniger Fälle stehen dahinter. Der Strich ist der Gesamtschnitt ${pct(d.basis_gewinnrate)}.">
                 <i style="left:${x(z.gewinnrate_lo)};width:${x((z.gewinnrate_hi || 0) - (z.gewinnrate_lo || 0))}"></i>
                 <u style="left:${x(d.basis_gewinnrate)}"></u>
-              </span></td>
+              </span>
+              <span class="konv-urteil">${urteilWort(z)}</span></td>
             <td class="num">${pct(z.euro_quote)}</td>
             <td class="num" title="${eur(z.angeboten)}">${eurShort(z.angeboten)}</td>
             <td class="num">${pct(z.beleg_deckung)}</td>
