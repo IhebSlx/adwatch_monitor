@@ -278,6 +278,45 @@ class Company(Base):
     # Every row that existed before the bulk import stays monitored=True.
     monitored: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Diese Zeile ist dieselbe Firma wie `duplicate_of` — NICHT gelöscht, nur
+    # als Dublette markiert.
+    #
+    # Warum markieren statt löschen: die Dubletten stehen im DYNAMICS, nicht im
+    # Import. Alle 26 gefundenen Architekten-Dubletten tragen eine eigene
+    # CRM-GUID, mehrere hängen an eigenen E-Mails, Leads und Verkaufschancen,
+    # und `quadrat+` führt sogar ZWEI verschiedene SAP-Debitorennummern
+    # (0005006887 und 0005085252). Ein lokales DELETE würde deshalb dreierlei
+    # anrichten: es kappt die Verbindung zwischen einer echten CRM-GUID und
+    # allem, was daran hängt (Verkaufschancen zeigen auf `crm_id`, nicht auf
+    # `id`), es wirft eine echte Debitorennummer weg — und es hält keine
+    # Stunde, weil der nächste CRM-Abgleich beide Konten wieder einliest.
+    #
+    # Markieren löst dasselbe Problem und überlebt den Abgleich: Listen und
+    # Zählungen blenden markierte Zeilen aus, die Verknüpfungen bleiben heil,
+    # und die Markierung lässt sich jederzeit widerrufen. Der eigentliche Fix
+    # liegt im CRM (Konten dort zusammenführen) und ist nichts, was diese App
+    # tun darf — sie liest nur.
+    duplicate_of: Mapped[int | None] = mapped_column(
+        ForeignKey("companies.id"), nullable=True, index=True)
+
+    # --- Wo ist dieses Büro tätig? (enrich/laender.py) ---------------------
+    # `active_countries`: ["ES", "DE"] — nur die Stufe „sicher". Filterbar.
+    # `active_countries_all`: {"ES": "sicher", "IT": "moeglich"} — die volle
+    #   Auskunft, damit eine Filterung auf „möglich" später ohne neuen Crawl geht.
+    # `active_countries_evidence`: {"ES": ["Vorwahl +34", "Marbella"]} — woran
+    #   es erkannt wurde. Ohne Beleg wäre die Spalte eine Behauptung; mit Beleg
+    #   ist jede Zeile ohne erneutes Crawlen nachprüfbar.
+    active_countries: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    active_countries_all: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    active_countries_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    active_countries_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Wie weit sind wir mit diesem Büro schon gekommen? 0-5, siehe
+    # insights/beziehung.py. Kein Modell, nur eine Auswertung dessen, was das
+    # CRM ohnehin weiß — deshalb kostenlos und jederzeit neu berechenbar.
+    relation_level: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    relation_why: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     page_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     page_name: Mapped[str | None] = mapped_column(String(300), nullable=True)   # matched Facebook page name
     page_url: Mapped[str | None] = mapped_column(String(400), nullable=True)

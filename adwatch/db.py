@@ -237,6 +237,19 @@ def _migrate(engine) -> None:
                 ("health", "VARCHAR(16)"), ("winback_score", "FLOAT"),
                 ("crm_synced_at", "DATETIME"),
                 ("monitored", "BOOLEAN DEFAULT 1"),
+                # Dublettenmarkierung statt Löschung — die Begründung steht bei
+                # models.Company.duplicate_of. Kurz: die Dubletten stehen im
+                # Dynamics, nicht im Import, und ein DELETE hielte bis zum
+                # nächsten Abgleich.
+                ("duplicate_of", "INTEGER"),
+                # Länder-Tätigkeit aus der Website (enrich/laender.py) und die
+                # Beziehungsstufe aus dem CRM (insights/beziehung.py).
+                ("active_countries", "JSON"),
+                ("active_countries_all", "JSON"),
+                ("active_countries_evidence", "JSON"),
+                ("active_countries_at", "DATETIME"),
+                ("relation_level", "INTEGER"),
+                ("relation_why", "VARCHAR(200)"),
             ]:
                 if name not in cols:
                     conn.execute(text(f"ALTER TABLE companies ADD COLUMN {name} {ddl}"))

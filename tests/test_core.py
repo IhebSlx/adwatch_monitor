@@ -5241,3 +5241,109 @@ def test_sse_wird_nie_komprimiert():
         m({"type": "http", "path": "/api/fetch/stream/abc",
            "client": ("10.0.0.5", 1234)}, None, None))
     assert gesehen == ["roh"], "SSE muss unkomprimiert durchgereicht werden"
+
+
+# ---------------------------------------------------------------------------
+# Laendererkennung aus Website-Text (enrich/laender.py)
+# ---------------------------------------------------------------------------
+def test_laender_erkennt_vorwahl_ortsname_und_landesnamen(temp_db, monkeypatch):
+    """Die drei tragenden Signale, an einem Text mit bekannter Antwort."""
+    from adwatch.enrich import laender
+
+    # Ortsindex fest verdrahten, damit der Test nicht an plz_geo haengt
+    monkeypatch.setattr(laender, "_ORT_INDEX", {
+        "marbella": {"ES": 7}, "malaga": {"ES": 26}, "hamburg": {"DE": 42},
+        "porto": {"PT": 4302, "ES": 1},          # mehrdeutig, PT klar groesser
+        "bauen": {"CH": 1},                      # Ein-PLZ-Falle
+    })
+
+    r = laender.laender_aus_text(
+        "Buero in Hamburg. Telefon +49 40 123456. Projekte in Marbella und Malaga.",
+        heimat="DE", tld="de")
+    assert r["laender"]["DE"]["sicherheit"] == "sicher"
+    assert r["laender"]["ES"]["sicherheit"] == "sicher", "zwei Staedte muessen reichen"
+    assert "marbella" in r["laender"]["ES"]["belege"]
+
+
+def test_laender_ein_plz_ort_traegt_kein_land(temp_db, monkeypatch):
+    """`bauen` ist ein Dorf in Uri UND ein deutsches Verb. Gemessen am echten
+    Crawl war das der haeufigste Fehlalarm -- er darf die Schweiz nicht auf
+    'moeglich' heben."""
+    from adwatch.enrich import laender
+
+    monkeypatch.setattr(laender, "_ORT_INDEX", {
+        "bauen": {"CH": 1}, "hamburg": {"DE": 42},
+    })
+    r = laender.laender_aus_text(
+        "Wir planen und Bauen in Hamburg.", heimat="DE", tld="de")
+    assert r["laender"].get("CH", {}).get("sicherheit") != "sicher"
+    assert r["laender"].get("CH", {}).get("sicherheit") != "moeglich"
+
+
+def test_laender_kleingeschriebenes_wort_ist_kein_ort(temp_db, monkeypatch):
+    """'un proyecto real' ist kein Ort in Portugal. Grossschreibung ist der
+    Filter, der das trennt."""
+    from adwatch.enrich import laender
+
+    monkeypatch.setattr(laender, "_ORT_INDEX", {"malaga": {"ES": 26}})
+    r = laender.laender_aus_text(
+        "Un proyecto real en el campo. Estudio en Malaga. +34 952 000 000.",
+        heimat="ES", tld="es")
+    assert set(k for k, v in r["laender"].items()
+               if v["sicherheit"] == "sicher") == {"ES"}
+
+
+def test_laender_mehrdeutiger_ort_wird_nie_geraten(temp_db, monkeypatch):
+    """Bleibt ein Ortsname mehrdeutig, wird BEIDES vermerkt statt eines
+    stillen Muenzwurfs -- der Fehler, der schon ein daenisches Projekt nach
+    Oesterreich gepinnt hat."""
+    from adwatch.enrich import laender
+
+    # gleich gross in beiden Laendern -> kein Stichentscheid moeglich
+    monkeypatch.setattr(laender, "_ORT_INDEX", {"zwillingsort": {"SE": 9, "NO": 9}})
+    r = laender.laender_aus_text("Projekt in Zwillingsort.", heimat=None, tld=None)
+    assert r["unsicher"], "der Fall muss als unsicher herauskommen"
+    assert "SE" not in {k for k, v in r["laender"].items() if v["sicherheit"] == "sicher"}
+
+
+def test_laender_exonyme_ueberleben_die_faltung():
+    """'Ibiza' steht in plz_geo als 'Eivissa', 'Munich' als 'Muenchen'. Die
+    Bruecke dafuer ist die Exonym-Tabelle -- und jeder ihrer Schluessel muss
+    in derselben Form stehen, die _falten() erzeugt, sonst greift er nie."""
+    from adwatch.enrich import laender
+
+    schlecht = [k for k in laender._EXONYME if laender._falten(k) != k]
+    assert not schlecht, f"Exonyme in falscher Schreibung: {schlecht}"
+    assert laender._EXONYME["ibiza"] == "ES"
+
+
+def test_beziehungsstufe_gewonnenes_objekt_schlaegt_lead(temp_db, monkeypatch):
+    """Architekten kaufen nichts -- die Beziehung steht verteilt im CRM. Die
+    hoechste erreichte Stufe zaehlt, und eine gewonnene Verkaufschance schlaegt
+    alles darunter."""
+    from sqlalchemy import select
+
+    from adwatch.insights import beziehung
+    from adwatch.models import Company, CrmLead, CrmOpportunity
+
+    monkeypatch.setattr(beziehung, "SessionLocal", temp_db.SessionLocal)
+    s = temp_db.SessionLocal()
+    a = Company(name="Gewinner", segment="Architekten", crm_id="guid-a")
+    b = Company(name="Nur Lead", segment="Architekten", crm_id="guid-b")
+    c = Company(name="Unbekannt", segment="Architekten", crm_id="guid-c")
+    s.add_all([a, b, c]); s.commit()
+    s.add_all([
+        CrmOpportunity(crm_id="vc1", architect_crm_id="guid-a", state="gewonnen"),
+        CrmLead(lead_id="l1", company_id=a.id),      # auch Lead -- darf nicht gewinnen
+        CrmLead(lead_id="l2", company_id=b.id),
+    ])
+    s.commit(); s.close()
+
+    r = beziehung.berechnen(nur_architekten=True, apply=True)
+    s = temp_db.SessionLocal()
+    stufen = {c.name: c.relation_level for c in s.scalars(select(Company))}
+    s.close()
+    assert stufen["Gewinner"] == 5, "gewonnene VC ist die hoechste Stufe"
+    assert stufen["Nur Lead"] == 1
+    assert stufen["Unbekannt"] == 0
+    assert r["warm"] == 1

@@ -289,11 +289,198 @@ def close_searched_not_found(apply: bool = False) -> dict:
     return {"rows": len(hit), "examples": hit[:5]}
 
 
+# Rechtsformen und Berufsbezeichnungen tragen keine Identität: „Querkopf
+# Architekten" und „Querkopf Architekten GmbH" sind ein Büro. Bei Architekten
+# kommt zur Rechtsform die Berufsbezeichnung dazu — „Geri Blasisker" und „Geri
+# Blasisker Architektur" ebenso, „DI Kurt Loichtl Architekt" und „Architekt DI
+# Kurt Loichtl" auch (dort hilft zusätzlich, dass die Reihenfolge egal ist).
+_ARCH_FUELLWOERTER = {
+    "gmbh", "ag", "se", "kg", "mbh", "co", "ohg", "gbr", "partg", "mbb", "ug",
+    "ek", "bda", "bdla", "din", "di", "dipl", "ing", "arch",
+    "ab", "aps", "as", "bv", "nv", "ltd", "plc", "sa", "sl", "slp", "srl",
+    "spa", "sc", "scp", "oy", "lda", "sarl", "sau", "slu",
+    "architekt", "architekten", "architektur", "architekturbuero",
+    "architects", "architecten", "architectuur", "arquitectes", "arquitectos",
+    "arquitectura", "arkitekter", "arkitektkontor", "arkitekt", "architecture",
+    "architetti", "planungsbuero", "buero",
+}
+
+
+def _arch_schluessel(name: str) -> str:
+    """Name auf seinen Kern reduziert, Reihenfolge egal.
+
+    Sortiert die Tokens, weil „DI Kurt Loichtl Architekt" und „Architekt DI Kurt
+    Loichtl" dasselbe Büro sind. Umlaute werden gefaltet, damit „Büro" und
+    „Buero" zusammenfallen.
+    """
+    n = (name or "").lower()
+    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss"),
+                 ("å", "a"), ("ø", "oe"), ("æ", "ae"), ("é", "e"), ("è", "e")):
+        n = n.replace(a, b)
+    tokens = [t for t in re.split(r"[^a-z0-9]+", n) if t]
+    kern = sorted(t for t in tokens if t not in _ARCH_FUELLWOERTER)
+    return " ".join(kern)
+
+
+def mark_architect_duplicates(apply: bool = False) -> dict:
+    """Architekturbüros, die WIRKLICH doppelt stehen — markiert, nie gelöscht.
+
+    Abgrenzung zu `find_domain_duplicates`: dort teilen sich 409 Domains 929
+    Architekten-Zeilen, aber fast alle sind eigene STANDORTE eines Büros. Drees
+    & Sommer hat acht, pbr vier — mit vier verschiedenen SAP-Nummern. Die zu
+    verschmelzen wäre falsch.
+
+    Als Dublette gilt hier nur, was in ALLEN drei Merkmalen übereinstimmt:
+    Domain, Ort und der auf seinen Kern reduzierte Name. Das trifft 13 Gruppen
+    mit 26 Zeilen — durchweg Interpunktions- und Rechtsformvarianten
+    („A. M. Arquitectes S.C." / „A.M.  Arquitectes S.C.").
+
+    WARUM MARKIEREN UND NICHT LÖSCHEN. Alle 26 Zeilen tragen eine eigene
+    CRM-GUID; die Dubletten stehen also im Dynamics, nicht im Import. Löschen
+    hieße: die Verbindung zwischen einer echten GUID und ihren
+    Verkaufschancen kappen (die zeigen auf `crm_id`, nicht auf `id`), bei
+    `quadrat+` eine von zwei echten SAP-Debitorennummern wegwerfen — und beim
+    nächsten CRM-Abgleich stünde alles wieder da. Die Markierung überlebt den
+    Abgleich, weil diese Funktion idempotent ist und einfach erneut läuft.
+
+    Welche Zeile überlebt, entscheidet die Substanz, nicht das Alter: SAP-Nummer
+    vor Belegen vor Verkaufschancen vor E-Mails vor Anreicherung, zuletzt die
+    kleinere id. Die andere zeigt per `duplicate_of` auf sie.
+    """
+    from .models import CrmEmail, CrmLead, CrmOpportunity
+    from sqlalchemy import func, or_
+
+    gruppen: dict[tuple, list] = defaultdict(list)
+    out: list[dict] = []
+    with SessionLocal() as s:
+        arch = s.scalars(
+            select(Company).where(Company.segment == "Architekten",
+                                  Company.website_domain.is_not(None),
+                                  Company.website_domain != "")).all()
+        for c in arch:
+            d = (c.website_domain or "").lower().strip()
+            if "." not in d:            # 'http', 'https', Tippfehler — keine Domain
+                continue
+            gruppen[(d, (c.city or "").strip().lower(),
+                     _arch_schluessel(c.name))].append(c)
+
+        def substanz(c: Company) -> tuple:
+            guid = c.crm_id or ""
+            vc = s.scalar(select(func.count(CrmOpportunity.id)).where(or_(
+                CrmOpportunity.parent_account_crm_id == guid,
+                CrmOpportunity.architect_crm_id == guid,
+                CrmOpportunity.end_customer_crm_id == guid))) if guid else 0
+            mail = s.scalar(select(func.count(CrmEmail.id))
+                            .where(CrmEmail.company_id == c.id))
+            lead = s.scalar(select(func.count(CrmLead.id))
+                            .where(CrmLead.company_id == c.id))
+            return (1 if (c.sap_number or "").strip() else 0,
+                    c.beleg_count or 0, vc, mail, lead, -c.id)
+
+        markiert = 0
+        for (dom, ort, kern), rows in sorted(gruppen.items()):
+            if len(rows) < 2:
+                continue
+            rows = sorted(rows, key=substanz, reverse=True)
+            sieger, verlierer = rows[0], rows[1:]
+            out.append({"domain": dom, "city": ort, "key": kern,
+                        "keep": {"id": sieger.id, "name": sieger.name,
+                                 "sap": sieger.sap_number},
+                        "mark": [{"id": r.id, "name": r.name,
+                                  "sap": r.sap_number} for r in verlierer]})
+            for r in verlierer:
+                if r.duplicate_of == sieger.id:
+                    continue            # schon markiert — idempotent
+                markiert += 1
+                if apply:
+                    r.duplicate_of = sieger.id
+            # Ein Sieger darf nie selbst als Dublette dastehen (etwa weil ein
+            # früherer Lauf anders entschieden hat).
+            if sieger.duplicate_of is not None and apply:
+                sieger.duplicate_of = None
+        if apply:
+            s.commit()
+
+    return {"groups": len(out), "rows_marked": markiert,
+            "applied": apply, "groups_detail": out}
+
+
+# Ein Komma statt eines Punktes ist ein Tippfehler, kein Rätsel:
+# `www,vanwijnen.nl` ist eindeutig `vanwijnen.nl`. Diese Fälle werden REPARIERT.
+# `http`, `quara`, `ght-plan.` sind dagegen nicht rekonstruierbar — dort wäre
+# jede Reparatur geraten, und geraten bleibt für immer falsch.
+_TLD_FORM = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$")
+
+
+def _domain_reparieren(roh: str) -> str | None:
+    """Aus einem kaputten Wert eine Domain machen — oder None, wenn es Raten wäre."""
+    d = (roh or "").strip().lower()
+    for praefix in ("http://", "https://"):
+        if d.startswith(praefix):
+            d = d[len(praefix):]
+    d = d.replace(",", ".").replace("@", ".")   # Tippfehler auf der Punkt-Taste
+    d = re.sub(r"\.{2,}", ".", d).strip(". ")
+    if d.startswith("www."):
+        d = d[4:]
+    return d if _TLD_FORM.match(d) else None
+
+
+def clear_broken_domains(apply: bool = False) -> dict:
+    """Domain-Werte, die keine Domain sind: reparieren, wo es eindeutig ist,
+    sonst leeren — damit die Suche neu greifen kann.
+
+    Gemessen 2026-09-07: 105 Zeilen tragen Unsinn. 32× wörtlich `http`, 15×
+    `http.`, dazu `https`, `httpp`, `quara`, `pertiller`, `ght-plan.`. Das sind
+    kaputte Parses, keine Adressen: sie gruppieren fremde Firmen zu
+    Scheindubletten (allein `http` zog 32 Firmen in eine Gruppe) und verhindern,
+    dass der website_finder je wieder nach der echten Adresse sucht.
+
+    Ein Teil davon ist aber gar kein Müll, sondern ein Tippfehler auf der
+    Punkt-Taste: `www,vanwijnen.nl`, `kaminiarz-cie,de`, `cetus,.at`,
+    `amgrailing@com`. Die werden repariert — dort ist die richtige Adresse
+    eindeutig ablesbar, und sie wegzuwerfen hieße, eine bekannte Website erst zu
+    verlieren und dann neu suchen zu müssen.
+
+    Der Rest wird geleert: ein leeres Feld ist ehrlich und wird wieder gefüllt,
+    ein geratenes bleibt für immer falsch.
+    """
+    repariert, geleert = [], []
+    with SessionLocal() as s:
+        for c in s.scalars(select(Company).where(Company.website_domain.is_not(None),
+                                                 Company.website_domain != "")):
+            roh = (c.website_domain or "").strip()
+            d = roh.lower()
+            kaputt = ("." not in d
+                      or d.rstrip(".") in ("http", "https", "www")
+                      or d.endswith(".")
+                      or "," in d or "@" in d
+                      or d.startswith("."))
+            if not kaputt:
+                continue
+            heil = _domain_reparieren(roh)
+            if heil:
+                repariert.append({"id": c.id, "was": roh, "wird": heil})
+                if apply:
+                    c.website_domain = heil
+            else:
+                geleert.append({"id": c.id, "was": roh})
+                if apply:
+                    c.website_domain = None
+        if apply:
+            s.commit()
+    return {"rows": len(repariert) + len(geleert),
+            "repaired": len(repariert), "cleared": len(geleert),
+            "applied": apply,
+            "examples_repaired": repariert[:10], "examples_cleared": geleert[:10]}
+
+
 def audit() -> dict:
     """Everything, reported, nothing changed."""
     return {"unbacked_enrichment": clear_unbacked_enrichment(apply=False),
             "website_domains": normalise_website_domains(apply=False),
             "domain_duplicates": find_domain_duplicates(),
+            "architect_duplicates": mark_architect_duplicates(apply=False),
+            "broken_domains": clear_broken_domains(apply=False),
             "product_subfamilies": fold_product_subfamilies(apply=False),
             "searched_not_found": close_searched_not_found(apply=False),
             "out_of_scope_scores": clear_out_of_scope_scores(apply=False)}
@@ -308,6 +495,12 @@ def repair() -> dict:
     same pass rather than a run later."""
     return {"searched_not_found": close_searched_not_found(apply=True),
             "unbacked_enrichment": clear_unbacked_enrichment(apply=True),
+            # ZUERST die kaputten Domains leeren, dann Dubletten suchen: sonst
+            # zieht der Wert `http` 26 fremde Büros in eine Scheingruppe.
+            "broken_domains": clear_broken_domains(apply=True),
             "website_domains": normalise_website_domains(apply=True),
+            # Markiert, löscht nicht — siehe die Begründung an der Funktion.
+            # Idempotent, damit ein CRM-Abgleich die Markierung nicht aushebelt.
+            "architect_duplicates": mark_architect_duplicates(apply=True),
             "product_subfamilies": fold_product_subfamilies(apply=True),
             "out_of_scope_scores": clear_out_of_scope_scores(apply=True)}
