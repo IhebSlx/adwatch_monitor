@@ -558,6 +558,9 @@ def _to_dict(c: Company) -> dict:
         "active_countries": c.active_countries or [],
         "active_countries_all": c.active_countries_all or {},
         "active_countries_evidence": c.active_countries_evidence or {},
+        # Wann geprüft — unterscheidet „noch nicht angesehen" von „angesehen,
+        # nichts gefunden". Ohne das Feld sähen beide gleich leer aus.
+        "active_countries_at": c.active_countries_at.isoformat() if c.active_countries_at else None,
         "relation_level": c.relation_level, "relation_why": c.relation_why,
         # Angebote
         "quote_count": c.quote_count, "quote_sum": c.quote_sum,

@@ -4720,6 +4720,28 @@
     finally { _custLoadingMore = false; }
   }
 
+  // Tätigkeitsländer als Zelle: die sicheren als Chip, die möglichen blasser
+  // dahinter. Der Titel trägt die BELEGE, damit man ohne Umweg sieht, WORAN
+  // ein Land erkannt wurde — eine Spalte, die man nicht nachprüfen kann, wird
+  // entweder blind geglaubt oder ignoriert, und beides ist schlecht.
+  function aktivLandZelle(r) {
+    const sicher = r.active_countries || [];
+    const alle = r.active_countries_all || {};
+    const belege = r.active_countries_evidence || {};
+    const moeglich = Object.keys(alle).filter(l => alle[l] === "moeglich");
+    if (!sicher.length && !moeglich.length) {
+      // Unterscheidet „noch nicht geprüft" von „geprüft, nichts gefunden" —
+      // ein leeres Feld würde beides gleich aussehen lassen.
+      return r.active_countries_at === null
+        ? `<span class="muted" title="Diese Firma wurde noch nicht ausgewertet">–</span>`
+        : `<span class="muted">—</span>`;
+    }
+    const chip = (l, art) =>
+      `<span class="landchip landchip-${art}" title="${esc((belege[l] || []).join(" · ") || "kein Beleg vermerkt")}">${esc(l)}</span>`;
+    return sicher.map(l => chip(l, "sicher")).join("")
+         + moeglich.map(l => chip(l, "moeglich")).join("");
+  }
+
   // which header owns which filter keys — powers the per-column active marker
   const _COL_FILTER_KEYS = {
     name: ["q"], kunde: ["customer_state"], fit: ["fit_min"], anzeigen: ["ad_activity"],
@@ -4782,6 +4804,7 @@
         <td class="col-extra">${esc(r.sub_segment || "")}</td>
         <td class="col-extra">${esc(r.sales_channel || "")}</td>
         <td class="col-extra">${esc(r.country || "")}</td>
+        <td class="col-extra cell-aktivland">${aktivLandZelle(r)}</td>
         <td class="col-extra num">${eur(r.revenue_y1)}</td>
         <td class="col-extra num">${eur(r.revenue_y2)}</td>
         <td class="col-extra num">${eur(r.revenue_y3)}</td>
@@ -4792,7 +4815,7 @@
         <td><button class="btn btn-sm pages-toggle-row" data-id="${r.id}">${open ? "Hide" : "Pages"}</button></td>
       </tr>
       <tr class="pages-row ${open ? "" : "hidden"}" data-pages-for="${r.id}">
-        <td colspan="21"><div class="pages-body-inline" id="pages-${r.id}"></div></td>
+        <td colspan="22"><div class="pages-body-inline" id="pages-${r.id}"></div></td>
       </tr>`;
     }).join("");
     body.innerHTML = html;
