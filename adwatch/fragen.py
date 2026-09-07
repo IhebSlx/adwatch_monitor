@@ -186,7 +186,6 @@ def w_datenbestand() -> str:
                                      "subject", "body_text"]},
             "weitere": ["crm_leads (236k, Vorstufe zur Firma)",
                         "crm_opportunity_products / crm_company_products (Produktzeilen)",
-                        "target_lists / target_list_entries (Arbeitslisten mit Kontrollarm)",
                         "ads / weekly_company_metrics (Anzeigen)",
                         "company_enrichment (Website-Fakten)"],
         },

@@ -1099,7 +1099,6 @@
         Angebot. Oberstes Dezil ${d.quality.top_decile_lift}× der Basisrate
         (${(d.base_rate * 100).toFixed(1)} %). Das Signal ist die Kontaktintensität — ohne das
         Merkmal „hat schon gewonnen" ist die Güte unverändert.</p>
-      ${listButton("funnel", "Trichter")}
       <table class="data-table"><thead><tr><th>Firma</th><th>Ort</th><th>Branche</th>
         <th class="num">VCs</th><th class="num">Wert</th><th data-nosort>Warum</th></tr></thead><tbody>
         ${d.rows.map(r => `<tr data-cid="${r.company_id}" style="cursor:pointer">
@@ -1112,7 +1111,6 @@
              — <b>${liftSatz(Number(w.lift))}</b></div>`).join("")}</td>
         </tr>`).join("")}</tbody></table>`;
     wireProfileRows();
-    wireListButton(d.rows.map(r => ({ company_id: r.company_id, score: r.score })));
   }
 
   function renderBestand(d) {
@@ -1122,7 +1120,6 @@
         <b>riskantesten zuerst</b>. ${esc(d.hinweis)}
         ${d.ausgeblendet ? `<br><span class="muted">${d.ausgeblendet.toLocaleString("de-DE")}
         Kleinstkunden ausgeblendet — unter der Wertgrenze lohnt die Rückholung den Anruf nicht.</span>` : ""}</p>
-      ${listButton("bestand", "Rückholung")}
       <table class="data-table"><thead><tr><th>Firma</th><th>Ort</th>
         <th class="num">Angebote</th><th class="num">Angebotsvolumen</th>
         <th class="num">letztes Angebot</th></tr></thead><tbody>
@@ -1132,7 +1129,6 @@
           <td class="num">vor ${Math.round(r.days_since_last / 30)} Mon.</td>
         </tr>`).join("")}</tbody></table>`;
     wireProfileRows();
-    wireListButton(d.at_risk.map(r => ({ company_id: r.company_id, score: r.score })));
   }
 
   function renderKalt(d) {
@@ -1169,160 +1165,6 @@
     $$("#profileSwitch .prof-btn").forEach(x => x.classList.toggle("active", x === b));
     loadProfile(b.dataset.prof);
   }));
-
-  // ================= LISTEN — abarbeiten mit Kontrollgruppe =================
-  // Die Kontrollgruppe wird ANGEZEIGT und gesperrt, nicht ausgeblendet. Wer sie
-  // nicht sieht, ruft sie irgendwann über einen anderen Weg an — und dann ist
-  // die Wirkung der Liste nicht mehr messbar.
-  let listenLoaded = false, LISTEN_META = { outcomes: {}, channels: {} };
-  function ensureListenLoaded() { if (!listenLoaded) loadListen(); }
-
-  async function loadListen(selectId) {
-    const box = $("#listenBody");
-    let d;
-    try { d = await api("/api/lists"); }
-    catch (e) { box.innerHTML = `<p class="hint status-error">Fehler: ${esc(e.message)}</p>`; return; }
-    listenLoaded = true;
-    LISTEN_META = { outcomes: d.outcomes || {}, channels: d.channels || {} };
-    const sel = $("#listenPicker");
-    if (!d.lists.length) {
-      sel.innerHTML = `<option>— noch keine Liste —</option>`;
-      box.innerHTML = `<p class="hint">Noch keine Arbeitsliste. In <b>ICP-Profil</b> ein Profil
-        öffnen und dort auf <b>„Als Liste anlegen"</b> klicken — dabei wird die Kontrollgruppe gezogen.</p>`;
-      $("#listenWirkung").textContent = "";
-      return;
-    }
-    sel.innerHTML = d.lists.map(l =>
-      `<option value="${l.id}">${esc(l.name)} — ${l.n} Firmen, ${l.entschieden} entschieden</option>`).join("");
-    if (selectId) sel.value = String(selectId);
-    if (!sel.dataset.wired) {
-      sel.addEventListener("change", () => renderListe(Number(sel.value)));
-      $("#listenOffen").addEventListener("change", () => renderListe(Number(sel.value)));
-      sel.dataset.wired = "1";
-    }
-    // Der Export folgt der Auswahl: wer eine Liste offen hat, will meistens
-    // diese Datei, nicht alle drei. Alle bekommt man ueber die Mappe ohne
-    // Parameter — deshalb bleibt der Titel ehrlich beschriftet.
-    const exp = $("#listenExport");
-    if (exp) {
-      const setzeZiel = () => {
-        exp.href = `/api/lists/export?list_id=${sel.value}`;
-        const l = d.lists.find(x => String(x.id) === String(sel.value));
-        exp.title = l ? `„${l.name}" als Excel — Kontrollgruppe markiert und rot hinterlegt`
-                      : "Liste als Excel";
-      };
-      setzeZiel();
-      if (!exp.dataset.wired) { sel.addEventListener("change", setzeZiel); exp.dataset.wired = "1"; }
-    }
-    renderListe(Number(sel.value));
-  }
-
-  async function renderListe(id) {
-    const box = $("#listenBody");
-    box.innerHTML = `<p class="hint">Lädt…</p>`;
-    const openOnly = $("#listenOffen").checked;
-    let d, w;
-    try {
-      [d, w] = await Promise.all([
-        api(`/api/lists/${id}?open_only=${openOnly ? "true" : "false"}`),
-        api(`/api/lists/${id}/wirkung`),
-      ]);
-    } catch (e) { box.innerHTML = `<p class="hint status-error">Fehler: ${esc(e.message)}</p>`; return; }
-
-    const up = w.uplift == null ? "—" : `${(w.uplift * 100).toFixed(1)} Pp.`;
-    $("#listenWirkung").innerHTML =
-      `Ziel ${w.ziel.kaeufer}/${w.ziel.n} · Kontrolle ${w.kontrolle.kaeufer}/${w.kontrolle.n}` +
-      ` · <b>Wirkung ${up}</b>` +
-      (w.aussagekraeftig ? "" : ` <span class="qual-badge qual-schwach">nicht belastbar</span>`);
-
-    const opts = Object.entries(LISTEN_META.outcomes)
-      .map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
-    const chans = Object.entries(LISTEN_META.channels)
-      .map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
-
-    box.innerHTML = `
-      <p class="hint">${esc(w.hinweis)}</p>
-      <table class="data-table"><thead><tr>
-        <th style="width:38px">#</th><th>Firma</th><th>Ort</th><th>Branche</th>
-        <th style="width:96px">Arm</th><th style="width:300px">Ergebnis</th>
-      </tr></thead><tbody>
-      ${d.entries.map(e => e.arm === "kontrolle" ? `
-        <tr class="arm-kontrolle">
-          <td class="muted">${e.rank}</td>
-          <td>${esc(e.name || "—")}</td><td>${esc(e.city || "")}</td>
-          <td class="sub">${esc(e.sub_segment || "")}</td>
-          <td><span class="qual-badge qual-schwach">Kontrolle</span></td>
-          <td class="sub">nicht ansprechen — sie misst, was ohne uns passiert</td>
-        </tr>` : `
-        <tr data-entry="${e.entry_id}" data-cid="${e.company_id}">
-          <td class="muted">${e.rank}</td>
-          <td><b class="listen-open" style="cursor:pointer">${esc(e.name || "—")}</b></td>
-          <td>${esc(e.city || "")}</td>
-          <td class="sub">${esc(e.sub_segment || "")}</td>
-          <td><span class="qual-badge qual-mittel">Ziel</span></td>
-          <td>
-            ${e.outcome
-              ? `<b>${esc(LISTEN_META.outcomes[e.outcome] || e.outcome)}</b>
-                 <span class="sub">${esc(LISTEN_META.channels[e.channel] || e.channel || "")}</span>
-                 <button class="btn btn-sm btn-ghost listen-undo">ändern</button>`
-              : `<select class="listen-outcome" style="width:150px"><option value="">Ergebnis…</option>${opts}</select>
-                 <select class="listen-channel" style="width:104px">${chans}</select>
-                 <button class="btn btn-sm btn-primary listen-save">Speichern</button>`}
-          </td>
-        </tr>`).join("")}
-      </tbody></table>`;
-
-    $$("#listenBody .listen-open").forEach(b => b.addEventListener("click", () =>
-      openCompanyDrawer(Number(b.closest("tr").dataset.cid))));
-    $$("#listenBody .listen-save").forEach(b => b.addEventListener("click", async () => {
-      const tr = b.closest("tr");
-      const outcome = $(".listen-outcome", tr).value;
-      if (!outcome) { toast("Bitte ein Ergebnis wählen.", "error"); return; }
-      b.disabled = true;
-      try {
-        await api(`/api/lists/entries/${tr.dataset.entry}`, "POST",
-                  { outcome, channel: $(".listen-channel", tr).value });
-        toast("✓ Ergebnis gespeichert.");
-        renderListe(id);
-      } catch (e) { toast(`Fehlgeschlagen: ${e.message}`, "error"); b.disabled = false; }
-    }));
-    $$("#listenBody .listen-undo").forEach(b => b.addEventListener("click", async () => {
-      const tr = b.closest("tr");
-      try {
-        await api(`/api/lists/entries/${tr.dataset.entry}`, "POST",
-                  { outcome: null, contacted: false });
-        renderListe(id);
-      } catch (e) { toast(`Fehlgeschlagen: ${e.message}`, "error"); }
-    }));
-  }
-
-  // "Als Liste anlegen" aus einer Profilansicht heraus — hier wird die
-  // Kontrollgruppe gezogen, EINMAL und mit festgehaltenem Startwert.
-  async function createListFrom(kind, rows, label) {
-    if (!rows.length) { toast("Keine Zeilen zum Anlegen.", "error"); return; }
-    const name = prompt("Name der Arbeitsliste:",
-                        `${label} — ${new Date().toLocaleDateString("de-DE")}`);
-    if (!name) return;
-    try {
-      const r = await api("/api/lists", "POST",
-                          { name, source: kind, rows, holdout_share: 0.15 });
-      toast(`✓ Liste angelegt: ${r.n_ziel} Ziel, ${r.n_kontrolle} Kontrolle.`);
-      listenLoaded = false;
-      gotoTab("listen");
-      loadListen(r.id);
-    } catch (e) { toast(`Fehlgeschlagen: ${e.message}`, "error"); }
-  }
-
-  function listButton(kind, label) {
-    return `<button class="btn btn-sm btn-primary" id="mkList" data-kind="${kind}"
-      data-label="${esc(label)}" title="Legt die Liste an und zieht dabei eine Kontrollgruppe (15 %)"
-      style="margin-bottom:10px">＋ Als Liste anlegen</button>`;
-  }
-
-  function wireListButton(rows) {
-    const b = $("#mkList");
-    if (b) b.addEventListener("click", () => createListFrom(b.dataset.kind, rows, b.dataset.label));
-  }
 
   // ================= KARTE ===============================================
   // EINE Maschine, zwei Instanzen. Firmen und Objekte unterscheiden sich in
@@ -2940,7 +2782,6 @@
       if (name === "explore") { applyExplore(); return; }
       if (name === "dashboard") loadHeute();   // Karten beim Rückwechsel auffrischen
       if (name === "pipeline") ensurePipelineLoaded();
-      if (name === "listen") ensureListenLoaded();
       if (name === "chancen") ensureChancenLoaded();
       if (name === "pruefen") ensurePruefenLoaded();
       if (name === "konversion") ensureKonversionLoaded();

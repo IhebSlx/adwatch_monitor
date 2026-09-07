@@ -29,7 +29,49 @@ path does not exist.
 
 ---
 
+## 0a. Entscheidung 2026-09-07: die Arbeitslisten sind entfernt
+
+Iheb hat das Listen-Feature gestrichen. Sein Grund, wörtlich: *„I am in business
+development not in marketing"* — die Listen verlangten, dass jemand Firmen
+anspricht und das Ergebnis eintippt, und dafür ist er nicht zuständig. Nachdem
+ich bestätigt hatte, dass es genau das verlangt, hat er auf Nachfrage die
+vollständige Entfernung gewählt, Daten eingeschlossen.
+
+Entfernt: `adwatch/outcomes.py`, der Listen-Tab, die sechs `/api/lists`-Routen,
+die Knöpfe „Als Liste anlegen" in den Profilen, die Modelle `TargetList` /
+`TargetListEntry` und die beiden Tabellen samt 3 Listen, 366 Zeilen und 73
+Kontrollgruppen-Zuweisungen vom 18.08.2026. (Die Zeilen liegen noch in den 7
+rotierenden Backups, bis diese durchgelaufen sind.)
+
+**Was das kostet, damit es später niemand für ein Versehen hält.** AdWatch kann
+ab jetzt sagen, wo man ansetzen sollte, aber nicht mehr, ob es gestimmt hat.
+Konkret fällt damit:
+
+* **§1 und §2 dieses Dokuments** — es gibt keine Ergebnisse mehr, die man ins
+  CRM zurückschreiben könnte, und keine „einzige Kopie", die zu sichern wäre.
+  Beide Abschnitte stehen weiter unten nur noch als Protokoll.
+* **#16** („beweisen, dass entdeckte Leads konvertieren") — nicht mehr baubar.
+* **#12** (Zwillingssuche) hing an #16. Sie lässt sich weiter bauen, aber ohne
+  jede Möglichkeit zu prüfen, ob die gefundenen Firmen je etwas kaufen.
+
+Der Weg zurück, falls die Frage doch aufkommt: eine Kontrollgruppe lässt sich
+nicht rückwirkend ziehen. Eine zweite Ziehung ist eine andere Gruppe. Was
+gemessen werden soll, muss vor der Ansprache markiert werden — sonst gar nicht.
+
+Eine Alternative wurde geprüft und verworfen: die Ergebnisse aus dem CRM
+selbst ablesen (taucht eine entdeckte Firma später als Lead oder Konto auf, ist
+das die Antwort). Alle 304 entdeckten Firmen tragen eine Domain, aber nur 11 %
+der 236.710 Leads führen eine Website, und exakter Namensabgleich findet heute
+genau **einen** Treffer. Zu dünn, um darauf ein Feature zu stützen.
+
+---
+
 ## 1. The feedback loop — write outcomes back into Dynamics
+
+> **Hinfällig seit 2026-09-07 (§0a).** Es gibt keine Ergebnisse mehr, die
+> zurückgeschrieben werden könnten. Der Abschnitt bleibt als Protokoll stehen,
+> weil er die Regeln festhält, die für JEDEN künftigen Dataverse-Schreibzugriff
+> gelten sollen.
 
 **What we want:** the loop closes inside CRM. Sales works a list in AdWatch,
 records the result, and that result becomes visible in Dynamics where the rest of
@@ -105,11 +147,16 @@ permission at all. Not built yet; flagged here as a decision, not a plan.
 
 | # | Item | Gated on |
 |---|---|---|
-| 16 | **Prove discovered leads convert** — 293 in lists, **1 contacted** since 18.08. | sales working the lists |
 | 10 | Ads-vs-enrichment consistency check — the second identity scrutiny | Apify credits |
-| 12 | Twin search prototype — lookalike leads from the internet | #16 reading out first |
-| 1 | Dataverse write-back (this document, §1) | write permissions |
+| 12 | Twin search prototype — lookalike leads from the internet | nothing mehr — siehe §0a |
 | 7 | Split `app.js` into ES modules | nothing — housekeeping |
+| ~~16~~ | ~~Prove discovered leads convert~~ | **gestrichen 2026-09-07 (§0a)** |
+| ~~1~~ | ~~Dataverse write-back~~ | **hinfällig 2026-09-07 (§0a)** |
+
+**#12 ist damit nicht mehr gesperrt, aber auch nicht mehr überprüfbar.** Die
+Reihenfolge stand ursprünglich mit Absicht so: erst beweisen, dass die
+Beschaffung etwas bringt, dann mehr davon bauen. Dieser Beweis ist jetzt
+gestrichen — wer #12 baut, baut es auf Vertrauen.
 
 **Erledigt am 2026-09-02:** #17 (Konversion Angebot → Auftrag, eigener Tab, mit
 Wilson-Intervall je Zeile — Wohnungswirtschaft 37,5 % und Gebäudebetreiber
@@ -166,7 +213,7 @@ fertig und wartet.
 
 | Was | Warum es wartet | Wenn es kommt |
 |---|---|---|
-| **Die 245 Anrufe** | 1 von 293 seit dem 18.08. | #16 liest aus, #12 wird baubar |
+| ~~Die 245 Anrufe~~ | entfällt — Listen gestrichen (§0a) | — |
 | **Personen-Flow** (`FLOW_URL_GRAPH_USERS`) | fünf Minuten in Power Automate, Anleitung in `docs/FLOW-PERSONENSUCHE.md` | Empfänger werden gesucht statt abgetippt; Teams-Link je Person |
 | **Apify-Guthaben** | leer | #10, und der Ad lookup als zweite Prüfung |
 | **Dataverse-Schreibrecht** | nicht erteilt | §1, die Rückgabe der Ergebnisse ins CRM |

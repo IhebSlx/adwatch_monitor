@@ -566,12 +566,19 @@ einfache Suche findet, steht nicht im CRM. Der Kanal existiert.
 
 Der nächste Schritt ist NICHT, mehr zu suchen, sondern die Gefundenen durch die
 vorhandene Kette zu schicken — Identität prüfen, anreichern, gegen das
-Gewinner-Profil bewerten — und die Besten als **Arbeitsliste mit
-Kontrollgruppe** auszuspielen (§ `adwatch/outcomes.py`). Erst dann ist
-messbar, ob ein aus dem Internet beschaffter Kontakt tatsächlich Kunde wird.
+Gewinner-Profil bewerten.
 
-Offen und ausdrücklich unbewiesen bleibt: ob diese Firmen GUTE Interessenten
-sind. Gefunden ≠ geeignet. Das entscheidet erst die Kontrollgruppe.
+> **Korrektur 2026-09-07.** Hier stand: „…und die Besten als Arbeitsliste mit
+> Kontrollgruppe ausspielen (`adwatch/outcomes.py`). Erst dann ist messbar, ob
+> ein aus dem Internet beschaffter Kontakt tatsächlich Kunde wird."
+>
+> Dieses Modul gibt es nicht mehr — entfernt auf Ihebs Entscheidung, siehe
+> ROADMAP §0a. Der Satz stimmte und stimmt: messbar wird es nur gegen eine
+> Kontrollgruppe. Nur wird jetzt niemand mehr messen.
+
+Offen und ausdrücklich unbewiesen bleibt damit auf Dauer: ob diese Firmen GUTE
+Interessenten sind. Gefunden ≠ geeignet — und das entschied allein die
+Kontrollgruppe.
 
 ## 13. Korrespondenz — stark gegen Stammdaten, überflüssig neben der Auftragshistorie
 
