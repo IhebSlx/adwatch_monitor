@@ -5410,3 +5410,79 @@ def test_projektseiten_werden_auch_im_singular_erkannt():
         "https://www.endersweissbangert.de/wp-content/uploads/favicon.png", uebersicht)
     assert not LL._ist_projektseite(
         "https://www.endersweissbangert.de/xmlrpc.php", uebersicht)
+
+
+def test_grossstadt_schwelle_ist_je_land_verschieden(temp_db, monkeypatch):
+    """Eine feste Zahl kann es nicht geben: in Deutschland heisst '10
+    Postleitzahlen' Grossstadt (ueber dem 99. Perzentil), in Portugal ist es
+    unterdurchschnittlich, weil die PLZ dort strassenfein sind.
+
+    Gemessen an plz_geo -- p99: DE 6, ES 4, PT 176, SE 126. Genau daran ging
+    gernotschulzarchitektur.de als 'sicher in Portugal' durch, belegt mit
+    `rande` (30 PLZ, ein Weiler) und `fundada` (portugiesisch 'gegruendet')."""
+    from adwatch.enrich import laender
+
+    monkeypatch.setattr(laender, "_SCHWELLEN", None)
+    monkeypatch.setattr(laender, "_ORT_INDEX", {
+        # PT: viele Orte mit vielen PLZ -> hohe Schwelle
+        **{f"ptdorf{i}": {"PT": 20 + i} for i in range(100)},
+        "lissabonstadt": {"PT": 900},
+        # DE: fast alle Orte mit einer PLZ -> niedrige Schwelle
+        **{f"dedorf{i}": {"DE": 1} for i in range(100)},
+        "grossstadt": {"DE": 150},
+    })
+    pt = laender._grossstadt_schwelle("PT")
+    de = laender._grossstadt_schwelle("DE")
+    assert pt > de, f"PT-Schwelle ({pt}) muss ueber der deutschen ({de}) liegen"
+    assert de >= 3, "nie unter 3, sonst gilt jeder Weiler als gross"
+
+
+def test_ein_weiler_traegt_kein_fremdes_land(temp_db, monkeypatch):
+    """`rande` hat 30 portugiesische Postleitzahlen und ist trotzdem ein Weiler
+    -- auf Deutsch ausserdem der Rand von etwas. Es darf Portugal nicht auf
+    'sicher' heben, waehrend `lisbon` (kuratiertes Exonym) es sehr wohl darf."""
+    from adwatch.enrich import laender
+
+    monkeypatch.setattr(laender, "_SCHWELLEN", None)
+    monkeypatch.setattr(laender, "_ORT_INDEX", {
+        **{f"ptdorf{i}": {"PT": 20 + i} for i in range(200)},
+        "rande": {"PT": 30},
+        "fundada": {"PT": 3},
+        "berlin": {"DE": 181},
+        **{f"dedorf{i}": {"DE": 1} for i in range(200)},
+    })
+    schwach = laender.laender_aus_text(
+        "Buero in Berlin, +49 30 1. Fundada am Rande der Stadt.",
+        heimat="DE", tld="de")
+    assert schwach["laender"].get("PT", {}).get("sicherheit") != "sicher"
+
+    # Ein kuratiertes Exonym ist ein STARKER Beleg -- aber eine einzelne
+    # genannte Stadt bleibt trotzdem 'moeglich'. Die Staerke entscheidet, ob
+    # ein Land ueberhaupt 'sicher' werden DARF, nicht ob es das schon ist.
+    eine = laender.laender_aus_text(
+        "Buero in Berlin, +49 30 1. Projekt in Lisbon.", heimat="DE", tld="de")
+    assert eine["laender"]["PT"]["sicherheit"] == "moeglich"
+
+    # Zwei Belege, davon einer stark -> sicher. Der Weiler `rande` darf dabei
+    # mitzaehlen, nur eben nicht allein tragen.
+    zwei = laender.laender_aus_text(
+        "Buero in Berlin, +49 30 1. Projekte in Lisbon und am Rande.",
+        heimat="DE", tld="de")
+    assert zwei["laender"]["PT"]["sicherheit"] == "sicher"
+
+
+def test_projektpfad_erkennt_das_wort_auch_mitten_im_abschnitt():
+    """reinshaus.com legt seine 25 Projekte unter /portfolioreader-1784/... ab.
+    Eine Regel, die das Wort als eigenen Wegabschnitt verlangt, findet dort
+    KEINE einzige Seite. Entscheidend ist stattdessen, ob nach dem Abschnitt
+    mit dem Projektwort noch einer folgt -- das trennt die Uebersicht von der
+    Einzelseite."""
+    from adwatch.enrich import laenderlauf as LL
+
+    assert LL._ist_projekt_pfad("https://x.de/portfolioreader-1784/neubau-lager")
+    assert LL._ist_projekt_pfad("https://x.de/projekte/haus-am-see")
+    assert LL._ist_projekt_pfad("https://x.de/project/kiju")
+    # Uebersichtsseiten sind KEINE Einzelprojekte
+    assert not LL._ist_projekt_pfad("https://x.de/projekte")
+    assert not LL._ist_projekt_pfad("https://x.de/portfolioreader-1784")
+    assert not LL._ist_projekt_pfad("https://x.de/kontakt")

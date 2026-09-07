@@ -134,8 +134,28 @@ _STOPP = {
 # sind kürzer — fast durchweg Weiler, deren Namen zugleich Alltagswörter sind.
 _MIN_LAENGE = 5
 
-# Ab so vielen Postleitzahlen gilt ein Ort als STARKER Beleg — stark genug, um
-# ein fremdes Land allein zu tragen.
+# Anteil der Orte eines Landes, die als „groß" gelten. Die Schranke wird daraus
+# JE LAND aus den Daten berechnet (siehe `_grossstadt_schwelle`), nicht fest
+# gesetzt.
+#
+# WARUM NICHT EINE FESTE ZAHL, gemessen an plz_geo:
+#
+#            Orte   Median    p90    p99      max
+#     DE    8.676        1      1      6      181
+#     ES    9.922        1      1      4       63
+#     PT   17.787        1     18    176    9.165
+#     SE    1.780        3     21    126    1.139
+#
+# Eine feste Grenze von 10 Postleitzahlen heißt in Deutschland „Großstadt"
+# (über dem 99. Perzentil) und in Portugal „unterdurchschnittlich" — dort sind
+# die Postleitzahlen straßenfein. Genau daran ging `gernotschulzarchitektur.de`
+# als „sicher in Portugal" durch: Belege waren `rande` (30 PLZ, ein Weiler; auf
+# Deutsch der Rand von etwas) und `fundada` (portugiesisch „gegründet").
+#
+# Das 99. Perzentil DES JEWEILIGEN LANDES trifft dagegen überall das Richtige:
+# DE ab 6 (Berlin 181, München 75, Aachen 10), ES ab 4 (Madrid 63, Marbella 7),
+# PT erst ab 176 — womit `rande` und `areal` sauber herausfallen.
+_GROSSSTADT_PERZENTIL = 0.99
 #
 # WARUM ES DIESE SCHRANKE BRAUCHT, gemessen an 1.483 deutschen Büros:
 # `abdelkader.de` kam auf „aktiv in Spanien", und die Belege lauteten
@@ -151,7 +171,30 @@ _MIN_LAENGE = 5
 # Stadt dieser Größe. Vornamen fallen damit strukturell heraus, auch die, die
 # noch niemand gesehen hat. Sie verschwinden nicht: das Land steht weiter als
 # „möglich" mit seinen Belegen da.
-_GROSSE_STADT = 10
+_SCHWELLEN: dict[str, int] | None = None
+
+
+def _grossstadt_schwelle(land: str) -> int:
+    """Ab wie vielen Postleitzahlen ein Ort IN DIESEM LAND als groß gilt.
+
+    Einmal je Prozess aus `plz_geo` berechnet. Ergibt DE ab 6, ES ab 4,
+    PT erst ab 176 — und genau das trennt Madrid von einem Weiler namens
+    `Rande`.
+    """
+    global _SCHWELLEN
+    if _SCHWELLEN is None:
+        werte: dict[str, list[int]] = defaultdict(list)
+        for laender in ort_index().values():
+            for l, n in laender.items():
+                werte[l].append(n)
+        gebaut = {}
+        for l, zs in werte.items():
+            zs.sort()
+            i = min(int(len(zs) * _GROSSSTADT_PERZENTIL), len(zs) - 1)
+            # nie unter 3, sonst gilt in einem kleinen Land jeder Weiler als groß
+            gebaut[l] = max(zs[i], 3)
+        _SCHWELLEN = gebaut
+    return _SCHWELLEN.get(land, 10)
 
 _index_lock = threading.Lock()
 _ORT_INDEX: dict[str, dict[str, int]] | None = None
@@ -355,7 +398,7 @@ def laender_aus_text(roh: str, heimat: str | None = None,
     punkte: dict[str, int] = defaultdict(int)
     belege: dict[str, list[str]] = defaultdict(list)
     unsicher: list[str] = []
-    # Länder mit mindestens EINEM starken Beleg. Siehe _GROSSE_STADT.
+    # Länder mit mindestens EINEM starken Beleg. Siehe _grossstadt_schwelle.
     stark: set[str] = set()
 
     # Vorwahl — das stärkste Signal, deshalb das höchste Gewicht
@@ -375,7 +418,7 @@ def laender_aus_text(roh: str, heimat: str | None = None,
         for name, laender in treffer:
             groesse = laender.get(land, 1)
             gewicht = _ortsgewicht(groesse)
-            if groesse >= _GROSSE_STADT:
+            if groesse >= _grossstadt_schwelle(land):
                 stark.add(land)
             if len(laender) == 1:
                 punkte[land] += gewicht

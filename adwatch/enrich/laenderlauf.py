@@ -36,7 +36,7 @@ from sqlalchemy import func, select, text as _sql
 
 from ..db import SessionLocal
 from ..models import Company
-from . import fetchpage, laender
+from . import fetchpage, laender, render
 
 logger = logging.getLogger("adwatch.laenderlauf")
 
@@ -104,20 +104,46 @@ _KEIN_INHALT = re.compile(
     r"\.(css|js|png|jpe?g|gif|svg|webp|pdf|zip|ico|woff2?|mp4)(\?|$))", re.I)
 
 
-# Wegstücke, unter denen EINZELNE Projekte liegen. Der gemeinsame Katalog in
-# `website_source._LINK_CATEGORIES` kennt nur die Mehrzahl — `projekte`,
-# `projects`, `proyectos` —, also die ÜBERSICHTSSEITEN. Die Einzelseiten
-# stehen in aller Regel im Singular: `/project/…`, `/projekt/…`, `/obra/…`.
-# Genau daran scheiterte der erste Versuch: `_classify_link` gab für
-# `/project/kiju-am-sportplatz-aulhausen` schlicht None zurück.
-#
-# Die Singularformen stehen bewusst HIER und nicht im gemeinsamen Katalog: der
-# steuert auch, welche Seiten die bezahlte LLM-Anreicherung liest. Diese
-# Auswertung kostet nichts und darf großzügiger sein; der Händler-Pfad soll
-# sich davon nicht verteuern.
-_PROJEKT_WEG = re.compile(
-    r"/(project|projekt|proyecto|progetto|projet|projeto|obra|referenz|"
-    r"reference|realisation|realisatie|work|portfolio|bauten|bau)[/-]", re.I)
+# Die Projektwörter stehen bewusst HIER und nicht im gemeinsamen Katalog
+# `website_source._LINK_CATEGORIES`: der steuert auch, welche Seiten die
+# BEZAHLTE LLM-Anreicherung liest. Diese Auswertung kostet nichts und darf
+# großzügiger sein; der Händler-Pfad soll sich davon nicht verteuern.
+# Wörter, die einen Wegabschnitt als „hier liegen Projekte" ausweisen. Der
+# gemeinsame Katalog in `website_source._LINK_CATEGORIES` kennt nur die
+# Mehrzahl (`projekte`, `projects`) und damit nur die ÜBERSICHTSSEITEN.
+_PROJEKT_WORT = ("project", "projekt", "proyecto", "progetto", "projet",
+                 "projeto", "obra", "referenz", "reference", "realisation",
+                 "realisatie", "portfolio", "bauten", "werke", "work")
+
+
+def _ist_projekt_pfad(url: str) -> bool:
+    """Zeigt dieser Pfad auf ein EINZELNES Projekt statt auf die Übersicht?
+
+    Zwei Anläufe waren zu eng, beide an echten Adressen gescheitert:
+
+      1. `/(projekt|project|…)[/-]` verlangte das Wort als eigenen Abschnitt.
+         reinshaus.com legt seine 25 Projekte unter
+         `/portfolioreader-1784/neubau-lager-…` ab — das Wort steckt MITTEN im
+         Abschnitt, also fand die Regel keine einzige Seite.
+      2. Eine optionale Mehrzahlendung half auch nicht, aus demselben Grund.
+
+    Die tragfähige Regel ist strukturell statt buchstäblich: irgendein
+    Wegabschnitt ENTHÄLT ein Projektwort, und danach kommt noch mindestens ein
+    weiterer Abschnitt. Der letzte Teil ist das Entscheidende — er trennt die
+    Übersicht (`/projekte`) von der Einzelseite (`/projekte/haus-am-see`),
+    ohne die genaue Schreibweise zu kennen.
+    """
+    from urllib.parse import unquote, urlsplit
+    try:
+        pfad = unquote(urlsplit(url).path)
+    except ValueError:
+        return False
+    teile = [x for x in pfad.split("/") if x]
+    for i, teil in enumerate(teile):
+        klein = teil.lower()
+        if any(w in klein for w in _PROJEKT_WORT) and i < len(teile) - 1:
+            return True
+    return False
 
 
 def _ist_projektseite(link: str, referenz_url: str) -> bool:
@@ -139,10 +165,96 @@ def _ist_projektseite(link: str, referenz_url: str) -> bool:
         return False                       # der Rücksprung auf die Übersicht
     if link.rstrip("/").startswith(referenz_url.rstrip("/") + "/"):
         return True
-    if _PROJEKT_WEG.search(link):
+    if _ist_projekt_pfad(link):
         return True
     from ..identity import website_source as ws
     return ws._classify_link(link) == "references"
+
+
+def _startseite(domain: str) -> dict | None:
+    """Startseite holen — mit `www.`-Rückfall und Browser-Rückfall.
+
+    Zwei Ergänzungen gegenüber `ws.crawl_site`, beide an echten Domains
+    gemessen (Stichprobe von 60, 2026-09-07):
+
+      * `www.`-VARIANTE. 14 von 60 Domains waren über den rohen Abruf nicht
+        erreichbar. `loop-places.com` wirft auf beiden nackten Schemata einen
+        SSL-Fehler und antwortet auf `www.loop-places.com` mit 200. Eine
+        dritte Adresse zu probieren kostet nichts und rettet solche Fälle.
+
+      * BROWSER, wenn der Text zu dünn ist. Der Renderer existiert längst
+        (`render.py`, Chromium lokal, kostenlos) und wird von
+        `fetchpage.page_bundle` auch benutzt — nur greift diese Auswertung
+        direkt auf den rohen Abrufer zu und ging deshalb ohne ihn los. Das war
+        ein Fehler in dieser Datei, kein fehlendes Werkzeug.
+
+    Was der Browser NICHT repariert, ebenfalls gemessen: 8 der 14 Ausfälle sind
+    echte HTTP 503, und Chromium bekommt exakt dieselbe Apache-Fehlerseite
+    („Service Unavailable … maintenance downtime"). Und die 8 dünnen Seiten
+    unter 400 Zeichen sind keine JavaScript-Hüllen, sondern wirklich magere
+    Seiten — 185 Zeichen roh, 185 Zeichen gerendert. Der Browser ist hier also
+    Sorgfalt, kein Wundermittel; die 503-Fälle holt der Nachlauf.
+    """
+    from ..identity import website_source as ws
+
+    got = ws.crawl_site(domain)
+    if not got and not domain.lower().startswith("www."):
+        got = ws.crawl_site("www." + domain)
+    if not got:
+        return None
+    roh = ws._page_text(got["home_html"], limit=10 ** 7)
+    if len(roh) < render.RENDER_BELOW_CHARS and render.available():
+        besser = render.render_html(got["home_url"])
+        if besser and len(ws._page_text(besser, limit=10 ** 7)) > len(roh):
+            got["home_html"] = besser
+    return got
+
+
+def _sitemap_projektseiten(domain: str, max_urls: int = 40) -> list[str]:
+    """Projektseiten aus der sitemap.xml — der zuverlässigste Weg zu ihnen.
+
+    Gemessen an 40 Domains: 17 führen eine sitemap.xml, 8 davon listen darin
+    Projektseiten. `reinshaus.com` nennt 25 Projekte auf einen Schlag — mehr,
+    als das Verfolgen von Links auf der Übersichtsseite je findet, weil viele
+    Seiten ihre Projekte per JavaScript-Galerie oder Paginierung nachladen.
+
+    Eine sitemap ist außerdem die höflichste Art zu crawlen: der Betreiber hat
+    sie genau dafür hingelegt.
+    """
+    import requests
+
+    from ..identity import website_source as ws
+
+    kandidaten = [f"https://{domain}/sitemap.xml",
+                  f"https://www.{domain}/sitemap.xml",
+                  f"https://{domain}/sitemap_index.xml",
+                  f"https://{domain}/wp-sitemap.xml"]
+    for url in kandidaten:
+        try:
+            r = requests.get(url, headers={"User-Agent": ws._UA}, timeout=10)
+        except Exception:                        # noqa: BLE001
+            continue
+        if r.status_code != 200 or "<loc>" not in r.text:
+            continue
+        locs = re.findall(r"<loc>\s*([^<]+?)\s*</loc>", r.text)
+        # Ein sitemap_index verweist auf weitere sitemaps — eine Ebene folgen,
+        # denn dort liegen bei WordPress die Projekte.
+        if "<sitemapindex" in r.text:
+            tiefer: list[str] = []
+            for kind in locs[:4]:
+                try:
+                    rk = requests.get(kind, headers={"User-Agent": ws._UA},
+                                      timeout=10)
+                    if rk.status_code == 200:
+                        tiefer += re.findall(r"<loc>\s*([^<]+?)\s*</loc>", rk.text)
+                except Exception:                # noqa: BLE001
+                    continue
+            locs = tiefer or locs
+        projekte = [u for u in locs
+                    if _ist_projekt_pfad(u) and not _KEIN_INHALT.search(u)]
+        if projekte:
+            return projekte[:max_urls]
+    return []
 
 
 def seiten_lesen(domain: str) -> dict | None:
@@ -157,7 +269,7 @@ def seiten_lesen(domain: str) -> dict | None:
     """
     from ..identity import website_source as ws
 
-    got = ws.crawl_site(domain)
+    got = _startseite(domain)
     if not got:
         return None
     heim_url, heim_html = got["home_url"], got["home_html"]
@@ -182,20 +294,29 @@ def seiten_lesen(domain: str) -> dict | None:
 
     # Eine Ebene tiefer: die einzelnen Projektseiten. Dort steht der Ort — die
     # Übersichtsseite zeigt oft nur Titel und Bilder.
-    detail = 0
+    #
+    # Zuerst die sitemap.xml, dann erst die Links: die sitemap ist vollständig,
+    # während eine Übersichtsseite ihre Projekte oft per Galerie nachlädt und
+    # dann gar keine <a href> auf sie enthält.
+    kandidaten: list[str] = list(_sitemap_projektseiten(domain))
     for url, html in referenz_htmls:
         for link in ws._own_links(url, html):
-            if detail >= _MAX_PROJEKTSEITEN or len(gelesen) >= _MAX_SEITEN:
-                break
-            if link in gelesen or not _ist_projektseite(link, url):
-                continue
-            holen = ws._fetch_url(link, timeout=10)
-            if not holen:
-                continue
-            gelesen.append(link)
-            detail += 1
-            teile.append(ws._page_text(holen[0])[:_ZEICHEN_JE_SEITE])
-            time.sleep(0.25)
+            if link not in kandidaten and _ist_projektseite(link, url):
+                kandidaten.append(link)
+
+    detail = 0
+    for link in kandidaten:
+        if detail >= _MAX_PROJEKTSEITEN or len(gelesen) >= _MAX_SEITEN:
+            break
+        if link in gelesen:
+            continue
+        holen = ws._fetch_url(link, timeout=10)
+        if not holen:
+            continue
+        gelesen.append(link)
+        detail += 1
+        teile.append(ws._page_text(holen[0])[:_ZEICHEN_JE_SEITE])
+        time.sleep(0.25)
 
     text = "\n".join(t for t in teile if t)[:_ZEICHEN_GESAMT]
     return {"domain": domain, "text": text, "seiten": gelesen,
