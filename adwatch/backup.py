@@ -25,13 +25,38 @@ def _db_file() -> Path | None:
     return Path(url.split("///", 1)[1]) if "///" in url else None
 
 
-def backup_now(tag: str = "") -> str | None:
+def backup_now(tag: str = "", hoechstens_alle_h: float = 0.0) -> str | None:
     """Write a consistent snapshot into BACKUP_DIR and rotate old ones.
     Returns the backup path, or None if not applicable / failed. Never raises —
-    a backup failure must not take down the caller (scheduler/startup)."""
+    a backup failure must not take down the caller (scheduler/startup).
+
+    `hoechstens_alle_h > 0` überspringt den Lauf, wenn schon ein Backup aus den
+    letzten so vielen Stunden liegt. Gedacht für den Start: die Kopie der
+    1,7-GB-Datei dauert gemessen 24,5 s und lief bisher bei JEDEM Start, also
+    auch bei jedem Neustart nach einer Backend-Änderung. Zwei Kosten, beide
+    unnötig:
+
+      * 24,5 s Wartezeit, bevor der Server überhaupt den Port belegt;
+      * `BACKUP_KEEP` zählt DATEIEN, nicht Tage. Sechs von sieben Plätzen waren
+        Start-Schnappschüsse, einer das nächtliche Backup. Wer an einem
+        Nachmittag siebenmal neu startet, hat danach nichts mehr, was älter ist
+        als dieser Nachmittag — genau der Rückgriff, den ROADMAP §2 als „dünn"
+        bezeichnet, und dünner als dort angenommen.
+
+    Das nächtliche Backup ruft weiterhin ohne Drossel; es SOLL jeden Tag eins
+    geben. Gedrosselt wird nur der Start, dessen Schnappschuss ohnehin nur die
+    Migration absichert — und wenn seit dem letzten keine Migration lief, gibt
+    es auch nichts abzusichern.
+    """
     src = _db_file()
     if src is None or not src.exists():
         return None
+    if hoechstens_alle_h > 0:
+        letztes = _juengstes_alter_h()
+        if letztes is not None and letztes < hoechstens_alle_h:
+            logger.info("DB backup skipped: last one is %.1f h old (< %.1f h)",
+                        letztes, hoechstens_alle_h)
+            return None
     try:
         config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         # timestamp comes from the file's own mtime (no Date.now allowed in some
@@ -80,6 +105,18 @@ def _has_content(path) -> bool:
     finally:
         if c is not None:
             c.close()
+
+
+def _juengstes_alter_h() -> float | None:
+    """Alter des neuesten Backups in Stunden, oder None wenn es keins gibt."""
+    p = latest_backup()
+    if not p:
+        return None
+    try:
+        import time
+        return (time.time() - Path(p).stat().st_mtime) / 3600.0
+    except OSError:
+        return None
 
 
 def _rotate() -> None:

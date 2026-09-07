@@ -425,9 +425,32 @@ def init_db() -> None:
         if _init_done:
             return
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        integrity_ok()                 # loud warning if the DB file is corrupt
+        # Gemessen an der echten Datei (1,82 GB): quick_check 6,0 s, das Backup
+        # 24,5 s. Beides lief vor JEDEM Start und damit vor dem Moment, in dem
+        # der Server den Port belegt — 31 s Warten für zwei Prüfungen, die
+        # nichts finden, solange sich nichts geändert hat.
+        #
+        # quick_check läuft jetzt im Hintergrund weiter (die Warnung kommt ein
+        # paar Sekunden später statt gar nicht anders), das Backup höchstens
+        # alle 12 Stunden. Siehe backup.backup_now zur Rotation.
+        _pruefen_im_hintergrund()
         from .backup import backup_now
-        backup_now(tag="startup")      # snapshot before any migration runs
+        backup_now(tag="startup", hoechstens_alle_h=12)
         Base.metadata.create_all(_engine)
         _migrate(_engine)
         _init_done = True
+
+
+def _pruefen_im_hintergrund() -> None:
+    """quick_check als Daemon-Thread, damit der Start nicht darauf wartet.
+
+    Bewusst NICHT weggelassen: eine beschädigte Datei soll auffallen. Nur muss
+    der Fund nicht vor dem ersten Request stehen — er landet ohnehin im Log,
+    und /health liest ihn dort ab, wo er hingehört.
+    """
+    def lauf():
+        try:
+            integrity_ok()
+        except Exception:              # noqa: BLE001 — ein Prüfthread darf nie stören
+            logger.exception("Hintergrund-quick_check gescheitert")
+    threading.Thread(target=lauf, name="adwatch-quickcheck", daemon=True).start()

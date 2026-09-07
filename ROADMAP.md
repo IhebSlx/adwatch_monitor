@@ -84,6 +84,15 @@ in a few hours. Paid enrichment, verified identities, and human sales decisions
 are not re-pullable at any price. Backups are 7 rotated daily copies
 (`config.BACKUP_KEEP`), sized deliberately against a database heading for ~1,9 GB.
 
+**Correction, measured 2026-09-07: it was not seven days.** `BACKUP_KEEP`
+counts *files*, and until this date a snapshot was written on **every** start.
+Six of the seven retained slots held startup copies and one held the nightly
+backup — the rotation window was set by how often the app was restarted, not by
+time. Seven restarts in one afternoon would have left nothing older than that
+afternoon. `backup_now(hoechstens_alle_h=12)` now throttles the startup
+snapshot; the nightly job is unchanged, so the seven slots hold roughly seven
+days again. (Same change removed 24,5 s from every start — see §3b.)
+
 Seven days of rollback is defensible for a mirror. It is thin for the only copy
 of a running experiment. **Proposed near-term mitigation: a plain CSV/Excel
 export of lists, arms and outcomes** — small to build, readable without AdWatch,
@@ -113,6 +122,40 @@ und rot hinterlegt).
 Projektwert = primäre Verkaufschance statt Summe · Explorer (Karte × Liste ×
 Firmen × Projekte) · dunkle Haut mit hellem Rückweg · Projektkarte in der Höhe ·
 Spaltenfilter über der Karte · Chatbot schlägt Läufe vor.
+
+---
+
+## 3b. Startzeit und Ladezeit — gemessen, 2026-09-07
+
+Iheb fragte, warum AdWatch lange braucht. Gemessen an der echten Datei
+(1,82 GB), nicht geschätzt:
+
+| Wo | Vorher | Nachher | Was geändert wurde |
+|---|---|---|---|
+| `PRAGMA quick_check` | 6,0 s blockierend | 0 s | läuft als Daemon-Thread weiter |
+| Start-Backup | 24,5 s **bei jedem Start** | 0 s | höchstens alle 12 h (§2) |
+| `init_db()` gesamt | ~31 s | **1,3 s** | |
+| Erste Kartenöffnung | 12,5 s | ~1,6 s | Projektcache wird beim Start vorgewärmt |
+| Weitere Kartenöffnungen | 1,7 s | 1,4 s | unverändert schnell |
+
+**gzip wurde gemessen und dann eingeschränkt.** Naheliegend war, die 6,2 MB
+Pin-JSON zu komprimieren — sie schrumpfen auf 1,7 MB. Der Zeitmessung nach ist
+das lokal ein Verlust:
+
+    ohne gzip   Median 1,38 s   6.205 KB
+    mit gzip    Median 2,11 s   1.699 KB
+
+Über die Loopback-Schnittstelle kostet Übertragung praktisch nichts, also
+bezahlt man das Komprimieren und bekommt nichts zurück. AdWatch bindet
+standardmäßig 127.0.0.1 — der Normalfall ist genau der, in dem gzip schadet.
+Die Middleware entscheidet deshalb nach der Gegenstelle: lokal roh, über das
+Netz komprimiert. Der SSE-Stream (`/api/fetch/stream/{id}`) bleibt in beiden
+Fällen unkomprimiert, weil ein Kompressor Bytes sammelt und der
+Fortschrittsbalken eines Imports dann stockend ankäme.
+
+**Noch offen:** die 6,2 MB selbst. Jeder der 44.000 Pins trägt eine 36-stellige
+GUID; das Verschlanken der Nutzlast würde Bytes *und* Serialisierungszeit
+drücken. Nicht gemacht, weil es als Einziges den Kartencode anfasst.
 
 ---
 

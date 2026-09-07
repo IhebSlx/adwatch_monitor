@@ -5319,3 +5319,67 @@ def test_kein_filterschluessel_ohne_wirkung(temp_db, monkeypatch):
     # Ein echter Schluessel geht durch und wirkt
     v = _json.loads(fragen.w_lauf_vorschlagen({"country": ["DE"]}, ["anreichern"]))
     assert v["vorschlag"] is True and v["im_lauf"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Startzeit und Antwortgroesse: die Regeln, die leicht wieder kippen
+# ---------------------------------------------------------------------------
+def test_startbackup_wird_gedrosselt(tmp_path, monkeypatch):
+    """Ein Backup je Start kostete gemessen 24,5 s bei 1,82 GB -- und ass die
+    Rotation auf: BACKUP_KEEP zaehlt DATEIEN, sechs von sieben Plaetzen waren
+    Start-Schnappschuesse. Mit Drossel gibt es hoechstens eins je Fenster."""
+    import sqlite3
+
+    from adwatch import backup as bk
+
+    quelle = tmp_path / "quelle.db"
+    c = sqlite3.connect(str(quelle))
+    c.execute("CREATE TABLE companies (id INTEGER PRIMARY KEY)")
+    c.execute("INSERT INTO companies (id) VALUES (1)")
+    c.commit(); c.close()
+
+    ziel = tmp_path / "backups"
+    monkeypatch.setattr(bk.config, "DB_URL", f"sqlite:///{quelle}")
+    monkeypatch.setattr(bk.config, "BACKUP_DIR", ziel)
+
+    erstes = bk.backup_now(tag="startup", hoechstens_alle_h=12)
+    assert erstes is not None, "das erste Backup muss geschrieben werden"
+    zweites = bk.backup_now(tag="startup", hoechstens_alle_h=12)
+    assert zweites is None, "das zweite im selben Fenster muss uebersprungen werden"
+    # Ohne Drossel (der naechtliche Lauf) schreibt weiterhin jedes Mal
+    assert bk.backup_now(tag="nightly") is not None
+    assert len(list(ziel.glob("adwatch_*.db"))) == 2
+
+
+def test_gzip_nur_fuer_fremde_klienten():
+    """gzip lohnt ueber eine Leitung und schadet auf dem eigenen Rechner:
+    gemessen 1,38 s ohne, 2,11 s mit -- 6.205 KB gegen 1.699 KB. AdWatch
+    bindet 127.0.0.1, also ist der Normalfall der, in dem gzip kostet."""
+    from fastapi.testclient import TestClient
+
+    from adwatch.web import _LOKAL, app
+
+    # TestClient meldet sich als 'testclient', gilt also als fremd
+    r = TestClient(app).get("/health", headers={"Accept-Encoding": "gzip"})
+    assert r.status_code in (200, 503)
+
+    for lokal in ("127.0.0.1", "::1", "localhost"):
+        assert lokal in _LOKAL, f"{lokal} muss als lokal gelten"
+
+
+def test_sse_wird_nie_komprimiert():
+    """Ein Kompressor sammelt Bytes, bis es sich lohnt. Genau das darf ueber
+    dem Fortschritts-Stream eines Imports nicht passieren."""
+    from adwatch.web import _GzipNurFuerFremde
+
+    gesehen = []
+
+    async def roh(scope, receive, send):
+        gesehen.append("roh")
+
+    m = _GzipNurFuerFremde(roh)
+    import asyncio
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        m({"type": "http", "path": "/api/fetch/stream/abc",
+           "client": ("10.0.0.5", 1234)}, None, None))
+    assert gesehen == ["roh"], "SSE muss unkomprimiert durchgereicht werden"

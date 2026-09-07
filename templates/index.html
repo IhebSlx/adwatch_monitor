@@ -200,67 +200,6 @@
         <p class="hint hidden" id="divergenceEmpty">Noch keine bewerteten Partner — erst per <b>Ad lookup</b> Anzeigen abrufen, dann erscheint hier die Rangliste.</p>
       </div>
 
-      <!-- Die Karte darunter stand hier ZWEIMAL — ein Skript-Replace hatte sie
-           dupliziert; die erste Kopie trug sogar tbody id="divergenceBody".
-           getElementById nimmt den ERSTEN Treffer: Suche und Sortierung waren
-           an die tote Kopie gebunden, die sichtbare Tabelle reagierte auf
-           nichts. Eine Kopie, und die Verdrahtung stimmt wieder. -->
-      <div class="card">
-        <h2>Firmen diese Woche</h2>
-        <div class="filter-bar">
-          <input type="text" id="compSearch" placeholder="Firma suchen…" style="flex:2;min-width:160px">
-          <select id="compStatus">
-            <option value="">Alle Meta-Seiten-Status</option>
-            <option value="confirmed">Meta-Seite gefunden</option>
-            <option value="ambiguous">Meta-Seite unklar</option>
-            <option value="no_ads_found">Keine Meta-Seite</option>
-            <option value="pending">Meta nicht geprüft</option>
-          </select>
-          <input type="number" id="compMinTotal" placeholder="Min. Anzeigen" style="width:110px">
-          <input type="number" id="compMinMeta" placeholder="Min. Meta" style="width:110px">
-          <input type="number" id="compMinGoogle" placeholder="Min. Google" style="width:110px">
-          <button id="compMoreFiltersBtn" class="btn btn-sm" type="button">Filter ▾</button>
-          <button id="compClearFilterBtn" class="btn btn-sm">Zurücksetzen</button>
-          <span class="spacer"></span>
-          <span id="compFilterCount" class="muted"></span>
-        </div>
-        <div class="filter-bar hidden" id="compMoreFilters" style="margin-top:8px">
-          <div id="compSegmentDrop"></div>
-          <div id="compSubSegmentDrop"></div>
-          <div id="compKvDrop"></div>
-          <select id="compRevenueHistory" style="width:210px">
-            <option value="">Umsatz-Historie: alle</option>
-            <option value="lapsed">Ehemalige Käufer (nicht akt. Jahr)</option>
-            <option value="new">Neukäufer (nur akt. Jahr)</option>
-            <option value="any">Jemals Umsatz</option>
-            <option value="never">Nie Umsatz</option>
-          </select>
-        </div>
-        <div class="table-wrap">
-          <table id="companyTable" class="sortable">
-            <thead>
-              <tr>
-                <th class="col-dot"></th>
-                <th data-sort="company">Firma</th>
-                <th data-sort="score">Score</th>
-                <th class="num" data-sort="meta_active_ads">Meta</th>
-                <th class="num" data-sort="google_active_ads">Google</th>
-                <th class="num" data-sort="total_active_ads">Gesamt</th>
-                <th class="num" data-sort="delta_ads">Δ Wo.</th>
-                <th class="num" data-sort="new_ads">Neu</th>
-                <th class="num" data-sort="hiring">Personal</th>
-                <th class="num" data-sort="selling">Verkauf</th>
-                <th>Produkte</th>
-                <th data-sort="spend_low">Gesch. Ausg./Wo.</th>
-                <th>Notiz</th>
-              </tr>
-            </thead>
-            <tbody id="companyTableBody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div id="detailPanel" class="card hidden"></div>
     </section>
 
     <!-- ================= TAB: Pipeline ================= -->

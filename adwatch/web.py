@@ -32,6 +32,52 @@ from .insights.flags import compute_flags
 app = FastAPI(title="AdWatch")
 
 
+# --- GZip: für Gäste über das Netz, nicht für den Rechner selbst -----------
+# Die Projektkarte holt 6,2 MB JSON (44.000 Pins). gzip drückt das auf 1,7 MB
+# — über eine Leitung ein klarer Gewinn. Auf dem eigenen Rechner ist es einer
+# NICHT, und das ist gemessen, nicht vermutet:
+#
+#     ohne gzip   Median 1,38 s   6.205 KB
+#     mit gzip    Median 2,11 s   1.699 KB
+#
+# Über die Loopback-Schnittstelle kostet Übertragung praktisch nichts, also
+# bezahlt man das Komprimieren mit 0,73 s und bekommt dafür nichts zurück.
+# AdWatch bindet standardmäßig 127.0.0.1 (cli.py) — der Normalfall ist also
+# genau der, in dem gzip schadet.
+#
+# Deshalb entscheidet die Gegenstelle: kommt der Request von 127.0.0.1 oder
+# ::1, geht die Antwort unkomprimiert raus; kommt er über das Netz (falls
+# AdWatch je gehostet wird — ACCESS_PASSWORD ist dafür da), wird komprimiert.
+#
+# Zweite Ausnahme: /api/fetch/stream/{id} ist Server-Sent-Events. Ein
+# Kompressor sammelt Bytes, bis sich das Komprimieren lohnt — genau das
+# Falsche für einen Kanal, dessen Zweck es ist, jede Zeile sofort zu liefern.
+# Der Fortschrittsbalken eines laufenden Imports käme stockend an.
+_LOKAL = {"127.0.0.1", "::1", "localhost"}
+
+
+class _GzipNurFuerFremde:
+    """GZip nur für Antworten, die den Rechner tatsächlich verlassen."""
+
+    def __init__(self, app, minimum_size: int = 1000):
+        from starlette.middleware.gzip import GZipMiddleware
+        self._gezippt = GZipMiddleware(app, minimum_size=minimum_size)
+        self._roh = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self._roh(scope, receive, send)
+        if scope.get("path", "").startswith("/api/fetch/stream/"):
+            return await self._roh(scope, receive, send)
+        klient = (scope.get("client") or ("", 0))[0]
+        if klient in _LOKAL:
+            return await self._roh(scope, receive, send)
+        return await self._gezippt(scope, receive, send)
+
+
+app.add_middleware(_GzipNurFuerFremde, minimum_size=1000)
+
+
 @app.middleware("http")
 async def _require_auth(request, call_next):
     """HTTP Basic auth gate — active only when config.ACCESS_PASSWORD is set.
@@ -1553,3 +1599,33 @@ def _startup() -> None:
         import logging
         logging.getLogger("adwatch.jobs").warning("%d fetch job(s) marked 'interrupted' after restart", n)
     scheduler.start()
+    _projektcache_vorwaermen()
+
+
+def _projektcache_vorwaermen() -> None:
+    """Die 57.776 Verkaufschancen schon einlesen, bevor jemand die Karte öffnet.
+
+    `projekte._project_rows()` cacht gegen einen billigen Fingerabdruck und ist
+    danach in 0,05 s da — aber der Cache startet leer. Die ERSTE Kartenöffnung
+    nach jedem Neustart zahlte deshalb gemessen 12,5 s, jede weitere 1,7 s.
+
+    Das Vorwärmen läuft in einem Daemon-Thread und blockiert den Start nicht:
+    wer in den ersten Sekunden die Karte öffnet, wartet wie bisher; wer zwei
+    Minuten später klickt (also praktisch jeder), bekommt sofort etwas zu sehen.
+    Scheitert es, ist der einzige Schaden die alte Wartezeit — deshalb wird der
+    Fehler geloggt und sonst nichts unternommen.
+    """
+    def lauf():
+        import logging
+        import time
+        log = logging.getLogger("adwatch.web")
+        t0 = time.time()
+        try:
+            from .insights import projekte
+            gruppen = projekte._project_rows()
+            log.info("Projektcache vorgewärmt: %d Objekte in %.1f s",
+                     len(gruppen), time.time() - t0)
+        except Exception:              # noqa: BLE001 — Vorwärmen darf nie stören
+            log.exception("Projektcache konnte nicht vorgewärmt werden")
+
+    threading.Thread(target=lauf, name="adwatch-projektcache", daemon=True).start()

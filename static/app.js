@@ -79,11 +79,9 @@
     hiring_push: "Hiring push", went_quiet: "Went quiet" };
 
   let STATE = null;
-  let selectedCompanyId = null;
   const searchTermCache = {};   // company_id -> default search term
   const expandedPages = new Set(); // company_ids whose "Linked pages" panel is open
   const CUST_DROP = {};   // Companies Explorer checkbox dropdowns, keyed by filter field
-  const COMP_DROP = {};   // Dashboard quick-filter checkbox dropdowns, keyed by filter field
 
   // ------------------------------------------------------------------ utils
   async function api(path, method, body) {
@@ -2568,9 +2566,7 @@
     renderTopbar();
     renderSignals();
     renderKpis();
-    renderCompanyTable();
     refreshOpenPagesBodies();
-    if (selectedCompanyId != null) loadDetail(selectedCompanyId);
   }
 
   // Re-render any currently-expanded "Pages" panel (Companies tab) whenever
@@ -2645,277 +2641,6 @@
     $("#kpis").innerHTML = kpis.map(([label, value]) =>
       `<div class="kpi"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${value}</div></div>`
     ).join("");
-  }
-
-  const COMP = { sort: "score", direction: "desc" };
-
-  function companyFilters() {
-    return {
-      q: $("#compSearch").value.trim().toLowerCase(),
-      status: $("#compStatus").value,
-      minTotal: $("#compMinTotal").value ? Number($("#compMinTotal").value) : null,
-      minMeta: $("#compMinMeta").value ? Number($("#compMinMeta").value) : null,
-      minGoogle: $("#compMinGoogle").value ? Number($("#compMinGoogle").value) : null,
-      segment: COMP_DROP.segment.getSelected(),
-      subSegment: COMP_DROP.subSegment.getSelected(),
-      kv: COMP_DROP.kv.getSelected(),
-      revenueHistory: $("#compRevenueHistory").value || null,
-    };
-  }
-
-  // Mirrors customers.py's revenue_history SQL logic client-side, since this
-  // table is filtered in-memory from the already-fetched /api/state metrics.
-  function matchesRevenueHistory(m, key) {
-    if (!key) return true;
-    const y0 = m.revenue_y0 || 0;
-    const priorAny = [1, 2, 3, 4].some(i => (m[`revenue_y${i}`] || 0) > 0);
-    if (key === "lapsed") return y0 <= 0 && priorAny;
-    if (key === "new") return y0 > 0 && !priorAny;
-    if (key === "any") return y0 > 0 || priorAny;
-    if (key === "never") return y0 <= 0 && !priorAny;
-    return true;
-  }
-
-  function companySortValue(m, key) {
-    const cats = m.ads_by_category || {};
-    if (key === "company") return (m.company || "").toLowerCase();
-    if (key === "hiring") return cats.recruitment || 0;
-    if (key === "selling") return cats.product_sale || 0;
-    if (key === "spend_low") return m.spend_low || 0;
-    return m[key];
-  }
-
-  function renderCompanyTable() {
-    const f = companyFilters();
-    let rows = STATE.metrics.filter(m => {
-      if (f.q && !(m.company || "").toLowerCase().includes(f.q)) return false;
-      if (f.status && m.resolution_status !== f.status) return false;
-      if (f.minTotal != null && (m.total_active_ads || 0) < f.minTotal) return false;
-      if (f.minMeta != null && (m.meta_active_ads || 0) < f.minMeta) return false;
-      if (f.minGoogle != null && (m.google_active_ads || 0) < f.minGoogle) return false;
-      if (f.segment.length && !f.segment.includes(m.segment)) return false;
-      if (f.subSegment.length && !f.subSegment.includes(m.sub_segment)) return false;
-      if (f.kv.length && !f.kv.includes(m.kv)) return false;
-      if (!matchesRevenueHistory(m, f.revenueHistory)) return false;
-      return true;
-    });
-    rows = [...rows].sort((a, b) => {
-      const av = companySortValue(a, COMP.sort), bv = companySortValue(b, COMP.sort);
-      const an = av == null, bn = bv == null;
-      if (an || bn) return an === bn ? 0 : (an ? 1 : -1);   // nulls last
-      const cmp = typeof av === "string" ? av.localeCompare(bv) : av - bv;
-      return COMP.direction === "desc" ? -cmp : cmp;
-    });
-
-    // Cap the DOM: rendering all ~3,600 rows x 13 cols on every keystroke made
-    // the dashboard janky. Show the first RENDER_CAP after sort; the count text
-    // and a footer note make the truncation explicit (refine filters to narrow).
-    const RENDER_CAP = 300;
-    const total = rows.length;
-    const shown = rows.slice(0, RENDER_CAP);
-    // This table only ever shows companies with an ad footprint, so it counts
-    // against those — not against the whole book, which is 48k rows and would
-    // make every number here look broken.
-    const tracked = STATE.metrics.length;
-    $("#compFilterCount").textContent = total > RENDER_CAP
-      ? `${shown.length} von ${total} angezeigt (${tracked} mit Anzeigen-Daten) — Filter verfeinern`
-      : `${total} von ${tracked} mit Anzeigen-Daten`;
-    $$("#companyTable th[data-sort]").forEach(th => {
-      th.classList.toggle("sorted-asc", th.dataset.sort === COMP.sort && COMP.direction === "asc");
-      th.classList.toggle("sorted-desc", th.dataset.sort === COMP.sort && COMP.direction === "desc");
-    });
-
-    const body = $("#companyTableBody");
-    body.innerHTML = shown.map(m => {
-      const cats = m.ads_by_category || {};
-      const delta = m.delta_ads;
-      let deltaHtml = "";
-      if (delta != null && delta !== 0) {
-        deltaHtml = `<span class="${delta > 0 ? "delta-up" : "delta-down"}">${delta > 0 ? "+" : ""}${delta}</span>`;
-      }
-      const note = (m.resolution_status === "confirmed" || m.resolution_status === "pending") ? "" : m.status_label;
-      const score = m.score;
-      const scoreHtml = score == null ? "—" : `
-        <div class="score-cell">
-          <div class="score-track"><div class="score-fill" style="width:${Math.max(0, Math.min(100, score))}%"></div></div>
-          <span class="score-num">${score.toFixed(0)}</span>
-        </div>`;
-      return `<tr data-cid="${m.company_id}" class="${m.company_id === selectedCompanyId ? "selected" : ""}">
-        <td class="col-dot"><span class="dot dot-${m.resolution_status}" title="${esc(STATUS_LABEL[m.resolution_status] || "")}"></span></td>
-        <td>${esc(m.company)}</td>
-        <td>${scoreHtml}</td>
-        <td class="num">${m.has_data ? (m.meta_active_ads ?? 0) : "—"}</td>
-        <td class="num">${m.has_data ? (m.google_active_ads ?? 0) : "—"}</td>
-        <td class="num">${m.has_data ? m.total_active_ads : "—"}</td>
-        <td class="num">${deltaHtml}</td>
-        <td class="num">${m.has_data ? (m.new_ads ?? "—") : "—"}</td>
-        <td class="num">${m.has_data ? (cats.recruitment || 0) : "—"}</td>
-        <td class="num">${m.has_data ? (cats.product_sale || 0) : "—"}</td>
-        <td>${esc((m.products || []).join(", "))}</td>
-        <td>${spendCell(m)}</td>
-        <td class="muted">${esc(note)}</td>
-      </tr>`;
-    }).join("")
-      + (total > RENDER_CAP
-          ? `<tr><td colspan="13" class="muted" style="text-align:center;padding:12px">
-             … ${total - RENDER_CAP} weitere ausgeblendet — suchen oder filtern zum Eingrenzen</td></tr>`
-          : "");
-    // one delegated click listener (was one-per-row over thousands of rows)
-    if (!body.dataset.wired) {
-      body.dataset.wired = "1";
-      body.addEventListener("click", (e) => {
-        const tr = e.target.closest("tr[data-cid]");
-        if (tr) openCompanyDrawer(Number(tr.dataset.cid));
-      });
-    }
-  }
-
-  function wireCompanyTableControls() {
-    COMP_DROP.segment = mountCheckDropdown("compSegmentDrop", { placeholder: "All segments", onChange: renderCompanyTable });
-    COMP_DROP.subSegment = mountCheckDropdown("compSubSegmentDrop", { placeholder: "All sub-segments", onChange: renderCompanyTable });
-    COMP_DROP.kv = mountCheckDropdown("compKvDrop", { placeholder: "All KV", onChange: renderCompanyTable });
-
-    const debouncedRender = debounce(renderCompanyTable, 200);
-    ["compSearch", "compMinTotal", "compMinMeta", "compMinGoogle"].forEach(id =>
-      $(`#${id}`).addEventListener("input", debouncedRender));
-    $("#compStatus").addEventListener("change", renderCompanyTable);
-    $("#compRevenueHistory").addEventListener("change", renderCompanyTable);
-    $("#compMoreFiltersBtn").addEventListener("click", () => {
-      const nowHidden = $("#compMoreFilters").classList.toggle("hidden");
-      $("#compMoreFiltersBtn").textContent = nowHidden ? "Filter ▾" : "Filter ▲";
-    });
-    $("#compClearFilterBtn").addEventListener("click", () => {
-      $("#compSearch").value = ""; $("#compStatus").value = "";
-      $("#compMinTotal").value = ""; $("#compMinMeta").value = ""; $("#compMinGoogle").value = "";
-      COMP_DROP.segment.clear(); COMP_DROP.subSegment.clear(); COMP_DROP.kv.clear();
-      $("#compRevenueHistory").value = "";
-      renderCompanyTable();
-    });
-    $$("#companyTable th[data-sort]").forEach(th => th.addEventListener("click", () => {
-      const key = th.dataset.sort;
-      if (COMP.sort === key) COMP.direction = COMP.direction === "asc" ? "desc" : "asc";
-      else { COMP.sort = key; COMP.direction = "desc"; }
-      renderCompanyTable();
-    }));
-  }
-
-  // ------------------------------------------------------------------ detail panel
-  async function loadDetail(cid) {
-    const panel = $("#detailPanel");
-    let data;
-    try {
-      data = await api(`/api/companies/${cid}/detail`);
-    } catch (e) {
-      panel.classList.remove("hidden");
-      panel.innerHTML = `<p class="muted">Failed to load detail: ${esc(e.message)}</p>`;
-      return;
-    }
-    const m = data.metric, week = data.week, hist = data.history;
-
-    let html = `<div class="detail-head"><h2>${esc(m.company)}</h2>
-      <button class="btn btn-sm fetch-company-btn" ${STATE.fetch_running ? "disabled" : ""}
-              title="Fetch only this company's data">Fetch this company</button>
-    </div>`;
-    html += `<div class="detail-kpis">
-      <div class="kpi"><div class="kpi-label">Score</div><div class="kpi-value">${m.score != null ? m.score.toFixed(0) + "/100" : "—"}</div></div>
-      <div class="kpi"><div class="kpi-label">Active ads</div><div class="kpi-value">${m.has_data ? m.total_active_ads : "—"}</div></div>
-      <div class="kpi"><div class="kpi-label">New this week</div><div class="kpi-value">${m.has_data ? (m.new_ads ?? "—") : "—"}</div></div>
-      <div class="kpi"><div class="kpi-label">Est. spend / wk</div><div class="kpi-value">${spendCell(m)}</div></div>
-    </div>`;
-
-    if (m.resolution_status === "no_ads_found") {
-      html += `<div class="warning-box">A name search returned zero ads. Either the name doesn't match the
-        Ad Library, or they genuinely run no ads — verify in the Companies &amp; Pages tab.</div>`;
-    }
-
-    if (week.has_run && week.pages.length) {
-      html += `<div class="detail-section-title">Pages contributing this week</div>`;
-      html += week.pages.map(p => {
-        const link = !p.page_id ? "" : p.source === "google"
-          ? ` · <a class="link" href="https://adstransparency.google.com/advertiser/${esc(p.page_id)}" target="_blank">Open Google Ads Transparency ↗</a>`
-          : ` · <a class="link" href="${esc(fbPageUrl(p.page_id))}" target="_blank">Open Facebook page ↗</a>`;
-        return `<div class="page-row">
-          <span class="dot dot-${p.status === "ok" ? "confirmed" : (p.status === "error" ? "no_ads_found" : "pending")}"></span>
-          <b>${esc(p.page_name || p.page_id)}</b><span class="role-badge">${esc(p.source || "meta")}</span><span class="role-badge">${esc(p.role || "main")}</span>
-          — ${p.ads} ads · fetched ${esc(p.run_date)}${link}
-        </div>`;
-      }).join("");
-    }
-
-    if (hist.length > 1) {
-      html += `<div class="detail-section-title">Weekly trend</div>
-        <div class="charts-row">
-          <div class="chart-box"><div class="chart-title">Active ads · Hiring · Selling</div><canvas id="chartAds"></canvas></div>
-          <div class="chart-box"><div class="chart-title">Score</div><canvas id="chartScore"></canvas></div>
-        </div>`;
-    } else if (hist.length === 1) {
-      html += `<p class="hint">One week of data so far — trends appear from the second week on.</p>`;
-    }
-
-    if (week.has_run && week.ads.length) {
-      html += `<div class="detail-section-title">All ads (latest week)</div>
-        <div class="table-wrap"><table><thead><tr>
-          <th>Platform</th><th>Category</th><th>Product</th><th>From page</th><th>CTA</th><th>Media</th>
-          <th class="num">EU reach</th><th>Start</th><th>Ad text</th><th>Links</th>
-        </tr></thead><tbody>` +
-        week.ads.map(a => `<tr>
-          <td>${esc(a.source || "meta")}</td>
-          <td>${esc(CATEGORY_LABELS[a.category] || a.category)}</td>
-          <td>${esc(a.product || "")}</td>
-          <td>${esc(a.page_name || "")}</td>
-          <td>${esc(a.cta || "")}</td>
-          <td>${esc(a.media_type || "")}</td>
-          <td class="num">${a.reach ?? ""}</td>
-          <td>${esc(a.start_date || "")}</td>
-          <td style="white-space:normal;max-width:340px">${esc(a.ad_text || "")}</td>
-          <td>${a.ad_library_url ? `<a class="link" href="${esc(a.ad_library_url)}" target="_blank">View ad ↗</a>` : ""}
-              ${a.landing_url ? `<br><a class="link" href="${esc(a.landing_url)}" target="_blank">Landing ↗</a>` : ""}</td>
-        </tr>`).join("") +
-        `</tbody></table></div>`;
-    }
-
-    panel.classList.remove("hidden");
-    panel.innerHTML = html;
-    $(".fetch-company-btn", panel).addEventListener("click", () => startFetch(cid));
-
-    if (hist.length > 1) {
-      const labels = hist.map(h => h.week_start);
-      drawLineChart($("#chartAds"), labels, [
-        { data: hist.map(h => h.total_active_ads), color: "#2f5fa8" },
-        { data: hist.map(h => h.recruitment), color: "#a86a1f" },
-        { data: hist.map(h => h.product_sale), color: "#1f8a5f" },
-      ]);
-      drawLineChart($("#chartScore"), labels, [
-        { data: hist.map(h => h.score || 0), color: "#2f5fa8" },
-      ], { min: 0, max: 100 });
-    }
-  }
-
-  // Small hand-rolled multi-line chart — no dependency, no build step.
-  function drawLineChart(canvas, labels, series, fixedRange) {
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth || 360, h = canvas.clientHeight || 160;
-    canvas.width = w * dpr; canvas.height = h * dpr;
-    const ctx = canvas.getContext("2d");
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, w, h);
-
-    const pad = 8;
-    const allVals = fixedRange ? [fixedRange.min, fixedRange.max] : series.flatMap(s => s.data);
-    const min = fixedRange ? fixedRange.min : Math.min(0, ...allVals);
-    const max = fixedRange ? fixedRange.max : Math.max(1, ...allVals);
-    const n = labels.length;
-    const x = (i) => pad + (i / Math.max(n - 1, 1)) * (w - 2 * pad);
-    const y = (v) => h - pad - ((v - min) / Math.max(max - min, 1e-9)) * (h - 2 * pad);
-
-    series.forEach(s => {
-      ctx.beginPath();
-      s.data.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)));
-      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
-      s.data.forEach((v, i) => {
-        ctx.beginPath(); ctx.arc(x(i), y(v), 2.4, 0, 7); ctx.fillStyle = s.color; ctx.fill();
-      });
-    });
   }
 
   // ------------------------------------------------------------------ per-row page management (Companies tab)
@@ -3235,7 +2960,6 @@
       showTab(tab.dataset.tab);
     }));
     wireCustomers();
-    wireCompanyTableControls();
     wireChancen();
     wirePruefen();
     wireObjekte();
@@ -5100,9 +4824,6 @@
       CUST_DROP.excludeKv.setOptions(opts.kv);
       CUST_DROP.excludeSegment.setOptions(opts.segment);
       CUST_DROP.excludeSubSegment.setOptions(opts.sub_segment);
-      COMP_DROP.kv.setOptions(opts.kv);
-      COMP_DROP.segment.setOptions(opts.segment);
-      COMP_DROP.subSegment.setOptions(opts.sub_segment);
     } catch (e) { /* no data yet */ }
   }
 
