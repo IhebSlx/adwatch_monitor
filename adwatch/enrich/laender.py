@@ -134,6 +134,25 @@ _STOPP = {
 # sind kürzer — fast durchweg Weiler, deren Namen zugleich Alltagswörter sind.
 _MIN_LAENGE = 5
 
+# Ab so vielen Postleitzahlen gilt ein Ort als STARKER Beleg — stark genug, um
+# ein fremdes Land allein zu tragen.
+#
+# WARUM ES DIESE SCHRANKE BRAUCHT, gemessen an 1.483 deutschen Büros:
+# `abdelkader.de` kam auf „aktiv in Spanien", und die Belege lauteten
+# `cristina, felix, roman, teresa`. Das sind die VORNAMEN von der Team-Seite —
+# und `plz_geo` führt zu jedem davon ein Dorf. Vier kleine Orte à 1-2 Punkte
+# ergaben zusammen die Schwelle, ohne dass ein einziger echter Hinweis auf
+# Spanien im Text stand. Der tiefere Crawl verschärft das sogar, weil er mehr
+# Team- und Kreditseiten liest.
+#
+# Eine Namensliste wäre der falsche Weg (sie wird nie fertig). Stattdessen:
+# ein Land erreicht „sicher" NUR mit mindestens einem starken Beleg —
+# Telefonvorwahl, ausgeschriebener Ländername, kuratiertes Exonym oder eine
+# Stadt dieser Größe. Vornamen fallen damit strukturell heraus, auch die, die
+# noch niemand gesehen hat. Sie verschwinden nicht: das Land steht weiter als
+# „möglich" mit seinen Belegen da.
+_GROSSE_STADT = 10
+
 _index_lock = threading.Lock()
 _ORT_INDEX: dict[str, dict[str, int]] | None = None
 
@@ -336,21 +355,28 @@ def laender_aus_text(roh: str, heimat: str | None = None,
     punkte: dict[str, int] = defaultdict(int)
     belege: dict[str, list[str]] = defaultdict(list)
     unsicher: list[str] = []
+    # Länder mit mindestens EINEM starken Beleg. Siehe _GROSSE_STADT.
+    stark: set[str] = set()
 
     # Vorwahl — das stärkste Signal, deshalb das höchste Gewicht
     for land, n in _vorwahl_laender(roh).items():
         punkte[land] += 5 * min(n, 3)
         belege[land].append(f"Vorwahl {[k for k, v in LAND_VORWAHL.items() if v == land][0]}")
+        stark.add(land)
 
     # Ländername im Klartext
     for land, woerter in _namen_laender(gefaltet).items():
         punkte[land] += 4
         belege[land].append(woerter[0])
+        stark.add(land)
 
     # Ortsnamen — mehrdeutige gehen durch die Stichentscheid-Kette
     for land, treffer in _ort_treffer(roh).items():
         for name, laender in treffer:
-            gewicht = _ortsgewicht(laender.get(land, 1))
+            groesse = laender.get(land, 1)
+            gewicht = _ortsgewicht(groesse)
+            if groesse >= _GROSSE_STADT:
+                stark.add(land)
             if len(laender) == 1:
                 punkte[land] += gewicht
                 belege[land].append(name)
@@ -367,6 +393,7 @@ def laender_aus_text(roh: str, heimat: str | None = None,
     if heimat:
         punkte[heimat] += 4
         belege[heimat].append("Büroadresse")
+        stark.add(heimat)
 
     # TLD nur als schwacher Zusatz, nie als alleiniger Beleg
     if tld and tld.upper() in set(LAND_VORWAHL.values()):
@@ -375,7 +402,11 @@ def laender_aus_text(roh: str, heimat: str | None = None,
 
     aus = {}
     for land, p in punkte.items():
-        aus[land] = {"punkte": p, "sicherheit": _stufe(p),
+        stufe = _stufe(p)
+        # Ohne EINEN starken Beleg kommt kein Land über „möglich" hinaus.
+        if stufe == "sicher" and land not in stark:
+            stufe = "moeglich"
+        aus[land] = {"punkte": p, "sicherheit": stufe,
                      "belege": sorted(set(belege[land]))[:8]}
     return {"laender": dict(sorted(aus.items(), key=lambda x: -x[1]["punkte"])),
             "unsicher": sorted(set(unsicher))[:10]}

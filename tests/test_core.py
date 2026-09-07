@@ -5347,3 +5347,66 @@ def test_beziehungsstufe_gewonnenes_objekt_schlaegt_lead(temp_db, monkeypatch):
     assert stufen["Nur Lead"] == 1
     assert stufen["Unbekannt"] == 0
     assert r["warm"] == 1
+
+
+def test_laender_vornamen_tragen_kein_land(temp_db, monkeypatch):
+    """Gemessen an 1.483 deutschen Bueros: abdelkader.de kam auf 'aktiv in
+    Spanien', und die Belege waren `cristina, felix, roman, teresa` -- die
+    VORNAMEN der Team-Seite, zu denen plz_geo je ein Dorf fuehrt. Vier kleine
+    Orte ergaben zusammen die Schwelle, ohne einen echten Hinweis auf Spanien.
+
+    Die Schranke dagegen ist strukturell, nicht als Namensliste: 'sicher'
+    braucht mindestens EINEN starken Beleg -- Vorwahl, Landesname, Exonym oder
+    eine Stadt ab _GROSSE_STADT Postleitzahlen."""
+    from adwatch.enrich import laender
+
+    monkeypatch.setattr(laender, "_ORT_INDEX", {
+        "cristina": {"ES": 1}, "teresa": {"ES": 2}, "roman": {"ES": 2},
+        "felix": {"ES": 1}, "berlin": {"DE": 181},
+    })
+    r = laender.laender_aus_text(
+        "Unser Team: Cristina, Felix, Roman und Teresa. Buero in Berlin. +49 30 1.",
+        heimat="DE", tld="de")
+    assert r["laender"]["ES"]["sicherheit"] != "sicher", \
+        "vier Kleinstorte duerfen kein Land tragen"
+    assert r["laender"]["ES"]["belege"], "sichtbar bleiben muss der Fund trotzdem"
+    assert r["laender"]["DE"]["sicherheit"] == "sicher"
+
+
+def test_laender_eine_grossstadt_ist_moeglich_zwei_sind_sicher(temp_db, monkeypatch):
+    """Eine einzelne genannte Stadt kann eine Konferenz oder ein Lieferant sein.
+    Sie wird als 'moeglich' gefuehrt, nicht verworfen und nicht behauptet."""
+    from adwatch.enrich import laender
+
+    monkeypatch.setattr(laender, "_ORT_INDEX", {
+        "barcelona": {"ES": 46}, "madrid": {"ES": 63}, "hamburg": {"DE": 42},
+    })
+    eine = laender.laender_aus_text(
+        "Buero Hamburg +49 40 1. Projekt in Barcelona.", heimat="DE", tld="de")
+    assert eine["laender"]["ES"]["sicherheit"] == "moeglich"
+
+    zwei = laender.laender_aus_text(
+        "Buero Hamburg +49 40 1. Projekte in Barcelona und Madrid.",
+        heimat="DE", tld="de")
+    assert zwei["laender"]["ES"]["sicherheit"] == "sicher"
+
+
+def test_projektseiten_werden_auch_im_singular_erkannt():
+    """Der gemeinsame Link-Katalog kennt nur die Mehrzahl (`projekte`,
+    `projects`). Einzelne Projekte liegen aber fast immer im Singular --
+    endersweissbangert.de fuehrt die Uebersicht unter /projekte und die
+    Projekte unter /project/... . Ohne diese Regel wurde KEINE Detailseite
+    gelesen, also genau die Seiten, auf denen der Ort steht."""
+    from adwatch.enrich import laenderlauf as LL
+
+    uebersicht = "https://www.endersweissbangert.de/projekte"
+    assert LL._ist_projektseite(
+        "https://www.endersweissbangert.de/project/kiju-am-sportplatz", uebersicht)
+    assert LL._ist_projektseite(
+        "https://www.praglowski.de/projekt/kita/?portfolioCats=18", uebersicht)
+    # Assets und der Ruecksprung auf die Uebersicht zaehlen nicht
+    assert not LL._ist_projektseite(uebersicht, uebersicht)
+    assert not LL._ist_projektseite(
+        "https://www.endersweissbangert.de/wp-content/uploads/favicon.png", uebersicht)
+    assert not LL._ist_projektseite(
+        "https://www.endersweissbangert.de/xmlrpc.php", uebersicht)
