@@ -303,6 +303,14 @@ _ARCH_FUELLWOERTER = {
     "architects", "architecten", "architectuur", "arquitectes", "arquitectos",
     "arquitectura", "arkitekter", "arkitektkontor", "arkitekt", "architecture",
     "architetti", "planungsbuero", "buero",
+    # Bindewörter. „&" faellt schon als Satzzeichen weg, das WORT dafuer nicht —
+    # und genau daran ist „Patrick Genard & Asociados SL" gegen „Patrick Genard
+    # y Asociados SLP" durchgerutscht: gleiche Domain, gleicher Ort, gleiches
+    # Buero, und trotzdem zwei Zeilen, weil ein spanisches „y" uebrig blieb.
+    "und", "and", "y", "et", "en", "e", "i", "plus",
+    # Partner-Floskeln tragen ebenso wenig Identitaet wie eine Rechtsform
+    "partner", "partners", "partnerschaft", "asociados", "asociats",
+    "associates", "associati", "associes", "kollegen", "collegen",
 }
 
 
