@@ -291,6 +291,20 @@
           </select>
           <input type="checkbox" id="custHasWebsite">
           <input type="checkbox" id="custNoWebsite">
+          <!-- Tätigkeitsland: WO das Büro baut, nicht wo es sitzt. Kommt aus
+               der Website (enrich/laender.py), nicht aus der Postadresse — ein
+               Düsseldorfer Büro mit Projekten auf Mallorca gehört zu Spanien. -->
+          <div id="custActiveCountryDrop"></div>
+          <label><input type="checkbox" id="custActiveCountryLose"> auch „möglich"</label>
+          <!-- Beziehungsstufe 0-5 aus dem CRM (insights/beziehung.py). Architekten
+               kaufen nichts, deshalb eine Leiter statt eines Häkchens. -->
+          <select id="custRelationMin" title="Wie weit sind wir mit diesem Büro schon? 5 = gemeinsames Objekt gewonnen · 4 = auf einer Verkaufschance benannt · 3 = Schriftverkehr vorhanden · 2 = als Debitor angelegt · 1 = als Lead erfasst">
+            <option value="">Beziehung: alle</option>
+            <option value="5">5 — gemeinsames Objekt gewonnen</option>
+            <option value="4">4+ — auf einer Verkaufschance benannt</option>
+            <option value="3">3+ — Schriftverkehr vorhanden</option>
+            <option value="1">1+ — überhaupt schon berührt</option>
+          </select>
           <input type="number" id="custFitMin">
           <select id="custRelevance" title="Solarlux-Relevanz eines Architektur-/Planungsbüros — bewertet aus den Projekttypen der Website, nicht aus dem Wortlaut. hoch = Villen, Hotels, Neubau mit offener Architektur · mittel = Hochbau ohne Schwerpunkt auf der Gebäudehülle · gering = keine Gebäudehülle (Innenarchitektur, Infrastruktur, Stadtplanung)">
             <option value="">Solarlux-Relevanz: alle</option>

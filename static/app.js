@@ -4272,6 +4272,10 @@
       sub_segment: CUST_DROP.subSegment.getSelected(),
       sales_channel: CUST_DROP.salesChannel.getSelected(),
       country: CUST_DROP.country.getSelected(),
+      // Tätigkeitsland aus der Website — WO gebaut wird, nicht wo das Büro sitzt
+      active_country: CUST_DROP.activeCountry ? CUST_DROP.activeCountry.getSelected() : [],
+      active_country_lose: $("#custActiveCountryLose").checked,
+      relation_min: $("#custRelationMin").value ? Number($("#custRelationMin").value) : null,
       has_website: $("#custHasWebsite").checked,
       no_website: $("#custNoWebsite").checked,
       enrichment_status: $("#custEnrichStatus").value ? [$("#custEnrichStatus").value] : [],
@@ -4662,14 +4666,25 @@
       CUST_DROP.subSegment.setOptions(opts.sub_segment);
       CUST_DROP.salesChannel.setOptions(opts.sales_channel);
       CUST_DROP.country.setOptions(opts.country);
+      CUST_DROP.activeCountry.setOptions(opts.active_country || []);
       CUST_DROP.excludeKv.setOptions(opts.kv);
       CUST_DROP.excludeSegment.setOptions(opts.segment);
       CUST_DROP.excludeSubSegment.setOptions(opts.sub_segment);
     } catch (e) { /* no data yet */ }
   }
 
+  // Laufnummer gegen überholte Antworten. Ohne sie kann ein bereits laufender
+  // Nachlade-Aufruf (Seite 2, 3 vom Endlos-Scrollen) NACH einer frisch
+  // gefilterten Seite 1 eintreffen und seine alten Zeilen anhängen: die
+  // Tabelle zeigt dann 46.810 Firmen, während der Filter längst 77 meint.
+  // Gemessen beim Einbau des Tätigkeitsland-Filters — die Anfragen gingen in
+  // der Reihenfolge Seite 2 (ohne Filter), Seite 3 (ohne), Seite 1 (mit) raus.
+  // Dieselbe Klasse Fehler wie damals bei den Kartenpins („76.128 von 42.683").
+  let _custLauf = 0;
+
   async function loadCustomers(append = false) {
     if (!append) CUST.page = 1;   // any filter/sort reload starts from the top
+    const meineNummer = ++_custLauf;
     CUST.filters = currentCustomerFilters();
     const params = new URLSearchParams();
     Object.entries(CUST.filters).forEach(([k, v]) => {
@@ -4681,6 +4696,7 @@
     params.set("page", CUST.page);
     params.set("page_size", CUST.pageSize);
     const data = await api(`/api/customers?${params.toString()}`);
+    if (meineNummer !== _custLauf) return;   // überholt — diese Antwort ist alt
     CUST.total = data.total;
     renderCustomers(data, append);
     updateFilterBadge();
@@ -4712,7 +4728,11 @@
     umsatz: ["revenue_min", "revenue_max", "revenue_history"],
     kv: ["kv", "exclude_kv"],
     segment: ["segment", "exclude_segment", "solarlux_relevance", "decision_role", "solarlux_fit"],
-    subseg: ["sub_segment", "exclude_sub_segment"], kanal: ["sales_channel"], land: ["country"],
+    subseg: ["sub_segment", "exclude_sub_segment"], kanal: ["sales_channel"],
+    // Die Spalte „Land" trägt jetzt ZWEI Dinge: die Postadresse (country) und
+    // das Tätigkeitsland aus der Website (active_country). Beide gehören unter
+    // dieselbe Überschrift, weil man sie beim Filtern gegeneinander abwägt.
+    land: ["country", "active_country", "relation_min"],
   };
   function _filterActive(f, key) {
     const v = f[key];
@@ -5622,6 +5642,9 @@
     CUST_DROP.subSegment = mountCheckDropdown("custSubSegmentDrop", { placeholder: "All sub-segments", onChange: applyNow });
     CUST_DROP.salesChannel = mountCheckDropdown("custChannelDrop", { placeholder: "All channels", onChange: applyNow });
     CUST_DROP.country = mountCheckDropdown("custCountryDrop", { placeholder: "All countries", onChange: applyNow });
+    CUST_DROP.activeCountry = mountCheckDropdown("custActiveCountryDrop", { placeholder: "Tätig in …", onChange: applyNow });
+    $("#custActiveCountryLose").addEventListener("change", applyNow);
+    $("#custRelationMin").addEventListener("change", applyNow);
     CUST_DROP.excludeKv = mountCheckDropdown("custExcludeKvDrop", { placeholder: "Exclude KV", onChange: applyNow });
     CUST_DROP.excludeSegment = mountCheckDropdown("custExcludeSegmentDrop", { placeholder: "Exclude segment", onChange: applyNow });
     CUST_DROP.excludeSubSegment = mountCheckDropdown("custExcludeSubSegmentDrop", { placeholder: "Exclude sub-segment", onChange: applyNow });
@@ -5690,6 +5713,17 @@
     $("#custActionsBtn").addEventListener("click", (e) => {
       e.stopPropagation();
       actionsPanel.classList.toggle("hidden");
+      // Im Fenster halten. Das Panel ist 230 px breit; stünde der Knopf nahe
+      // am rechten Rand, ragte es hinaus und der überstehende Teil wäre nicht
+      // anklickbar — genau der Fehler, den die linke Verankerung gerade
+      // behoben hat, nur spiegelverkehrt. Die Klammer misst NACH dem Aufklappen
+      // und schiebt zurück, statt sich auf eine feste Ausrichtung zu verlassen.
+      if (!actionsPanel.classList.contains("hidden")) {
+        actionsPanel.style.left = "0px";
+        const r = actionsPanel.getBoundingClientRect();
+        const ueber = r.right - (window.innerWidth - 12);
+        if (ueber > 0) actionsPanel.style.left = `${-Math.round(ueber)}px`;
+      }
     });
     actionsPanel.addEventListener("click", () => actionsPanel.classList.add("hidden"));
     document.addEventListener("click", () => actionsPanel.classList.add("hidden"));
@@ -5754,7 +5788,25 @@
       subseg: () => _incExcSection("Nur diese Untersegmente", () => CUST_DROP.subSegment, CUST_OPTS.sub_segment, "thm-inc-sub")
         + _incExcSection("Ausschließen", () => CUST_DROP.excludeSubSegment, CUST_OPTS.sub_segment, "thm-exc-sub"),
       kanal: () => _incExcSection("Nur diese Vertriebswege", () => CUST_DROP.salesChannel, CUST_OPTS.sales_channel, "thm-inc-chan"),
-      land: () => _incExcSection("Nur diese Länder", () => CUST_DROP.country, CUST_OPTS.country, "thm-inc-land"),
+      // Zwei verschiedene Fragen unter derselben Überschrift, und die
+      // Beschriftung muss den Unterschied tragen: „Sitz" ist die Postadresse
+      // aus dem CRM, „tätig in" kommt von der Website. Ein Düsseldorfer Büro
+      // mit Projekten auf Mallorca hat Sitz DE und ist tätig in ES.
+      land: () => _incExcSection("Sitz (Postadresse)", () => CUST_DROP.country,
+                                 CUST_OPTS.country, "thm-inc-land")
+        + _incExcSection("Tätig in (aus der Website)", () => CUST_DROP.activeCountry,
+                         CUST_OPTS.active_country || [], "thm-inc-aktivland")
+        + `<div class="thm-sec">
+             <label class="thm-item"><input type="checkbox" id="thmAktivLose"
+               ${$("#custActiveCountryLose").checked ? "checked" : ""}>
+               <span>auch „möglich" mitzählen</span></label>
+             <div class="thm-hint">Ohne Haken zählt nur „sicher": Vorwahl,
+               ausgeschriebener Ländername oder zwei genannte Städte. Mit Haken
+               zählt auch eine einzelne Stadt.</div>
+           </div>
+           <div class="thm-sec"><div class="thm-sec-title">Beziehung zum Büro</div>
+             <select class="thm-input" id="thmProxySel" data-target="#custRelationMin">${_optionsHtml("#custRelationMin")}</select>
+           </div>`,
     };
     const _CHECK_BINDINGS = {
       "thm-inc-status": () => CUST_DROP.status, "thm-inc-kv": () => CUST_DROP.kv,
@@ -5762,6 +5814,7 @@
       "thm-exc-seg": () => CUST_DROP.excludeSegment, "thm-inc-sub": () => CUST_DROP.subSegment,
       "thm-exc-sub": () => CUST_DROP.excludeSubSegment, "thm-inc-chan": () => CUST_DROP.salesChannel,
       "thm-inc-land": () => CUST_DROP.country,
+      "thm-inc-aktivland": () => CUST_DROP.activeCountry,
     };
 
     const thMenu = document.createElement("div");
@@ -5805,6 +5858,10 @@
         if (e.key === "Enter") { $("#custSearch").value = e.target.value; closeThMenu(); applyNow(); }
       });
       $("#thmFitMin", thMenu)?.addEventListener("change", e => _setVal("#custFitMin", e.target.value));
+      $("#thmAktivLose", thMenu)?.addEventListener("change", e => {
+        $("#custActiveCountryLose").checked = e.target.checked;
+        applyNow();
+      });
       $("#thmWebsite", thMenu)?.addEventListener("change", e => {
         _chk("#custHasWebsite", e.target.value === "with");
         _chk("#custNoWebsite", e.target.value === "without");

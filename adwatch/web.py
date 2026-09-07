@@ -1067,6 +1067,14 @@ def list_customers_route(
     solarlux_relevance: list[str] = Query(default=[]),
     office_type: list[str] = Query(default=[]), decision_role: list[str] = Query(default=[]),
     solarlux_fit: list[str] = Query(default=[]),
+    # Taetigkeitsland aus der Website (enrich/laender.py) + Beziehungsstufe.
+    # MUESSEN hier stehen: FastAPI verwirft jeden Query-Parameter, den die
+    # Signatur nicht kennt, ohne Fehlermeldung. Genau das ist passiert --
+    # ?active_country=ES kam beim Filter nie an, und die Tabelle zeigte
+    # unveraendert alle 46.810 Firmen, waehrend die Anfrage korrekt aussah.
+    active_country: list[str] = Query(default=[]),
+    active_country_lose: bool = False,
+    relation_min: int | None = None,
     sort: str | None = None, direction: str = "asc", page: int = 1, page_size: int = 50,
 ):
     filters = {"q": q, "kv": kv, "segment": segment, "sub_segment": sub_segment,
@@ -1085,7 +1093,10 @@ def list_customers_route(
                # that list rankable ("Relevanz hoch, vergibt Aufträge" first).
                "lead_source": lead_source, "solarlux_relevance": solarlux_relevance,
                "office_type": office_type, "decision_role": decision_role,
-               "solarlux_fit": solarlux_fit}
+               "solarlux_fit": solarlux_fit,
+               "active_country": active_country,
+               "active_country_lose": active_country_lose,
+               "relation_min": relation_min}
     return customers.query_companies(filters, sort, direction, page, page_size)
 
 

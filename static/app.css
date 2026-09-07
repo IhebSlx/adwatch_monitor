@@ -21,6 +21,9 @@
   --bg: #f4f5f8;
   --bg-subtle: #eef0f4;
   --card: #ffffff;
+  /* Fläche für SCHWEBENDE Menüs — immer deckend. Siehe die Begründung im
+     dunklen Block; im hellen Design ist sie ohnehin dieselbe wie --card. */
+  --menu: #ffffff;
   --border: #e7e9ef;
   --border-strong: #d4d8e0;
 
@@ -95,6 +98,16 @@
   --bg: #05060f;
   --bg-subtle: #0a0e20;
   --card: rgba(24, 31, 58, .74);
+  /* SCHWEBENDE Menüs bekommen eine DECKENDE Fläche, Karten nicht.
+     `--card` ist zu 74 % deckend, weil eine Karte auf dem Verlauf liegen und
+     ihn durchscheinen lassen soll — bei einer Karte ist das Tiefe. Bei einem
+     Menü, das ÜBER einer Tabelle aufklappt, ist es ein Fehler: Iheb hat ein
+     Aktionsmenü geschickt, durch das die Spalte „Website" und eine Reihe
+     „Pages"-Knöpfe hindurchschienen, und die Einträge waren nicht mehr zu
+     lesen. Ein Menü hat keinen Hintergrund zum Zeigen — es hat einen zu
+     verdecken. Betraf alle drei Menüarten (.action-menu-panel, .selhead-menu,
+     .th-menu), weil alle drei --card benutzten. */
+  --menu: #1b2240;
   --border: rgba(124, 140, 255, .20);
   --border-strong: rgba(124, 140, 255, .38);
 
@@ -439,7 +452,7 @@ tr.id-locked-row td { background: color-mix(in srgb, var(--accent) 4.5%, transpa
 .selhead-caret:hover { background: var(--bg-subtle); color: var(--ink); }
 .selhead-menu {
   position: fixed; z-index: 60; min-width: 190px; padding: 5px;
-  background: var(--card); border: 1px solid var(--border);
+  background: var(--menu); border: 1px solid var(--border);
   border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
 }
 .selhead-menu button {
@@ -1000,8 +1013,14 @@ main { max-width: none; }
 /* ---- "Aktionen (gefiltert)" dropdown ---- */
 .action-menu { position: relative; display: inline-block; }
 .action-menu-panel {
-  position: absolute; right: 0; top: calc(100% + 5px); z-index: 60; min-width: 230px;
-  background: var(--card); border: 1px solid var(--border-strong); border-radius: 12px;
+  /* left statt right: der Knopf sitzt am LINKEN Rand der Filterzeile, und ein
+     230px breites Panel mit right:0 an einem 174px breiten Anker ragte 39px
+     aus dem Fenster heraus — der linke Teil war schlicht nicht anklickbar.
+     Die JS-Klammer in wireCustomers() haelt es zusaetzlich im Fenster, falls
+     der Knopf spaeter woanders steht. */
+  position: absolute; left: 0; right: auto; top: calc(100% + 5px);
+  z-index: 60; min-width: 230px; max-width: calc(100vw - 24px);
+  background: var(--menu); border: 1px solid var(--border-strong); border-radius: 12px;
   box-shadow: var(--shadow-lg); padding: 5px; display: flex; flex-direction: column;
 }
 .action-menu-item {
@@ -1057,13 +1076,16 @@ th.sorted-desc .th-caret::after { content: " ↓"; color: var(--accent); }
 }
 .th-menu {
   position: fixed; z-index: 90; max-height: 420px; overflow-y: auto;
-  background: var(--card); border: 1px solid var(--border-strong);
+  background: var(--menu); border: 1px solid var(--border-strong);
   border-radius: 12px; box-shadow: var(--shadow-lg); padding: 10px 12px 12px;
 }
 .thm-head { font-weight: 700; font-size: 12.5px; margin-bottom: 6px; }
 .thm-sec { padding: 8px 0 2px; border-top: 1px solid var(--border); }
 .thm-sec-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
   color: var(--muted); font-weight: 650; margin-bottom: 5px; }
+/* Erklaerzeile unter einem Menuepunkt: sagt, was der Haken BEDEUTET, statt
+   den Nutzer raten zu lassen, ob 'moeglich' viel oder wenig ist. */
+.thm-hint { font-size: 11px; color: var(--muted); line-height: 1.45; margin-top: 5px; }
 .thm-sort { display: flex; gap: 6px; }
 .thm-input { width: 100%; font: inherit; font-size: 13px; padding: 6px 9px;
   border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-subtle); }
@@ -1460,8 +1482,24 @@ tr.arm-kontrolle td { color: var(--muted); }
   pointer-events: none;
   background: radial-gradient(110% 60% at 8% 0%, rgba(139, 92, 246, .10), transparent 60%);
 }
-[data-theme="dunkel"] .card > *,
-[data-theme="dunkel"] .kpi > * { position: relative; z-index: 1; }
+/* Der Lichtabfall liegt HINTER dem Inhalt — und zwar dadurch, dass er selbst
+   nach hinten geht, nicht dadurch, dass alle Kinder nach vorn geholt werden.
+
+   Vorher stand hier `.card > * { position: relative; z-index: 1 }`. Das
+   erfuellte seinen Zweck, hatte aber eine Nebenwirkung, die Iheb als
+   „durchsichtiges, nicht anklickbares Menue" gemeldet hat: JEDES direkte Kind
+   einer Karte bekam damit einen eigenen Stapelkontext. Ein Aufklappmenue
+   DARIN kam mit seinem z-index von 60 nicht mehr heraus — es konkurrierte nur
+   noch innerhalb seines Elternteils. Die Spaltenfilter-Leiste steht spaeter im
+   Dokument, hatte dieselbe Stufe 1 und malte deshalb ueber das ganze
+   Aktionsmenue, samt der Knoepfe darin.
+
+   `z-index: -1` auf dem Pseudoelement loest dasselbe Problem ohne
+   Stapelkontexte: die Karte ist wegen `backdrop-filter` ohnehin einer, also
+   bleibt der Schein darin und faellt hinter den Inhalt, nicht hinter die
+   Karte. */
+[data-theme="dunkel"] .card::before,
+[data-theme="dunkel"] .kpi::before { z-index: -1; }
 
 /* --- Tabellen: bewusst KEIN Glas ---
    46.810 Zeilen hinter Unschärfe wären unlesbar. Feste Fläche, klebriger Kopf,

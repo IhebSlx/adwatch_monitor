@@ -397,6 +397,37 @@ def _apply_filters(stmt, f: dict):
         values = f["customer_state"]
         stmt = stmt.where(Company.customer_state.in_(values) if isinstance(values, list)
                           else Company.customer_state == values)
+    # Tätigkeitsland aus der Website (enrich/laender.py) — NICHT die Postadresse.
+    # Das ist der ganze Zweck der Spalte: ein Düsseldorfer Büro mit Projekten auf
+    # Mallorca gehört zu Spanien, ein spanisches Büro ohne Website nicht.
+    #
+    # `active_countries` ist eine JSON-Liste, und SQLite hat kein Array-Enthält.
+    # Gesucht wird deshalb über LIKE '%"ES"%' auf dem Text — die Anführungszeichen
+    # sind wichtig: ohne sie fände 'ES' auch in "ESP" oder "TEST" etwas. Die
+    # Länderkürzel sind genau zwei Großbuchstaben, alles andere wird abgewiesen,
+    # damit hier nichts Beliebiges in ein LIKE-Muster wandert.
+    if f.get("active_country"):
+        werte = f["active_country"]
+        werte = werte if isinstance(werte, list) else [werte]
+        sauber = [w.strip().upper() for w in werte
+                  if isinstance(w, str) and re.fullmatch(r"[A-Za-z]{2}", w.strip())]
+        # Ein ungültiger Wert wird ABGEWIESEN, nicht stillschweigend verworfen.
+        # Ein Filter, der nichts tut, ist gefährlicher als einer, der scheitert:
+        # dieselbe Falle wie bei den erfundenen Filterschlüsseln des Chatbots,
+        # wo „nur Firmen mit cero" am Ende alle 46.810 getroffen hätte.
+        if len(sauber) != len(werte):
+            raise ValueError(
+                "active_country erwartet Länderkürzel aus zwei Buchstaben "
+                f"(z. B. 'ES'), bekommen: {werte!r}")
+        if sauber:
+            # „möglich" zählt nur mit, wenn ausdrücklich gewünscht — sonst wäre
+            # eine einzelne genannte Stadt schon ein Treffer.
+            spalte = (Company.active_countries_all if f.get("active_country_lose")
+                      else Company.active_countries)
+            stmt = stmt.where(or_(*[spalte.like(f'%"{w}"%') for w in sauber]))
+    if f.get("relation_min") is not None:
+        stmt = stmt.where(func.coalesce(Company.relation_level, 0)
+                          >= int(f["relation_min"]))
     if f.get("fit_min") is not None:
         stmt = stmt.where(Company.fit_score >= float(f["fit_min"]))
     # Identity fetch-readiness: a numeric page_id is what the Ad Library scrape
@@ -523,6 +554,11 @@ def _to_dict(c: Company) -> dict:
         "beleg_last": c.beleg_last.isoformat() if c.beleg_last else None,
         "beleg_by_year": c.beleg_by_year, "avg_discount": c.avg_discount,
         "health": c.health, "winback_score": c.winback_score,
+        # Tätigkeitsländer aus der Website + Beziehungsstufe aus dem CRM
+        "active_countries": c.active_countries or [],
+        "active_countries_all": c.active_countries_all or {},
+        "active_countries_evidence": c.active_countries_evidence or {},
+        "relation_level": c.relation_level, "relation_why": c.relation_why,
         # Angebote
         "quote_count": c.quote_count, "quote_sum": c.quote_sum,
         "conversion_rate": c.conversion_rate,
@@ -630,7 +666,24 @@ def filter_options() -> dict:
             "sub_segment": distinct(Company.sub_segment),
             "sales_channel": distinct(Company.sales_channel),
             "country": distinct(Company.country),
+            # Tätigkeitsländer: die Werte stecken in einer JSON-Liste je Zeile,
+            # also einmal einsammeln statt DISTINCT. Nur was WIRKLICH vorkommt
+            # steht zur Wahl — eine Liste aller 44 europäischen Kürzel wäre
+            # länger als die Wirklichkeit und würde leere Filter anbieten.
+            "active_country": _aktive_laender(s),
         }
+
+
+def _aktive_laender(s) -> list[str]:
+    """Alle Länder, die im Bestand als Tätigkeitsland vorkommen — sortiert
+    nach Häufigkeit, damit die häufigen oben stehen."""
+    from collections import Counter
+    zaehler: Counter = Counter()
+    for (liste,) in s.execute(select(Company.active_countries)
+                              .where(Company.active_countries.is_not(None))).all():
+        for land in (liste or []):
+            zaehler[land] += 1
+    return [land for land, _ in zaehler.most_common()]
 
 
 def count_companies() -> int:
