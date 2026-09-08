@@ -1785,12 +1785,7 @@
   };
 
   async function zeigeTaetigkeitsKarte() {
-    const wahl = $("#taetLand");
-    if (!wahl.options.length) {
-      const laender = (CUST_OPTS.active_country || ["ES"]);
-      wahl.innerHTML = laender.map(l =>
-        `<option value="${esc(l)}"${l === "ES" ? " selected" : ""}>${esc(l)}</option>`).join("");
-    }
+    taetLandFuellen();
     if (!webglDa() || typeof maplibregl === "undefined") {
       // Ohne WebGL gibt es keine MapLibre-Karte. Ehrlich sagen statt leer
       // lassen -- die anderen beiden haben einen Leaflet-Rueckfall, dieser
@@ -1810,7 +1805,7 @@
   // Dieselben Daten wie die Karte, nur als Tabelle. Bewusst EIN Abruf fuer
   // beide Ansichten -- sonst waere es zweimal derselbe Filter mit der Chance,
   // auseinanderzulaufen.
-  let TAET = { sort: "bueros", dir: "desc", daten: null };
+  let TAET = { sort: "stufe", dir: "desc", daten: null };
 
   async function taetHolen() {
     const land = $("#taetLand").value || "ES";
@@ -1821,49 +1816,73 @@
     return d;
   }
 
-  async function ladeTaetigkeitsListe() {
+  function taetLandFuellen() {
     const wahl = $("#taetLand");
-    if (!wahl.options.length) {
-      const laender = (CUST_OPTS.active_country || ["ES"]);
-      wahl.innerHTML = laender.map(l =>
-        `<option value="${esc(l)}"${l === "ES" ? " selected" : ""}>${esc(l)}</option>`).join("");
-    }
-    const d = await taetHolen();
+    if (wahl.options.length) return;
+    const laender = (CUST_OPTS.active_country || ["ES"]);
+    wahl.innerHTML = laender.map(l =>
+      `<option value="${esc(l)}"${l === "ES" ? " selected" : ""}>${esc(l)}</option>`).join("");
+  }
+
+  // EIN BUERO JE ZEILE. Die erste Fassung war nach Orten gegliedert, weil sie
+  // aus der Karte entstanden ist -- Iheb: "I am looking for the bueros, so I
+  // want the bueros to be the core of the table." Nach Orten gegliedert steht
+  // dasselbe Buero in zwanzig Zeilen, und man kann weder abhaken noch anrufen.
+  // Der Ort ist eine EIGENSCHAFT des Bueros, also eine Spalte.
+  async function ladeTaetigkeitsListe() {
+    taetLandFuellen();
+    const land = $("#taetLand").value || "ES";
+    const warm = $("#taetNurWarm").checked;
+    const d = await api("/api/taetigkeit/bueros", "POST",
+      { land, nur_warm: warm, filters: currentCustomerFilters() });
+    TAET.liste = d;
     zeichneTaetigkeitsListe();
     $("#taetListeHinweis").textContent = d.ohne_koordinate.length
-      ? `${d.ohne_koordinate.length} Orte ohne Koordinate — sie stehen in der Liste, aber nicht auf der Karte: ${d.ohne_koordinate.slice(0, 8).join(", ")}`
+      ? `${d.ohne_koordinate.length} Orte ohne Koordinate — sie stehen in dieser Liste, aber nicht auf der Karte: ${d.ohne_koordinate.slice(0, 8).join(", ")}`
       : "";
   }
 
+  const TAET_STUFE = { 5: "gemeinsames Objekt", 4: "auf einer Verkaufschance",
+                       3: "Schriftverkehr", 2: "Debitor angelegt",
+                       1: "als Lead erfasst", 0: "nur Stammdaten" };
+
   function zeichneTaetigkeitsListe() {
-    const d = TAET.daten;
+    const d = TAET.liste;
     if (!d) return;
     const richtung = TAET.dir === "asc" ? 1 : -1;
-    const zeilen = [...d.pins].sort((a, b) => {
-      const x = a[TAET.sort], y = b[TAET.sort];
-      return (typeof x === "string" ? x.localeCompare(y) : x - y) * richtung;
+    const wert = (z) => TAET.sort === "anzahl" ? z.orte.length
+      : TAET.sort === "sitz" ? (z.sitz || "") + (z.land || "")
+      : z[TAET.sort];
+    const zeilen = [...d.rows].sort((a, b) => {
+      const x = wert(a), y = wert(b);
+      const c = typeof x === "string" ? String(x).localeCompare(String(y)) : (x || 0) - (y || 0);
+      return c * richtung;
     });
-    $("#taetTableBody").innerHTML = zeilen.map(p => `
-      <tr>
-        <td><b>${esc(p.ort)}</b></td>
-        <td class="num">${p.bueros}</td>
-        <td class="num">${p.warm || "—"}</td>
-        <td class="sub">${p.flaeche ? "Region" : "Ort"}</td>
-        <td class="sub">${p.liste.slice(0, 6).map(b =>
-            `${b.stufe >= 3 ? "● " : ""}${esc(b.name)}`).join(" · ")}${
-            p.liste.length > 6 ? ` … +${p.liste.length - 6}` : ""}</td>
+    $("#taetTableBody").innerHTML = zeilen.map(z => `
+      <tr data-id="${z.id}" class="clickable">
+        <td><b>${esc(z.name)}</b></td>
+        <td class="num">${z.stufe >= 3 ? "● " : ""}${z.stufe}</td>
+        <td class="sub">${esc(TAET_STUFE[z.stufe] || "")}</td>
+        <td class="sub">${esc(z.sitz || "")}${z.land ? ` · ${esc(z.land)}` : ""}</td>
+        <td class="sub">${esc(z.rolle || "—")}</td>
+        <td class="num">${z.orte.length}</td>
+        <td class="sub">${esc(z.orte.slice(0, 8).join(", "))}${z.orte.length > 8 ? ` … +${z.orte.length - 8}` : ""}</td>
+        <td class="num">${z.gewonnen || "—"}</td>
+        <td class="sub">${z.website ? `<a class="link" href="https://${esc(z.website)}" target="_blank" rel="noopener">${esc(z.website)}</a>` : ""}</td>
       </tr>`).join("");
     $$("#taetTable thead th[data-sort]").forEach(th => {
       th.classList.toggle("sorted-asc", th.dataset.sort === TAET.sort && TAET.dir === "asc");
       th.classList.toggle("sorted-desc", th.dataset.sort === TAET.sort && TAET.dir === "desc");
     });
-    $("#taetZaehler").textContent = `${d.orte} Orte · ${d.bueros} Büros`;
+    $("#taetZaehler").textContent = `${d.bueros} Büros · ${d.orte} Orte`;
+    $$("#taetTableBody tr[data-id]").forEach(tr =>
+      tr.addEventListener("click", () => openCompanyDrawer(Number(tr.dataset.id))));
   }
 
   $$("#taetTable thead th[data-sort]").forEach(th => th.addEventListener("click", () => {
     const k = th.dataset.sort;
     if (TAET.sort === k) TAET.dir = TAET.dir === "asc" ? "desc" : "asc";
-    else { TAET.sort = k; TAET.dir = k === "ort" ? "asc" : "desc"; }
+    else { TAET.sort = k; TAET.dir = (k === "name" || k === "sitz" || k === "rolle") ? "asc" : "desc"; }
     zeichneTaetigkeitsListe();
   }));
 

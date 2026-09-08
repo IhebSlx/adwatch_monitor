@@ -623,6 +623,18 @@ def map_projekt_pins_route(status: str | None = None, min_members: int = 1,
                             min_value=min_value, lost_reason=lost_reason)
 
 
+@app.post("/api/taetigkeit/bueros")
+def taetigkeit_bueros_route(payload: dict):
+    """EIN BUERO JE ZEILE, die Orte als Spalte. Die Kartendaten (/api/map/
+    taetigkeit) sind nach ORT gegliedert -- richtig fuer Nadeln, falsch fuer
+    eine Arbeitsliste, in der man Bueros abhakt."""
+    from . import taetigkeit
+    return taetigkeit.bueros(land=str(payload.get("land") or "ES"),
+                             min_stufe=int(payload.get("min_stufe") or 0),
+                             nur_warm=bool(payload.get("nur_warm")),
+                             filters=payload.get("filters") or None)
+
+
 @app.post("/api/map/taetigkeit")
 def taetigkeit_route(payload: dict):
     """Wie unten, aber mit dem Explorer-Filter im Rumpf (wie /api/map/pins)."""

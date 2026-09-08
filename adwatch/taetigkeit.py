@@ -74,6 +74,59 @@ def _koordinaten(land: str, namen: set[str]) -> dict[str, tuple[float, float]]:
     return aus
 
 
+def bueros(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False,
+           filters: dict | None = None) -> dict:
+    """EIN BÜRO JE ZEILE — die Orte sind eine Spalte, nicht die Gliederung.
+
+    Die erste Fassung dieser Liste war nach Orten gegliedert, weil sie aus der
+    Karte entstanden ist. Iheb hat widersprochen, und zwar zu Recht: gesucht
+    werden Büros, die in einem Land bauen. Der Ort ist eine EIGENSCHAFT des
+    Büros. Nach Orten gegliedert steht dasselbe Büro in zwanzig Zeilen, und
+    man kann weder abhaken noch anrufen.
+
+    Dieselbe Auswahl wie `orte()`, nur andersherum aufgeschlüsselt — beide
+    holen sich ihre Grundmenge über denselben Filter, damit die Zahlen
+    zusammenpassen.
+    """
+    roh = orte(land=land, min_stufe=min_stufe, nur_warm=nur_warm, filters=filters)
+
+    je_buero: dict[int, dict] = {}
+    for pin in roh["pins"]:
+        for b in pin["liste"]:
+            zeile = je_buero.get(b["id"])
+            if zeile is None:
+                zeile = je_buero[b["id"]] = {
+                    "id": b["id"], "name": b["name"], "sitz": b["sitz"],
+                    "land": b["land"], "website": b["website"],
+                    "stufe": b["stufe"], "orte": [],
+                }
+            zeile["orte"].append(pin["ort"])
+
+    zeilen = list(je_buero.values())
+    # Rolle und Projekthistorie dazu — sie stehen in `companies`, und ohne sie
+    # ist die Liste eine Adressliste statt einer Arbeitsliste.
+    if zeilen:
+        with SessionLocal() as s:
+            ids = ",".join(str(z["id"]) for z in zeilen)
+            zusatz = {r[0]: r for r in s.execute(_sql(
+                "SELECT id, decision_role, relation_why, "
+                "COALESCE(arch_projects,0), COALESCE(arch_won,0), "
+                "COALESCE(arch_won_value,0) "
+                f"FROM companies WHERE id IN ({ids})")).all()}
+        for z in zeilen:
+            r = zusatz.get(z["id"])
+            z["rolle"] = (r[1] if r else None) or ""
+            z["warum"] = (r[2] if r else None) or ""
+            z["objekte"] = r[3] if r else 0
+            z["gewonnen"] = r[4] if r else 0
+            z["gewonnener_wert"] = round(r[5], 2) if r else 0.0
+            z["orte"] = sorted(set(z["orte"]))
+
+    zeilen.sort(key=lambda z: (-z["stufe"], -len(z["orte"]), z["name"] or ""))
+    return {"land": land, "rows": zeilen, "bueros": len(zeilen),
+            "orte": roh["orte"], "ohne_koordinate": roh["ohne_koordinate"]}
+
+
 def _je_buero_einmal(bueros: list[dict]) -> list[dict]:
     """Ein BÜRO je Zeile, nicht eine CRM-Zeile je Zeile.
 
