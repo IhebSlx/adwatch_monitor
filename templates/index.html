@@ -305,6 +305,19 @@
             <option value="3">3+ — Schriftverkehr vorhanden</option>
             <option value="1">1+ — überhaupt schon berührt</option>
           </select>
+          <!-- Zustandshalter fuer die sieben Spalten, die bis 2026-09-08 kein
+               Filtermenue hatten und deshalb nur "aufsteigend/absteigend"
+               zeigten: Ort, SAP, Umsatz -1..-4 und Taetig in. -->
+          <input type="text" id="custCity">
+          <select id="custSapState">
+            <option value="">SAP: alle</option>
+            <option value="with">mit SAP-Nummer</option>
+            <option value="without">ohne SAP-Nummer</option>
+          </select>
+          <input type="number" id="custRevY1Min"><input type="number" id="custRevY1Max">
+          <input type="number" id="custRevY2Min"><input type="number" id="custRevY2Max">
+          <input type="number" id="custRevY3Min"><input type="number" id="custRevY3Max">
+          <input type="number" id="custRevY4Min"><input type="number" id="custRevY4Max">
           <input type="number" id="custFitMin">
           <select id="custRelevance" title="Solarlux-Relevanz eines Architektur-/Planungsbüros — bewertet aus den Projekttypen der Website, nicht aus dem Wortlaut. hoch = Villen, Hotels, Neubau mit offener Architektur · mittel = Hochbau ohne Schwerpunkt auf der Gebäudehülle · gering = keine Gebäudehülle (Innenarchitektur, Infrastruktur, Stadtplanung)">
             <option value="">Solarlux-Relevanz: alle</option>

@@ -4276,6 +4276,16 @@
       active_country: CUST_DROP.activeCountry ? CUST_DROP.activeCountry.getSelected() : [],
       active_country_lose: $("#custActiveCountryLose").checked,
       relation_min: $("#custRelationMin").value ? Number($("#custRelationMin").value) : null,
+      city: $("#custCity").value.trim() || null,
+      sap_state: $("#custSapState").value || null,
+      revenue_y1_min: $("#custRevY1Min").value ? Number($("#custRevY1Min").value) : null,
+      revenue_y1_max: $("#custRevY1Max").value ? Number($("#custRevY1Max").value) : null,
+      revenue_y2_min: $("#custRevY2Min").value ? Number($("#custRevY2Min").value) : null,
+      revenue_y2_max: $("#custRevY2Max").value ? Number($("#custRevY2Max").value) : null,
+      revenue_y3_min: $("#custRevY3Min").value ? Number($("#custRevY3Min").value) : null,
+      revenue_y3_max: $("#custRevY3Max").value ? Number($("#custRevY3Max").value) : null,
+      revenue_y4_min: $("#custRevY4Min").value ? Number($("#custRevY4Min").value) : null,
+      revenue_y4_max: $("#custRevY4Max").value ? Number($("#custRevY4Max").value) : null,
       has_website: $("#custHasWebsite").checked,
       no_website: $("#custNoWebsite").checked,
       enrichment_status: $("#custEnrichStatus").value ? [$("#custEnrichStatus").value] : [],
@@ -4754,7 +4764,11 @@
     // Die Spalte „Land" trägt jetzt ZWEI Dinge: die Postadresse (country) und
     // das Tätigkeitsland aus der Website (active_country). Beide gehören unter
     // dieselbe Überschrift, weil man sie beim Filtern gegeneinander abwägt.
-    land: ["country", "active_country", "relation_min"],
+    land: ["country"],
+    aktivland: ["active_country", "relation_min"],
+    ort: ["city"], sap: ["sap_state"],
+    u1: ["revenue_y1_min", "revenue_y1_max"], u2: ["revenue_y2_min", "revenue_y2_max"],
+    u3: ["revenue_y3_min", "revenue_y3_max"], u4: ["revenue_y4_min", "revenue_y4_max"],
   };
   function _filterActive(f, key) {
     const v = f[key];
@@ -5668,6 +5682,13 @@
     CUST_DROP.activeCountry = mountCheckDropdown("custActiveCountryDrop", { placeholder: "Tätig in …", onChange: applyNow });
     $("#custActiveCountryLose").addEventListener("change", applyNow);
     $("#custRelationMin").addEventListener("change", applyNow);
+    // Die sieben nachgeruesteten Spaltenfilter. Ohne diese Zeilen schreibt das
+    // Kopfmenue zwar brav in den Zustandshalter, aber nichts laedt neu -- die
+    // Zahl oben blieb bei 46.810 stehen, waehrend der Filter gesetzt war.
+    ["#custCity", "#custSapState",
+     "#custRevY1Min", "#custRevY1Max", "#custRevY2Min", "#custRevY2Max",
+     "#custRevY3Min", "#custRevY3Max", "#custRevY4Min", "#custRevY4Max",
+    ].forEach(applyOnChange);
     CUST_DROP.excludeKv = mountCheckDropdown("custExcludeKvDrop", { placeholder: "Exclude KV", onChange: applyNow });
     CUST_DROP.excludeSegment = mountCheckDropdown("custExcludeSegmentDrop", { placeholder: "Exclude segment", onChange: applyNow });
     CUST_DROP.excludeSubSegment = mountCheckDropdown("custExcludeSubSegmentDrop", { placeholder: "Exclude sub-segment", onChange: applyNow });
@@ -5816,8 +5837,11 @@
       // aus dem CRM, „tätig in" kommt von der Website. Ein Düsseldorfer Büro
       // mit Projekten auf Mallorca hat Sitz DE und ist tätig in ES.
       land: () => _incExcSection("Sitz (Postadresse)", () => CUST_DROP.country,
-                                 CUST_OPTS.country, "thm-inc-land")
-        + _incExcSection("Tätig in (aus der Website)", () => CUST_DROP.activeCountry,
+                                 CUST_OPTS.country, "thm-inc-land"),
+      // Eigene Spalte, eigenes Menue. Vorher hingen die Bedienelemente unter
+      // "Land" mit dran -- wer auf "Taetig in" klickte, bekam nur Sortierung.
+      aktivland: () => _incExcSection("Tätig in (aus der Website)",
+                         () => CUST_DROP.activeCountry,
                          CUST_OPTS.active_country || [], "thm-inc-aktivland")
         + `<div class="thm-sec">
              <label class="thm-item"><input type="checkbox" id="thmAktivLose"
@@ -5830,7 +5854,31 @@
            <div class="thm-sec"><div class="thm-sec-title">Beziehung zum Büro</div>
              <select class="thm-input" id="thmProxySel" data-target="#custRelationMin">${_optionsHtml("#custRelationMin")}</select>
            </div>`,
+      ort: () => `<div class="thm-sec"><div class="thm-sec-title">Ort enthält</div>
+        <input class="thm-input" id="thmCity" type="text" placeholder="z. B. Barcelona"
+               value="${esc($("#custCity").value)}">
+        <div class="thm-hint">Teiltreffer, Gross-/Kleinschreibung egal.</div></div>`,
+      sap: () => `<div class="thm-sec"><div class="thm-sec-title">SAP-Nummer</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custSapState">${_optionsHtml("#custSapState")}</select>
+        <div class="thm-hint">6.630 Architekten haben eine, aber nur 67 je einen Beleg —
+          eine SAP-Nummer heisst „Debitor angelegt", nicht „hat gekauft".</div></div>`,
+      u1: () => _umsatzJahr(1), u2: () => _umsatzJahr(2),
+      u3: () => _umsatzJahr(3), u4: () => _umsatzJahr(4),
     };
+
+    // Umsatz eines EINZELNEN Vorjahres. Die Spalte "Umsatz akt." hatte das
+    // laengst, die vier Vorjahresspalten daneben nicht -- dort blieb nur die
+    // Sortierung uebrig.
+    function _umsatzJahr(j) {
+      return `<div class="thm-sec"><div class="thm-sec-title">Umsatz -${j} von / bis</div>
+        <div style="display:flex;gap:6px">
+          <input class="thm-input" id="thmRevMin" data-j="${j}" type="number" placeholder="von"
+                 value="${esc($(`#custRevY${j}Min`).value)}">
+          <input class="thm-input" id="thmRevMax" data-j="${j}" type="number" placeholder="bis"
+                 value="${esc($(`#custRevY${j}Max`).value)}">
+        </div>
+        <div class="thm-hint">Leere Zellen zaehlen als 0 €.</div></div>`;
+    }
     const _CHECK_BINDINGS = {
       "thm-inc-status": () => CUST_DROP.status, "thm-inc-kv": () => CUST_DROP.kv,
       "thm-exc-kv": () => CUST_DROP.excludeKv, "thm-inc-seg": () => CUST_DROP.segment,
@@ -5881,6 +5929,15 @@
         if (e.key === "Enter") { $("#custSearch").value = e.target.value; closeThMenu(); applyNow(); }
       });
       $("#thmFitMin", thMenu)?.addEventListener("change", e => _setVal("#custFitMin", e.target.value));
+      $("#thmCity", thMenu)?.addEventListener("change", e => _setVal("#custCity", e.target.value));
+      $("#thmCity", thMenu)?.addEventListener("keydown", e => {
+        if (e.key === "Enter") { _setVal("#custCity", e.target.value); closeThMenu(); }
+      });
+      $$("#thmRevMin, #thmRevMax", thMenu).forEach(el => el.addEventListener("change", () => {
+        const j = el.dataset.j;
+        const ziel = el.id === "thmRevMin" ? `#custRevY${j}Min` : `#custRevY${j}Max`;
+        _setVal(ziel, el.value);
+      }));
       $("#thmAktivLose", thMenu)?.addEventListener("change", e => {
         $("#custActiveCountryLose").checked = e.target.checked;
         applyNow();

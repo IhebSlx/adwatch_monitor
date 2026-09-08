@@ -1075,6 +1075,15 @@ def list_customers_route(
     active_country: list[str] = Query(default=[]),
     active_country_lose: bool = False,
     relation_min: int | None = None,
+    # Spalten, die sichtbar sind, aber bis 2026-09-08 kein Filtermenue hatten.
+    # FastAPI verwirft unbekannte Query-Parameter stillschweigend -- sie
+    # MUESSEN hier stehen, sonst kommen sie nie beim Filter an.
+    city: str | None = None,
+    sap_state: str | None = None,
+    revenue_y1_min: float | None = None, revenue_y1_max: float | None = None,
+    revenue_y2_min: float | None = None, revenue_y2_max: float | None = None,
+    revenue_y3_min: float | None = None, revenue_y3_max: float | None = None,
+    revenue_y4_min: float | None = None, revenue_y4_max: float | None = None,
     sort: str | None = None, direction: str = "asc", page: int = 1, page_size: int = 50,
 ):
     filters = {"q": q, "kv": kv, "segment": segment, "sub_segment": sub_segment,
@@ -1096,7 +1105,12 @@ def list_customers_route(
                "solarlux_fit": solarlux_fit,
                "active_country": active_country,
                "active_country_lose": active_country_lose,
-               "relation_min": relation_min}
+               "relation_min": relation_min,
+               "city": city, "sap_state": sap_state,
+               "revenue_y1_min": revenue_y1_min, "revenue_y1_max": revenue_y1_max,
+               "revenue_y2_min": revenue_y2_min, "revenue_y2_max": revenue_y2_max,
+               "revenue_y3_min": revenue_y3_min, "revenue_y3_max": revenue_y3_max,
+               "revenue_y4_min": revenue_y4_min, "revenue_y4_max": revenue_y4_max}
     return customers.query_companies(filters, sort, direction, page, page_size)
 
 

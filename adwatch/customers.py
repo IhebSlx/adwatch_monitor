@@ -425,6 +425,26 @@ def _apply_filters(stmt, f: dict):
             spalte = (Company.active_countries_all if f.get("active_country_lose")
                       else Company.active_countries)
             stmt = stmt.where(or_(*[spalte.like(f'%"{w}"%') for w in sauber]))
+    # --- Filter, die es fuer sichtbare Spalten bisher NICHT gab -------------
+    # Iheb: „this whole filter is wrong, is always absteigend aufsteigend".
+    # Ursache war nicht der Filter, sondern sein FEHLEN: von 19 Spalten hatten
+    # nur 12 ein Filtermenue. Bei den anderen sieben blieb im Kopfmenue nur
+    # der Sortierteil uebrig, also genau „aufsteigend/absteigend" und sonst
+    # nichts. Ort, SAP und die Umsatzjahre -1..-4 hatten dafuer nicht einmal
+    # eine Entsprechung im Backend — hier ist sie.
+    if f.get("city"):
+        stmt = stmt.where(Company.city.ilike(f"%{str(f['city']).strip()}%"))
+    if f.get("sap_state") == "with":
+        stmt = stmt.where(Company.sap_number.is_not(None), Company.sap_number != "")
+    elif f.get("sap_state") == "without":
+        stmt = stmt.where(or_(Company.sap_number.is_(None), Company.sap_number == ""))
+    for jahr in (1, 2, 3, 4):
+        spalte = getattr(Company, f"revenue_y{jahr}")
+        lo, hi = f.get(f"revenue_y{jahr}_min"), f.get(f"revenue_y{jahr}_max")
+        if lo is not None:
+            stmt = stmt.where(func.coalesce(spalte, 0) >= float(lo))
+        if hi is not None:
+            stmt = stmt.where(func.coalesce(spalte, 0) <= float(hi))
     if f.get("relation_min") is not None:
         stmt = stmt.where(func.coalesce(Company.relation_level, 0)
                           >= int(f["relation_min"]))
