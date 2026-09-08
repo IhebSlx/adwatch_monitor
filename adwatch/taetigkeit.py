@@ -74,6 +74,40 @@ def _koordinaten(land: str, namen: set[str]) -> dict[str, tuple[float, float]]:
     return aus
 
 
+def _je_buero_einmal(bueros: list[dict]) -> list[dict]:
+    """Ein BÜRO je Zeile, nicht eine CRM-Zeile je Zeile.
+
+    Iheb: „in Büros (die wärmsten zuerst) there is a lot of repetition."
+    Stimmte. Ein Büro steht im CRM oft mehrfach — mit derselben Website:
+
+        bofill.com          Bofill Architects · Ricardo Bofill- Taller de …  (3×)
+        gmp-architekten.de  GMP Architekten … · GMP Van Gerkan … · GMP von … (3×)
+        mateoclosa.com      Estudio Closa-Godoy · Esudio Closa- Godoy  (Tippfehler)
+        hofmandujardin.nl   Hofman Dujardin Holding B.V. · HofmanDujardin
+
+    Die Dublettenprüfung fängt das nicht: `Esudio` gegen `Estudio` ist ein
+    Tippfehler, `Herzog & de Meuron Basel` ein Standort. Beides sind echte,
+    getrennte CRM-Konten — nur eben EIN Büro, und in einer Ortsliste liest
+    sich dieselbe Firma dreimal wie ein Fehler.
+
+    Zusammengefasst wird deshalb hier, in der ANZEIGE, über die Domain. Die
+    Konten bleiben unangetastet; gezeigt wird die Zeile mit der höchsten
+    Beziehungsstufe, bei Gleichstand die mit dem längeren Namen (er trägt
+    meist die Rechtsform und ist der vollständigere).
+    """
+    beste: dict[str, dict] = {}
+    ohne_domain: list[dict] = []
+    for b in bueros:
+        schluessel = (b.get("website") or "").strip().lower()
+        if not schluessel:
+            ohne_domain.append(b)       # ohne Domain kein Zusammenfassen
+            continue
+        alt = beste.get(schluessel)
+        if alt is None or (b["stufe"], len(b["name"] or "")) > (alt["stufe"], len(alt["name"] or "")):
+            beste[schluessel] = b
+    return list(beste.values()) + ohne_domain
+
+
 def orte(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False,
          filters: dict | None = None) -> dict:
     """Die genannten Orte eines Landes als Kartennadeln.
@@ -132,6 +166,7 @@ def orte(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False,
             ohne.append(ort)
             continue
         lat, lng = koord[ort]
+        bueros = _je_buero_einmal(bueros)
         bueros.sort(key=lambda b: (-b["stufe"], b["name"]))
         pins.append({
             "ort": ort, "lat": round(lat, 5), "lng": round(lng, 5),

@@ -5338,3 +5338,62 @@ def test_ortsname_haelt_verbindungswoerter_klein():
 
     assert laender.ortsname("palma de mallorca") == "Palma de Mallorca"
     assert laender.ortsname("frankfurt am main") == "Frankfurt am Main"
+
+
+def test_mitarbeiterliste_ist_kein_ortsverzeichnis(temp_db, monkeypatch):
+    """Gemessen an bofill.com, das neun Seiten mit langen Credits fuehrt:
+
+        "… Daniela Flores, Victor Galera, Patricia Llasera, Luis Carpio …"
+        "… Design Principal Hernan Cortes  Management Javier Guardiola …"
+
+    Flores, Galera, Carpio, Cortes sind spanische NACHNAMEN -- und zu jedem
+    fuehrt plz_geo ein Dorf. Dadurch stand ein einziges Buero an einem Dutzend
+    erfundener Orte, und dieselben Bueros zogen sich durch die ganze Liste.
+
+    Zwei Regeln, beide ohne Nachnamensliste (die waere aussichtslos):
+    drei kommagetrennte Paare grossgeschriebener Woerter sind eine
+    Personenliste, und ein VORNAME unmittelbar davor macht aus dem naechsten
+    Wort einen Nachnamen."""
+    from adwatch.enrich import laender
+
+    monkeypatch.setattr(laender, "_SCHWELLEN", None)
+    monkeypatch.setattr(laender, "_ORT_INDEX", {
+        "flores": {"ES": 1}, "galera": {"ES": 1}, "carpio": {"ES": 1},
+        "cortes": {"ES": 1}, "manzanares": {"ES": 1},
+        "marbella": {"ES": 7}, "malaga": {"ES": 26},
+        **{f"esdorf{i}": {"ES": 1} for i in range(200)},
+    })
+    monkeypatch.setattr(laender, "_ANZEIGE",
+                        {"marbella": "Marbella", "malaga": "Málaga"})
+
+    r = laender.laender_aus_text(
+        "Team: Daniela Flores, Victor Galera, Patricia Llasera, Luis Carpio. "
+        "Design Principal Hernan Cortes. Management Jaime Manzanares. "
+        "Projekte in Marbella und Malaga. +34 952 1.", heimat="ES", tld="es")
+    staedte = {x.lower() for x in r["laender"]["ES"]["staedte"]}
+    assert "marbella" in staedte and "málaga" in staedte
+    for nachname in ("flores", "galera", "carpio", "cortes", "manzanares"):
+        assert nachname not in staedte, f"{nachname} ist ein Nachname, kein Ort"
+
+
+def test_ein_buero_je_domain_in_der_ortsliste():
+    """Ein Buero steht im CRM oft mehrfach mit derselben Website --
+    'Estudio Closa-Godoy' gegen 'Esudio Closa- Godoy' (Tippfehler),
+    'Herzog & de Meuron' gegen '… Basel' (Standort). In einer Ortsliste liest
+    sich dieselbe Firma dreimal wie ein Fehler, also wird fuer die ANZEIGE
+    ueber die Domain zusammengefasst. Die Konten bleiben unangetastet."""
+    from adwatch.taetigkeit import _je_buero_einmal
+
+    roh = [
+        {"name": "Bofill Architects", "website": "bofill.com", "stufe": 1},
+        {"name": "Ricardo Bofill- Taller de Arquitectura", "website": "bofill.com", "stufe": 3},
+        {"name": "Ricardo Bofill- Taller", "website": "BOFILL.COM", "stufe": 0},
+        {"name": "Anderes Buero", "website": "anderes.es", "stufe": 0},
+        {"name": "Ohne Website", "website": "", "stufe": 2},
+    ]
+    aus = _je_buero_einmal(roh)
+    assert len(aus) == 3, "drei bofill-Zeilen werden zu einer"
+    gewaehlt = next(b for b in aus if "bofill" in (b["website"] or "").lower())
+    assert gewaehlt["stufe"] == 3, "die waermste Zeile gewinnt"
+    assert any(b["name"] == "Ohne Website" for b in aus), \
+        "ohne Domain wird nicht zusammengefasst"

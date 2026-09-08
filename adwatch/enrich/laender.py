@@ -169,6 +169,19 @@ _VORNAMEN = {
     "martin", "thomas", "walter", "werner", "hermann", "wilhelm", "ludwig",
     "anton", "bruno", "arnold", "otto", "emil", "hugo", "oskar", "kurt",
     "sara", "julia", "clara", "eva", "anna", "lena", "nora", "ida",
+    # Zweite Runde, nach dem Befund auf bofill.com: die Kommalisten-Regel
+    # greift nicht bei "Design Principal Hernan Cortes", weil dort kein Komma
+    # steht. Ein VORANGESTELLTER Vorname verraet den Nachnamen trotzdem.
+    "hernan", "jaime", "javier", "daniela", "victor", "patricia", "luis",
+    "cristian", "alexandra", "gianluca", "laurie", "nemesios", "guido",
+    "alba", "gabriele", "carolina", "artur", "sophie", "alvaro", "pablo",
+    "diego", "adrian", "hugo", "mateo", "lucas", "martin", "marcos",
+    "raul", "ruben", "oscar", "ivan", "jorge", "enrique", "eduardo",
+    "roberto", "alberto", "gonzalo", "guillermo", "santiago", "tomas",
+    "ana", "lucia", "sofia", "martina", "valeria", "daniel", "mario",
+    "beatriz", "patricio", "rosario", "consuelo", "montserrat", "merce",
+    "jordi", "marc", "pau", "pere", "joan", "josep", "xavier", "albert",
+    "arnau", "oriol", "guillem", "ferran", "nuria", "montse", "gemma",
 }
 
 
@@ -399,6 +412,32 @@ _EXONYME: dict[str, str] = {
 }
 
 
+# Mitarbeiterlisten sehen im Text aus wie eine Reihe von Ortsnamen. Gemessen
+# an bofill.com, das neun Seiten mit langen Credits fuehrt:
+#
+#     "… Daniela Flores, Victor Galera, Patricia Llasera, Martiño Lorenzo …"
+#     "… Laurie Bello, Cristian Camacho, Luis Carpio, Alexandra Cohen …"
+#     "… Design Principal Hernan Cortes  Management Javier Guardiola …"
+#
+# Flores, Galera, Carpio, Bello, Cortes, Manzanares — alles spanische
+# NACHNAMEN, und zu jedem fuehrt plz_geo ein Dorf. Dadurch stand ein einziges
+# Buero an einem Dutzend erfundener Orte, und Iheb fiel auf, dass dieselben
+# Bueros sich durch die ganze Ortsliste ziehen.
+#
+# Eine Nachnamensliste waere aussichtslos. Die Struktur traegt dagegen: in
+# einer Personenliste stehen mindestens DREI durch Komma getrennte Paare aus
+# zwei grossgeschriebenen Woertern. Ortsnamen stehen so gut wie nie so.
+_NAMENSLISTE = re.compile(
+    r"(?:[A-ZÄÖÜÁÉÍÓÚÑ][\wáéíóúñ'’-]+ [A-ZÄÖÜÁÉÍÓÚÑ][\wáéíóúñ'’-]+"
+    r"(?:\s*[,;·]\s*|\s+und\s+|\s+and\s+|\s+y\s+)){2,}"
+    r"[A-ZÄÖÜÁÉÍÓÚÑ][\wáéíóúñ'’-]+ [A-ZÄÖÜÁÉÍÓÚÑ][\wáéíóúñ'’-]+")
+
+
+def _namenszonen(roh: str) -> list[tuple[int, int]]:
+    """Textbereiche, die eine Personenliste sind — dort wird kein Ort gesucht."""
+    return [(m.start(), m.end()) for m in _NAMENSLISTE.finditer(roh)]
+
+
 def _ort_treffer(roh: str) -> dict[str, list[tuple[str, dict[str, int]]]]:
     """Großgeschriebene Wortgruppen, die ein Ortsname sind.
 
@@ -430,7 +469,21 @@ def _ort_treffer(roh: str) -> dict[str, list[tuple[str, dict[str, int]]]]:
             return True
         return False
 
+    zonen = _namenszonen(roh)
+
+    def in_namensliste(pos: int) -> bool:
+        return any(a <= pos < b for a, b in zonen)
+
+    # Steht direkt DAVOR ein bekannter Vorname, ist der Treffer ein Nachname.
+    # "Hernan Cortes" und "Jaime Manzanares" kommen ohne Komma daher und
+    # entgehen der Listenregel — dieser Griff holt sie.
+    vorwort = re.compile(r"([A-Za-zÄÖÜäöüÁÉÍÓÚÑáéíóúñ'’-]+)\s+$")
+
     for m in lauf.finditer(roh):
+        if in_namensliste(m.start()):
+            continue          # Mitarbeiterliste, kein Ortsverzeichnis
+        davor = vorwort.search(roh[max(0, m.start() - 40):m.start()])
+        vorname_davor = bool(davor and _falten(davor.group(1)) in _VORNAMEN)
         teile = _falten(m.group(0)).split()
         belegt = [False] * len(teile)
         for laenge in range(min(len(teile), 3), 0, -1):
@@ -438,6 +491,13 @@ def _ort_treffer(roh: str) -> dict[str, list[tuple[str, dict[str, int]]]]:
                 if any(belegt[start:start + laenge]):
                     continue
                 name = " ".join(teile[start:start + laenge])
+                # Ein Vorname unmittelbar davor macht daraus einen NACHNAMEN --
+                # egal ob er vor dem ganzen Lauf steht ("… Principal Hernan
+                # Cortes") oder mitten darin. Geprueft wird deshalb der
+                # Nachbar im Lauf UND das Wort davor im Text.
+                nachbar = teile[start - 1] if start > 0 else None
+                if (nachbar and nachbar in _VORNAMEN) or (start == 0 and vorname_davor):
+                    continue
                 if eintragen(name):
                     for i in range(start, start + laenge):
                         belegt[i] = True
