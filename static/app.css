@@ -1928,3 +1928,28 @@ tr.konv-unter .konv-bar i { background: linear-gradient(90deg, var(--danger), va
   border: 1px dashed var(--border-strong);
 }
 .cell-aktivland { white-space: nowrap; }
+
+/* Die Ortsspalte der Taetigkeitsliste traegt die eigentliche Nachricht und
+   darf deshalb umbrechen. Sie war auf acht Orte gekuerzt, weil `th, td`
+   global `white-space: nowrap` setzt und eine lange Liste die Zeile sonst
+   ins Endlose zieht -- gekuerzt wurde damit genau dort, wo am meisten stand.
+   Gemessen fuer Spanien: im Median 2 Orte, im laengsten Fall 20 (Feixa,
+   Estudio de Arquitectura), 30 von 231 Bueros ueber acht. Das passt in eine
+   umbrechende Zelle, ohne die Tabelle zu sprengen. */
+#taetTable td.orte {
+  white-space: normal; min-width: 340px; max-width: 460px; line-height: 1.35;
+}
+
+/* Der Bueroname darf ebenfalls umbrechen. Ohne das war die Namensspalte
+   565px breit ("Krekeler Architekten Generalplaner GmbH Buero Braunschweig"),
+   die Tabelle 1.890px -- und die Ortsspalte, um die es in dieser Ansicht
+   geht, lag hinter dem rechten Rand. Ein Umbruch im Namen kostet nichts:
+   der Name ist die Zeilenkennung, nicht die Nachricht. */
+#taetTable th:first-child, #taetTable td:first-child {
+  white-space: normal; max-width: 250px;
+}
+/* Dasselbe fuer den Sitz: "MARSEILLE 01 · FR" braucht keine eigene Zeile
+   in vollem Namen. Zusammen mit dem Namensumbruch schrumpft die Tabelle von
+   1.890 auf rund 1.400px -- der Rest scrollt weiter waagerecht, wie in allen
+   Tabellen der App. */
+#taetTable td:nth-child(4) { white-space: normal; max-width: 130px; }

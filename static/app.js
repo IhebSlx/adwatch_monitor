@@ -1866,7 +1866,7 @@
         <td class="sub">${esc(z.sitz || "")}${z.land ? ` · ${esc(z.land)}` : ""}</td>
         <td class="sub">${esc(z.rolle || "—")}</td>
         <td class="num">${z.orte.length}</td>
-        <td class="sub">${esc(z.orte.slice(0, 8).join(", "))}${z.orte.length > 8 ? ` … +${z.orte.length - 8}` : ""}</td>
+        <td class="sub orte">${esc(z.orte.join(", "))}</td>
         <td class="num">${z.gewonnen || "—"}</td>
         <td class="sub">${z.website ? `<a class="link" href="https://${esc(z.website)}" target="_blank" rel="noopener">${esc(z.website)}</a>` : ""}</td>
       </tr>`).join("");
