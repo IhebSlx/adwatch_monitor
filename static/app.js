@@ -1364,8 +1364,13 @@
       punkte: [], art: "vektor", hinweis: opt.hinweis || (() => {}),
     };
 
-    let start = "vektor";
-    try { start = localStorage.getItem("adwatch.grundkarte") || "vektor"; } catch { /* privat */ }
+    // Voreinstellung ist die RASTERKARTE (Esri Dark Gray), nicht die blaue
+    // Vektorkarte: Iheb hat sie auf der Taetigkeitskarte gesehen und
+    // ausdruecklich als klarer bezeichnet. Sie war immer schon als "Einfach"
+    // waehlbar -- geaendert hat sich nur, womit man anfaengt. Wer den
+    // Umschalter benutzt, behaelt seine Wahl (localStorage).
+    let start = "raster";
+    try { start = localStorage.getItem("adwatch.grundkarte") || "raster"; } catch { /* privat */ }
     if (!GRUNDKARTEN[start]) start = "vektor";
     zustand.art = start;
 
@@ -1459,7 +1464,12 @@
       // ohnehin Einzelpunkte gezeigt (clusterMaxZoom), darüber wird die
       // oberste Kachel gestreckt; sichtbar ändert das nichts.
       maxzoom: 12,
-      cluster: true, clusterRadius: 48, clusterMaxZoom: 12,
+      // `opt.ohneCluster` fuer Daten, die SCHON aggregiert sind. Die
+      // Taetigkeitskarte zeigt einen Kreis je ORT -- "Barcelona, 100 Bueros"
+      // IST der Haufen. Noch einmal zu buendeln wuerde Barcelona und Girona
+      // zu einem Kreis verschmelzen und dabei genau das verlieren, worum es
+      // geht: den Ortsnamen.
+      cluster: !opt.ohneCluster, clusterRadius: 48, clusterMaxZoom: 12,
       // Je Kategorie mitzählen — daraus wird der Ring. Ohne diese Aggregate
       // wüsste der Cluster nur, WIE VIELE, nicht WELCHE.
       clusterProperties: Object.fromEntries(opt.kategorien.map((_, i) =>
@@ -1470,15 +1480,35 @@
       ...opt.kategorien.flatMap((_, i) => [i, farben[i]]), "#64708a"];
 
     // Hof: macht einen einzelnen Punkt auch auf Kontinentmaßstab auffindbar.
-    m.addLayer({ id: "pin-hof", type: "circle", source: "pins",
+    // Der Hof macht einen EINZELNEN Punkt auf Kontinentmassstab auffindbar.
+    // Bei gewichteten Kreisen ist er falsch: sie sind ohnehin gross genug, und
+    // der weiche Rand liesse benachbarte Orte ineinanderlaufen.
+    if (!opt.gewicht) m.addLayer({ id: "pin-hof", type: "circle", source: "pins",
       filter: ["!", ["has", "point_count"]], paint: {
         "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 7, 10, 16],
         "circle-color": farbAusdruck, "circle-blur": 1,
         "circle-opacity": 0.32 } });
+    // Radius: normal zoomabhaengig, bei aggregierten Daten zusaetzlich nach
+    // dem Gewicht. Wurzel statt linear -- sonst ueberdeckt ein Ort mit 100
+    // Bueros den mit 10 zehnfach, obwohl er nur zehnmal so viele hat.
+    // ACHTUNG, hier ist die App schon einmal hereingefallen (siehe die
+    // Saeulenebene weiter unten): der Zoom-Ausdruck MUSS AUSSEN stehen.
+    // Verschachtelt -- ["*", ["interpolate", ...["zoom"]...], gewicht] --
+    // lehnt MapLibre die Ebene ab, OHNE zu werfen. addLayer meldet Erfolg,
+    // getLayer gibt undefined, und die Karte bleibt leer. Genau dieser Fehler
+    // hat die Taetigkeitskarte beim Umbau eine Runde gekostet.
+    //
+    // Also: interpolate aussen, und das Gewicht in JEDER Stufe.
+    const anteil = ["sqrt", ["/", ["get", "w"], ["max", ["get", "wmax"], 1]]];
+    const radius = opt.gewicht
+      ? ["interpolate", ["linear"], ["zoom"],
+         3, ["+", 4, ["*", 14, anteil]],
+         10, ["+", 7, ["*", 30, anteil]]]
+      : ["interpolate", ["linear"], ["zoom"], 3, 3, 10, 6.5];
     m.addLayer({ id: "pin", type: "circle", source: "pins",
       filter: ["!", ["has", "point_count"]], paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 3, 10, 6.5],
-        "circle-color": farbAusdruck,
+        "circle-radius": radius,
+        "circle-color": farbAusdruck, "circle-opacity": opt.gewicht ? 0.62 : 1,
         "circle-stroke-width": 1, "circle-stroke-color": "rgba(255,255,255,.6)" } });
 
     if (opt.hoehe) {
@@ -1518,10 +1548,10 @@
       });
     });
 
-    m.on("moveend", () => ringeZeichnen(zustand, opt));
+    m.on("moveend", () => { if (!opt.ohneCluster) ringeZeichnen(zustand, opt); });
     m.on("sourcedata", (e) => {
       if (e.sourceId !== "pins" || !e.isSourceLoaded) return;
-      ringeZeichnen(zustand, opt);
+      if (!opt.ohneCluster) ringeZeichnen(zustand, opt);
       if (opt.fertig) opt.fertig();
     });
     // Kommen die Daten VOR dem Stil an, hat datenSetzen sie nur gemerkt und ist
@@ -1720,14 +1750,39 @@
   }
 
   // ================= TAETIGKEITSKARTE =====================================
-  // Andere Frage als die Firmenkarte, deshalb eine eigene Karte statt eines
-  // Filters: dort sitzen die Nadeln an den ADRESSEN der Bueros (Muenchen,
-  // Hamburg, London), hier an den ORTEN, an denen sie bauen.
+  // Andere Frage als die Firmenkarte, deshalb eine eigene Sicht: dort sitzen
+  // die Nadeln an den ADRESSEN der Bueros (Muenchen, Hamburg, London), hier an
+  // den ORTEN, an denen sie bauen.
   //
-  // Bewusst Leaflet und nicht MapLibre: die Nadeln sind Kreise mit einer Zahl
-  // darin, kein Vektorstil und keine 3D-Saeulen. Leaflet kann das ohne WebGL,
-  // laeuft also auch dort, wo die Vektorkarte ausfaellt.
-  let taetMap = null, taetSchicht = null, taetLauf = 0;
+  // Gebaut wird sie mit demselben karteBauen wie die anderen beiden -- die
+  // erste Fassung war eine eigene Leaflet-Karte, und genau das ist Iheb
+  // aufgefallen: drei Karten in einer App, die aussahen wie aus drei Apps.
+  // Sie erbt jetzt Grundkarten-Umschalter, Haut, Navigation und Massstab.
+  //
+  // EINZIGER Unterschied: ohneCluster. Ihre Daten sind SCHON aggregiert --
+  // "Barcelona, 100 Bueros" ist der Haufen. Stattdessen traegt jeder Kreis
+  // sein Gewicht, und der Radius folgt der Wurzel daraus.
+  let taetMap = null, taetLauf = 0;
+
+  const TAET_KAT = ["Ort", "mit Kontakt"];
+  const taetOpt = {
+    kategorien: TAET_KAT,
+    ohneCluster: true,
+    gewicht: true,
+    farben: () => (document.documentElement.dataset.theme === "hell"
+      ? ["#6d5ce7", "#0f9d68"] : ["#8b5cf6", "#34d399"]),
+    popup: (f) => {
+      let liste = [];
+      try { liste = JSON.parse(f.liste || "[]"); } catch { /* egal */ }
+      return `<div class="kp-t">${esc(f.name)}${f.flaeche === "1" ? " (Region)" : ""}</div>`
+        + `<div class="kp-s">${f.w} Büros${Number(f.warm) ? ` · ${f.warm} mit Kontakt` : ""}</div>`
+        + liste.slice(0, 12).map(b =>
+            `<div class="kp-a" style="text-align:left">${b.s >= 3 ? "● " : ""}${esc(b.n)}`
+            + `<span class="muted"> ${esc(b.o)}</span></div>`).join("")
+        + (liste.length > 12 ? `<div class="kp-a">… ${liste.length - 12} weitere</div>` : "");
+    },
+    fertig: () => {},
+  };
 
   async function zeigeTaetigkeitsKarte() {
     const wahl = $("#taetLand");
@@ -1736,54 +1791,43 @@
       wahl.innerHTML = laender.map(l =>
         `<option value="${esc(l)}"${l === "ES" ? " selected" : ""}>${esc(l)}</option>`).join("");
     }
-    if (!taetMap) {
-      taetMap = L.map("taetMap", { zoomControl: true, worldCopyJump: false })
-                 .setView([40.4, -3.7], 5);
-      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-                  { maxZoom: 16, attribution: "Esri" }).addTo(taetMap);
-      taetSchicht = L.layerGroup().addTo(taetMap);
+    if (!webglDa() || typeof maplibregl === "undefined") {
+      // Ohne WebGL gibt es keine MapLibre-Karte. Ehrlich sagen statt leer
+      // lassen -- die anderen beiden haben einen Leaflet-Rueckfall, dieser
+      // fehlt hier bewusst, weil er eine zweite Zeichenmaschine waere.
+      $("#taetZaehler").textContent =
+        "Diese Karte braucht WebGL. Die Orte stehen als Spalte in der Liste.";
+      return;
     }
-    setTimeout(() => taetMap.invalidateSize(), 60);
+    if (!taetMap) {
+      taetMap = karteBauen("taetMap", taetOpt);
+      window._taetMap = taetMap.m;
+    }
+    taetMap.m.resize();
     await ladeTaetigkeitsPins();
   }
 
   async function ladeTaetigkeitsPins() {
+    if (!taetMap) return;
     const land = $("#taetLand").value || "ES";
     const warm = $("#taetNurWarm").checked;
     const meine = ++taetLauf;
     const d = await api(`/api/map/taetigkeit?land=${encodeURIComponent(land)}&nur_warm=${warm}`);
     if (meine !== taetLauf) return;          // ueberholt
-    taetSchicht.clearLayers();
-    if (!d.pins.length) {
-      $("#taetZaehler").textContent = "Keine Orte gefunden.";
-      return;
-    }
-    const groesste = Math.max(...d.pins.map(p => p.bueros));
-    d.pins.forEach(p => {
-      // Flaeche statt Punkt: Radius nach Wurzel, damit ein Ort mit 100 Bueros
-      // nicht das Zehnfache eines Ortes mit 10 ueberdeckt.
-      const r = 6 + 22 * Math.sqrt(p.bueros / groesste);
-      const kreis = L.circleMarker([p.lat, p.lng], {
-        radius: r, weight: p.warm ? 2.5 : 1,
-        color: p.warm ? "#34d399" : "#8b5cf6",
-        fillColor: p.flaeche ? "#6366f1" : "#8b5cf6",
-        fillOpacity: 0.55,
-      });
-      const liste = p.liste.map(b =>
-        `<div style="margin:2px 0"><b>${b.stufe >= 3 ? "● " : ""}${esc(b.name)}</b>
-         <span class="muted">${esc(b.sitz)} ${esc(b.land)}</span></div>`).join("");
-      kreis.bindPopup(
-        `<div style="max-height:260px;overflow:auto;min-width:230px">
-           <div style="font-weight:700;margin-bottom:4px">${esc(p.ort)}
-             ${p.flaeche ? '<span class="muted">(Region)</span>' : ""}</div>
-           <div class="muted" style="margin-bottom:6px">${p.bueros} Büros${p.warm ? ` · ${p.warm} mit Kontakt` : ""}</div>
-           ${liste}</div>`, { maxWidth: 320 });
-      kreis.addTo(taetSchicht);
-    });
+    const groesste = Math.max(1, ...d.pins.map(p => p.bueros));
+    // Zusatzfelder gehoeren nach `props` -- geoJsonAus uebernimmt genau die
+    // in die Feature-Eigenschaften. Oben angehaengt kaemen sie nie an.
+    const punkte = d.pins.map(p => ({
+      lat: p.lat, lng: p.lng, t: p.warm ? 1 : 0,
+      props: {
+        name: p.ort, w: p.bueros, wmax: groesste, warm: p.warm,
+        flaeche: p.flaeche ? "1" : "0",
+        liste: JSON.stringify(p.liste.map(b => ({ n: b.name, o: b.sitz, s: b.stufe }))),
+      },
+    }));
+    datenSetzen(taetMap, taetOpt, punkte, false);
     $("#taetZaehler").textContent =
       `${d.orte} Orte · ${d.bueros} Büros${d.ohne_koordinate.length ? ` · ${d.ohne_koordinate.length} ohne Koordinate` : ""}`;
-    const gruppe = L.featureGroup(taetSchicht.getLayers());
-    if (gruppe.getLayers().length) taetMap.fitBounds(gruppe.getBounds().pad(0.15));
   }
 
   // ================= OBJEKTKARTE ==========================================
