@@ -530,15 +530,18 @@
         <div id="taetListeWrap" class="hidden">
           <div class="table-wrap">
             <table id="taetTable" class="data-table">
+              <!-- data-tf: welcher Filter an diesem Kopf haengt. Ohne den
+                   liefen die Koepfe nur die Sortierung an -- Iheb: "make
+                   proper filter not the aufsteigend absteigends one." -->
               <thead><tr>
-                <th data-sort="name">Büro</th>
-                <th class="num" data-sort="stufe">Beziehung</th>
+                <th data-sort="name" data-tf="name">Büro <span class="caret">▾</span></th>
+                <th class="num" data-sort="stufe" data-tf="stufe">Beziehung <span class="caret">▾</span></th>
                 <th>was genau</th>
-                <th data-sort="sitz">Sitz</th>
-                <th data-sort="rolle">Rolle</th>
-                <th class="num" data-sort="anzahl">Orte</th>
-                <th>Orte im Zielland</th>
-                <th class="num" data-sort="gewonnen">gewonnen</th>
+                <th data-sort="sitz" data-tf="sitz">Sitz <span class="caret">▾</span></th>
+                <th data-sort="rolle" data-tf="rolle">Rolle <span class="caret">▾</span></th>
+                <th class="num" data-sort="anzahl" data-tf="anzahl">Orte <span class="caret">▾</span></th>
+                <th data-tf="ort">Orte im Zielland <span class="caret">▾</span></th>
+                <th class="num" data-sort="gewonnen" data-tf="gewonnen">gewonnen <span class="caret">▾</span></th>
                 <th>Website</th>
               </tr></thead>
               <tbody id="taetTableBody"></tbody>

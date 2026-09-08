@@ -1853,7 +1853,7 @@
     const wert = (z) => TAET.sort === "anzahl" ? z.orte.length
       : TAET.sort === "sitz" ? (z.sitz || "") + (z.land || "")
       : z[TAET.sort];
-    const zeilen = [...d.rows].sort((a, b) => {
+    const zeilen = taetGefiltert([...d.rows]).sort((a, b) => {
       const x = wert(a), y = wert(b);
       const c = typeof x === "string" ? String(x).localeCompare(String(y)) : (x || 0) - (y || 0);
       return c * richtung;
@@ -1874,16 +1874,142 @@
       th.classList.toggle("sorted-asc", th.dataset.sort === TAET.sort && TAET.dir === "asc");
       th.classList.toggle("sorted-desc", th.dataset.sort === TAET.sort && TAET.dir === "desc");
     });
-    $("#taetZaehler").textContent = `${d.bueros} Büros · ${d.orte} Orte`;
+    $$("#taetTable thead th[data-tf]").forEach(th =>
+      th.classList.toggle("th-filtered", taetFilterAktiv(th.dataset.tf)));
+    // Der Zaehler nennt BEIDE Zahlen, sobald gefiltert wird -- sonst sieht es
+    // aus, als waere der Bestand kleiner geworden.
+    $("#taetZaehler").textContent = zeilen.length === d.rows.length
+      ? `${d.bueros} B\u00fcros \u00b7 ${d.orte} Orte`
+      : `${zeilen.length} von ${d.bueros} B\u00fcros`;
     $$("#taetTableBody tr[data-id]").forEach(tr =>
       tr.addEventListener("click", () => openCompanyDrawer(Number(tr.dataset.id))));
   }
 
-  $$("#taetTable thead th[data-sort]").forEach(th => th.addEventListener("click", () => {
-    const k = th.dataset.sort;
-    if (TAET.sort === k) TAET.dir = TAET.dir === "asc" ? "desc" : "asc";
-    else { TAET.sort = k; TAET.dir = (k === "name" || k === "sitz" || k === "rolle") ? "asc" : "desc"; }
-    zeichneTaetigkeitsListe();
+  // --- Kopfmenues der Taetigkeitsliste ------------------------------------
+  // Dieselbe Bedienung wie in der Firmentabelle: Klick auf den Kopf oeffnet
+  // Sortierung UND Filter. Vorher sortierten die Koepfe nur -- Iheb: "make
+  // proper filter not the aufsteigend absteigends one."
+  //
+  // Gefiltert wird im Browser ueber die schon geladenen Zeilen (213 bei
+  // Spanien). Ein Serveraufruf je Tastendruck waere hier Verschwendung, und
+  // die Grundmenge kommt ohnehin schon durch den Explorer-Filter.
+  TAET.f = { name: "", stufeMin: null, sitz: [], rolle: [], anzahlMin: null,
+             ort: "", gewonnenMin: null };
+
+  function taetGefiltert(zeilen) {
+    const f = TAET.f;
+    return zeilen.filter(z => {
+      if (f.name && !(z.name || "").toLowerCase().includes(f.name.toLowerCase())) return false;
+      if (f.stufeMin != null && (z.stufe || 0) < f.stufeMin) return false;
+      if (f.sitz.length && !f.sitz.includes(z.land || "")) return false;
+      if (f.rolle.length && !f.rolle.includes(z.rolle || "")) return false;
+      if (f.anzahlMin != null && z.orte.length < f.anzahlMin) return false;
+      if (f.gewonnenMin != null && (z.gewonnen || 0) < f.gewonnenMin) return false;
+      if (f.ort && !z.orte.some(o => o.toLowerCase().includes(f.ort.toLowerCase()))) return false;
+      return true;
+    });
+  }
+
+  function taetFilterAktiv(spalte) {
+    const f = TAET.f;
+    return ({ name: !!f.name, stufe: f.stufeMin != null, sitz: f.sitz.length > 0,
+              rolle: f.rolle.length > 0, anzahl: f.anzahlMin != null,
+              ort: !!f.ort, gewonnen: f.gewonnenMin != null })[spalte] || false;
+  }
+
+  const taetMenu = document.createElement("div");
+  taetMenu.className = "th-menu hidden";
+  document.body.appendChild(taetMenu);
+  taetMenu.addEventListener("click", e => e.stopPropagation());
+  const taetMenuZu = () => taetMenu.classList.add("hidden");
+  document.addEventListener("click", taetMenuZu);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") taetMenuZu(); });
+
+  function taetMenuOeffnen(th) {
+    const spalte = th.dataset.tf;
+    const sortK = th.dataset.sort;
+    const f = TAET.f;
+    const zeilen = TAET.liste ? TAET.liste.rows : [];
+    let html = `<div class="thm-head">${esc(th.textContent.replace("\u25BE", "").trim())}</div>`;
+    if (sortK) {
+      html += `<div class="thm-sec thm-sort">
+        <button class="btn btn-sm thm-s${TAET.sort === sortK && TAET.dir === "asc" ? " btn-primary" : ""}" data-dir="asc">\u2191 Aufsteigend</button>
+        <button class="btn btn-sm thm-s${TAET.sort === sortK && TAET.dir === "desc" ? " btn-primary" : ""}" data-dir="desc">\u2193 Absteigend</button>
+      </div>`;
+    }
+    if (spalte === "name") {
+      html += `<div class="thm-sec"><div class="thm-sec-title">Name enth\u00e4lt</div>
+        <input class="thm-input" id="tfName" type="text" value="${esc(f.name)}" placeholder="z. B. Arquitect"></div>`;
+    } else if (spalte === "ort") {
+      html += `<div class="thm-sec"><div class="thm-sec-title">Ort enth\u00e4lt</div>
+        <input class="thm-input" id="tfOrt" type="text" value="${esc(f.ort)}" placeholder="z. B. Mallorca">
+        <div class="thm-hint">Zeigt B\u00fcros, die mindestens einen passenden Ort nennen.</div></div>`;
+    } else if (spalte === "stufe") {
+      const opt = [[5, "5 \u2014 gemeinsames Objekt gewonnen"], [4, "4+ \u2014 auf einer Verkaufschance"],
+                   [3, "3+ \u2014 Schriftverkehr"], [2, "2+ \u2014 Debitor angelegt"],
+                   [1, "1+ \u2014 \u00fcberhaupt ber\u00fchrt"]];
+      html += `<div class="thm-sec"><div class="thm-sec-title">Beziehung mindestens</div>
+        <select class="thm-input" id="tfStufe"><option value="">alle</option>`
+        + opt.map(([v, l]) => `<option value="${v}"${f.stufeMin === v ? " selected" : ""}>${esc(l)}</option>`).join("")
+        + `</select></div>`;
+    } else if (spalte === "sitz") {
+      const laender = [...new Set(zeilen.map(z => z.land).filter(Boolean))].sort();
+      html += `<div class="thm-sec"><div class="thm-sec-title">Sitzland</div><div class="thm-list">`
+        + laender.map(l => `<label class="thm-item"><input type="checkbox" class="tf-sitz" value="${esc(l)}"${f.sitz.includes(l) ? " checked" : ""}> <span>${esc(l)}</span></label>`).join("")
+        + `</div></div>`;
+    } else if (spalte === "rolle") {
+      const rollen = [["vergibt Auftr\u00e4ge", "vergibt Auftr\u00e4ge"], ["empfiehlt", "empfiehlt"],
+                      ["", "(nicht erkennbar)"]];
+      html += `<div class="thm-sec"><div class="thm-sec-title">Rolle</div><div class="thm-list">`
+        + rollen.map(([v, l]) => `<label class="thm-item"><input type="checkbox" class="tf-rolle" value="${esc(v)}"${f.rolle.includes(v) ? " checked" : ""}> <span>${esc(l)}</span></label>`).join("")
+        + `</div><div class="thm-hint">Aus dem Wortlaut der Website. <b>Keine Rangfolge</b> \u2014 gemessen sagt sie nichts \u00fcber Abschl\u00fcsse.</div></div>`;
+    } else if (spalte === "anzahl" || spalte === "gewonnen") {
+      const id = spalte === "anzahl" ? "tfAnzahl" : "tfGewonnen";
+      const wert = spalte === "anzahl" ? f.anzahlMin : f.gewonnenMin;
+      html += `<div class="thm-sec"><div class="thm-sec-title">Mindestens</div>
+        <input class="thm-input" id="${id}" type="number" min="0" value="${wert == null ? "" : wert}"></div>`;
+    }
+    html += `<div class="thm-sec"><button class="btn btn-sm" id="tfReset">Filter dieser Spalte zur\u00fccksetzen</button></div>`;
+    taetMenu.innerHTML = html;
+
+    const r = th.getBoundingClientRect();
+    taetMenu.classList.remove("hidden");
+    const w = Math.min(300, window.innerWidth - 24);
+    taetMenu.style.width = w + "px";
+    taetMenu.style.top = Math.round(r.bottom + 4) + "px";
+    taetMenu.style.left = Math.round(Math.min(r.left, window.innerWidth - w - 12)) + "px";
+
+    const neuZeichnen = () => zeichneTaetigkeitsListe();
+    $$(".thm-s", taetMenu).forEach(b => b.addEventListener("click", () => {
+      TAET.sort = sortK; TAET.dir = b.dataset.dir; taetMenuZu(); neuZeichnen();
+    }));
+    $("#tfName", taetMenu)?.addEventListener("input", e => { TAET.f.name = e.target.value; neuZeichnen(); });
+    $("#tfOrt", taetMenu)?.addEventListener("input", e => { TAET.f.ort = e.target.value; neuZeichnen(); });
+    $("#tfStufe", taetMenu)?.addEventListener("change", e => {
+      TAET.f.stufeMin = e.target.value ? Number(e.target.value) : null; neuZeichnen(); });
+    $("#tfAnzahl", taetMenu)?.addEventListener("change", e => {
+      TAET.f.anzahlMin = e.target.value ? Number(e.target.value) : null; neuZeichnen(); });
+    $("#tfGewonnen", taetMenu)?.addEventListener("change", e => {
+      TAET.f.gewonnenMin = e.target.value ? Number(e.target.value) : null; neuZeichnen(); });
+    $$(".tf-sitz", taetMenu).forEach(cb => cb.addEventListener("change", () => {
+      TAET.f.sitz = $$(".tf-sitz", taetMenu).filter(x => x.checked).map(x => x.value); neuZeichnen(); }));
+    $$(".tf-rolle", taetMenu).forEach(cb => cb.addEventListener("change", () => {
+      TAET.f.rolle = $$(".tf-rolle", taetMenu).filter(x => x.checked).map(x => x.value); neuZeichnen(); }));
+    $("#tfReset", taetMenu)?.addEventListener("click", () => {
+      if (spalte === "sitz") TAET.f.sitz = [];
+      else if (spalte === "rolle") TAET.f.rolle = [];
+      else if (spalte === "name") TAET.f.name = "";
+      else if (spalte === "ort") TAET.f.ort = "";
+      else if (spalte === "stufe") TAET.f.stufeMin = null;
+      else if (spalte === "anzahl") TAET.f.anzahlMin = null;
+      else if (spalte === "gewonnen") TAET.f.gewonnenMin = null;
+      taetMenuZu(); neuZeichnen();
+    });
+  }
+
+  $$("#taetTable thead th[data-tf]").forEach(th => th.addEventListener("click", (e) => {
+    e.stopPropagation();
+    taetMenuOeffnen(th);
   }));
 
   async function ladeTaetigkeitsPins() {
