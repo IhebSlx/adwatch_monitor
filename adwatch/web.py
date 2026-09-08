@@ -1093,6 +1093,7 @@ def list_customers_route(
     # FastAPI verwirft unbekannte Query-Parameter stillschweigend -- sie
     # MUESSEN hier stehen, sonst kommen sie nie beim Filter an.
     city: str | None = None,
+    health: list[str] = Query(default=[]),
     sap_state: str | None = None,
     revenue_y1_min: float | None = None, revenue_y1_max: float | None = None,
     revenue_y2_min: float | None = None, revenue_y2_max: float | None = None,
@@ -1120,7 +1121,7 @@ def list_customers_route(
                "active_country": active_country,
                "active_country_lose": active_country_lose,
                "relation_min": relation_min,
-               "city": city, "sap_state": sap_state,
+               "city": city, "sap_state": sap_state, "health": health,
                "revenue_y1_min": revenue_y1_min, "revenue_y1_max": revenue_y1_max,
                "revenue_y2_min": revenue_y2_min, "revenue_y2_max": revenue_y2_max,
                "revenue_y3_min": revenue_y3_min, "revenue_y3_max": revenue_y3_max,

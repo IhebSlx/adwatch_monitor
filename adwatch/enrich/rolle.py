@@ -59,6 +59,17 @@ _STEUERT = (
     "directievoering", "bouwbegeleiding", "aanbesteding", "uitvoering",
     "contract administration", "tender", "site supervision",
     "construction management", "turnkey", "design and build",
+    # --- schwedisch / daenisch / norwegisch ------------------------------
+    # Gemessen 2026-09-08 und peinlich: SE 241 Bueros -> 8 mit Rolle (3 %),
+    # DK 179 -> 8 (4 %). Nicht weil skandinavische Bueros die Ausfuehrung
+    # seltener steuern, sondern weil meine Wortliste ihre Sprachen nicht
+    # kannte. Eine Spalte, die fuer ein Land systematisch leer bleibt, sagt
+    # etwas ueber die Liste und nichts ueber das Land.
+    "byggledning", "projektering", "upphandling", "byggherreombud",
+    "kontrollansvarig", "totalentreprenad", "generalentreprenad",
+    "byggledelse", "byggherrerådgivning", "byggherreraadgivning",
+    "fagtilsyn", "byggetilsyn", "udbud", "hovedentreprise",
+    "totalentreprise", "prosjektledelse", "byggeledelse", "anbud",
 )
 
 # Wendungen, die auf reines Entwerfen und Planen hindeuten. Schwächer als die
@@ -70,6 +81,9 @@ _ENTWIRFT = (
     "solo diseno", "anteproyecto", "proyecto basico",
     "conception", "esquisse", "ontwerp", "schetsontwerp",
     "concept design", "feasibility", "masterplanning", "competitions",
+    # skandinavisch
+    "skisseprosjekt", "idekonkurranse", "arkitekttavling", "arkitektkonkurrence",
+    "forprojekt", "forstudie", "konceptdesign",
 )
 
 

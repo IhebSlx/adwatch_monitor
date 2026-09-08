@@ -5397,3 +5397,36 @@ def test_ein_buero_je_domain_in_der_ortsliste():
     assert gewaehlt["stufe"] == 3, "die waermste Zeile gewinnt"
     assert any(b["name"] == "Ohne Website" for b in aus), \
         "ohne Domain wird nicht zusammengefasst"
+
+
+def test_gesundheit_ist_filterbar_und_customer_state_bleibt_luecke(temp_db, monkeypatch):
+    """Gemessen 2026-09-08 im Audit: `customer_state` fuehrt 2.219 Firmen MIT
+    echten SAP-Belegen als 'never', weil es aus den Umsatz-Schnappschussspalten
+    kommt, die nur auf 3.623 von 48.543 Firmen gefuellt sind.
+
+    `health` kommt aus den 91.992 Belegen und ist stimmig ('nie' hat 0 Belege,
+    'aktiv' im Schnitt 42,9) -- war aber bis dahin NUR Anzeigespalte. Wer nach
+    Kunden filtern will, braucht die gepruefte Spalte."""
+    from adwatch import customers
+    from adwatch.models import Company
+
+    monkeypatch.setattr(customers, "SessionLocal", temp_db.SessionLocal)
+    s = temp_db.SessionLocal()
+    s.add_all([
+        # genau der Fall, der den Audit ausgeloest hat: echte Belege, aber
+        # customer_state sagt 'never', weil der Schnappschuss leer ist
+        Company(name="Kauft wirklich", segment="Handel", health="aktiv",
+                customer_state="never", beleg_count=42),
+        Company(name="Gefaehrdet", segment="Handel", health="gefährdet",
+                customer_state="never", beleg_count=4),
+        Company(name="Nie", segment="Handel", health="nie",
+                customer_state="never", beleg_count=0),
+    ])
+    s.commit(); s.close()
+
+    assert customers.query_companies({"health": ["aktiv"]}, page_size=1)["total"] == 1
+    assert customers.query_companies({"health": ["nie"]}, page_size=1)["total"] == 1
+    # customer_state waere hier fuer ALLE DREI 'never' -- der Filter darauf
+    # kann den zahlenden Kunden nicht von der leeren Zeile trennen
+    assert customers.query_companies({"customer_state": ["never"]},
+                                     page_size=1)["total"] == 3

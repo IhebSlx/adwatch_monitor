@@ -432,6 +432,18 @@ def _apply_filters(stmt, f: dict):
     # der Sortierteil uebrig, also genau „aufsteigend/absteigend" und sonst
     # nichts. Ort, SAP und die Umsatzjahre -1..-4 hatten dafuer nicht einmal
     # eine Entsprechung im Backend — hier ist sie.
+    # `health` kommt aus den ECHTEN SAP-Belegen (insights/rfm.py) und war bis
+    # 2026-09-08 nur eine Anzeigespalte. Gemessen ist sie stimmig: `nie` hat
+    # 0 Belege, `aktiv` im Schnitt 42,9, `beobachten` 10,4, `gefaehrdet` 4,9.
+    #
+    # `customer_state` daneben stammt aus den Umsatz-Schnappschussspalten, die
+    # auf 3.623 von 48.543 Firmen gefuellt sind -- und fuehrt deshalb 2.219
+    # Firmen MIT echten Belegen als „nie". Wer nach Kunden filtern will, soll
+    # das ueber `health` koennen und nicht ueber die luecke behaftete Spalte.
+    if f.get("health"):
+        werte = f["health"]
+        stmt = stmt.where(Company.health.in_(werte) if isinstance(werte, list)
+                          else Company.health == werte)
     if f.get("city"):
         stmt = stmt.where(Company.city.ilike(f"%{str(f['city']).strip()}%"))
     if f.get("sap_state") == "with":

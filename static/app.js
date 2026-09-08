@@ -4302,6 +4302,7 @@
       active_country: CUST_DROP.activeCountry ? CUST_DROP.activeCountry.getSelected() : [],
       active_country_lose: $("#custActiveCountryLose").checked,
       relation_min: $("#custRelationMin").value ? Number($("#custRelationMin").value) : null,
+      health: $("#custHealth").value ? [$("#custHealth").value] : [],
       city: $("#custCity").value.trim() || null,
       sap_state: $("#custSapState").value || null,
       revenue_y1_min: $("#custRevY1Min").value ? Number($("#custRevY1Min").value) : null,
@@ -4786,7 +4787,7 @@
 
   // which header owns which filter keys — powers the per-column active marker
   const _COL_FILTER_KEYS = {
-    name: ["q"], kunde: ["customer_state"], fit: ["fit_min"], anzeigen: ["ad_activity"],
+    name: ["q"], kunde: ["customer_state", "health"], fit: ["fit_min"], anzeigen: ["ad_activity"],
     fb: ["resolution_status", "page_id_state", "tracked"],
     website: ["has_website", "no_website", "enrichment_status"],
     umsatz: ["revenue_min", "revenue_max", "revenue_history"],
@@ -5717,7 +5718,7 @@
     // Die sieben nachgeruesteten Spaltenfilter. Ohne diese Zeilen schreibt das
     // Kopfmenue zwar brav in den Zustandshalter, aber nichts laedt neu -- die
     // Zahl oben blieb bei 46.810 stehen, waehrend der Filter gesetzt war.
-    ["#custCity", "#custSapState",
+    ["#custHealth", "#custCity", "#custSapState",
      "#custRevY1Min", "#custRevY1Max", "#custRevY2Min", "#custRevY2Max",
      "#custRevY3Min", "#custRevY3Max", "#custRevY4Min", "#custRevY4Max",
     ].forEach(applyOnChange);
@@ -5826,10 +5827,22 @@
     const COL_MENUS = {
       name: () => `<div class="thm-sec"><div class="thm-sec-title">Suche</div>
         <input type="text" class="thm-input" id="thmSearch" value="${esc($("#custSearch").value)}" placeholder="Name oder SAP…"></div>`,
-      kunde: () => `<div class="thm-sec"><div class="thm-sec-title">Kundenstatus</div>
+      kunde: () => `<div class="thm-sec"><div class="thm-sec-title">Gesundheit (aus SAP-Belegen)</div>
+        <select class="thm-input" id="thmProxySel" data-target="#custHealth">${_optionsHtml("#custHealth")}</select>
+        <div class="thm-hint">Die geprüfte Spalte: „nie" hat 0 Belege, „aktiv" im Schnitt 42,9.</div></div>
+        <div class="thm-sec"><div class="thm-sec-title">Kundenstatus (lückenhaft)</div>
         <select class="thm-input" id="thmProxySel" data-target="#custCustomerState">${_optionsHtml("#custCustomerState")}</select></div>`,
+      // Gemessen 2026-09-08 und deshalb mit Warnung: der Fit-Wert ordnet
+      // nicht. 99,2 % der Haendler liegen zwischen 62 und 72, und die
+      // Kaeuferquote steigt NICHT mit dem Wert -- sie faellt oben wieder ab.
+      // Ein Filter darf das nicht verschweigen, sonst sortiert jemand danach.
       fit: () => `<div class="thm-sec"><div class="thm-sec-title">Fit mindestens (0–100)</div>
-        <input type="number" min="0" max="100" class="thm-input" id="thmFitMin" value="${esc($("#custFitMin").value)}"></div>`,
+        <input type="number" min="0" max="100" class="thm-input" id="thmFitMin" value="${esc($("#custFitMin").value)}">
+        <div class="thm-hint"><b>Nicht als Rangfolge benutzen.</b> Gemessen an
+          15.482 Händlern: 99,2 % liegen zwischen 62 und 72, und die Käuferquote
+          steigt nicht mit dem Wert — 65–68 → 21,7 %, 68–72 → 22,7 %,
+          <b>72–80 → 9,4 %</b>. Der Wert taugt zum Ausschließen sehr niedriger
+          Zeilen, nicht zum Sortieren.</div></div>`,
       anzeigen: () => `<div class="thm-sec"><div class="thm-sec-title">Anzeigen-Aktivität</div>
         <select class="thm-input" id="thmProxySel" data-target="#custAdActivity">${_optionsHtml("#custAdActivity")}</select></div>`,
       fb: () => _incExcSection("Meta-Identität", () => CUST_DROP.status,

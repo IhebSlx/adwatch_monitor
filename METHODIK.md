@@ -266,3 +266,82 @@ und liefert 0 Zeilen **ohne Fehler**); *Sortieren nach* muss leer bleiben;
 
 Jeder Befund in diesem Dokument ist durch einen Test abgesichert
 (`tests/test_core.py`, aktuell 143) oder durch ein Skript reproduzierbar.
+
+---
+
+## Audit 2026-09-08: was gemessen wurde und was dabei nicht hielt
+
+Iheb hat gefragt, ob die Methode hinter `decision_role` gut ist. Die ehrliche
+Antwort war „ich weiß es nicht", und daraus wurde ein Durchgang über alle
+abgeleiteten Felder. Gemessen, nicht überlegt.
+
+### Hat nicht gehalten
+
+**`fit_score` ordnet nicht — er fällt oben sogar ab.** Gegen echte SAP-Belege,
+15.482 Händler und Verarbeiter:
+
+| Fit | n | Käuferquote | Intervall |
+|---|---|---|---|
+| 50–62 | 224 | 6,7 % | 4,1–10,8 |
+| 62–65 | 693 | 15,9 % | 13,3–18,8 |
+| 65–68 | 7.533 | 21,7 % | 20,8–22,6 |
+| 68–72 | 6.618 | 22,7 % | 21,7–23,8 |
+| **72–80** | **414** | **9,4 %** | **7,0–12,6** |
+
+Zweierlei ist falsch: **99,2 % aller Händler liegen zwischen 62 und 72**, der
+Wert trennt also kaum; und die Quote steigt nicht monoton, sondern bricht im
+obersten Block ein. Nach `fit_score` absteigend zu sortieren stellt die
+schlechtesten Aussichten nach oben. Der Filter trägt jetzt diese Zahlen als
+Warnung.
+
+**`customer_state` führt zahlende Kunden als „nie".** Er kommt aus den
+Umsatz-Schnappschussspalten, die auf 3.623 von 48.543 Firmen gefüllt sind:
+
+    customer_state    n        davon mit echtem SAP-Beleg
+    never          44.919                 2.219
+    lapsed          2.582                 1.205
+    active            609                   545
+
+2.219 Firmen mit Belegen stehen als „nie" — das sind 54 % aller Firmen, die je
+etwas gekauft haben. Behoben nicht durch Umdeuten der Spalte (andere Auswertungen
+hängen an ihrer Bedeutung), sondern indem `health` filterbar wurde.
+
+**`decision_role` sagt nichts über Ergebnisse.**
+
+    vergibt Aufträge   2.398   mit Objekt 10,2 %   (9,1–11,5)
+    empfiehlt          1.449   mit Objekt 10,0 %   (8,6–11,7)
+    (leer)             4.940   mit Objekt  8,8 %   (8,1– 9,7)
+
+Die Intervalle überlappen. Die Spalte bleibt als Beschreibung („dieses Büro
+bietet Vergabe an"), nicht als Rangkriterium.
+
+**Zwei Sprachen fehlten in derselben Wortliste.** SE 241 Büros → 8 mit Rolle
+(3 %), DK 179 → 8 (4 %) — nicht weil skandinavische Büros seltener steuern,
+sondern weil die Liste kein Schwedisch und Dänisch kannte. Ergänzt.
+
+**`opportunity_score` und `target_score` sind auf 0,5 % gefüllt** (219 bzw. 215
+von 46.810), stehen aber wie allgemeine Spalten in der Oberfläche.
+
+**Die Werbeausgaben-Schätzung trägt 33 Zeilen.** `real_spend_regulated` ist
+nirgends gefüllt, die Spanne reicht von 50 € bis 91.932 €. Als Euro-Zahl
+dargestellt, ohne dass jemand sie je gegen eine echte Angabe geprüft hat.
+
+### Hat gehalten
+
+**`health` ist stimmig.** Gegen die 91.992 Belege: `nie` hat 0, `einmalig` 0,6
+im Schnitt, `gefährdet` 4,9, `verloren` 5,1, `beobachten` 10,4, `aktiv` 42,9.
+Die Ordnung ist da, wo sie sein soll — deshalb ist das jetzt die Spalte, nach
+der gefiltert wird.
+
+**Die 11,3-%-Grundlinie stimmt.** Ich hatte sie verdächtigt, weil „je gekauft"
+bei 22,6 % liegt. Pro JAHR gerechnet — und so war sie gemeint — ergibt sich
+2023: 11,7 % · 2024: 12,5 % · 2025: 12,2 % · 2026: 9,3 %. Der Verdacht war
+mein Fehler, nicht der der Zahl.
+
+### Das Muster
+
+Jedes gefundene Problem hat dieselbe Form: **ein abgeleiteter Wert wurde
+gebaut, in die Oberfläche gestellt und nie gegen ein Ergebnis gehalten.** Was
+zählbar aussieht, wird sortiert. Die Regel daraus: eine Spalte, die eine
+Rangfolge suggeriert, braucht entweder eine Messung gegen echte Ausgänge oder
+einen Hinweis, dass sie keine hat.

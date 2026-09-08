@@ -265,7 +265,7 @@
         <!-- Hidden STATE HOLDERS: every filter control keeps its id + wiring; the
              column-header menus write into these. Never shown directly. -->
         <div id="custFilterState" style="display:none">
-          <select id="custCustomerState" title="Kundenstatus aus den Umsatzspalten: aktiv = kauft jetzt und kaufte zuvor · neu = erster Umsatz dieses Jahr · ehemalig = früher gekauft, dieses Jahr nichts · nie = kein Umsatz erfasst">
+          <select id="custCustomerState" title="ACHTUNG, lückenhaft: dieser Status kommt aus den Umsatz-Schnappschussspalten, die nur auf 3.623 von 48.543 Firmen gefüllt sind. Gemessen am 08.09.2026 stehen dadurch 2.219 Firmen MIT echten SAP-Belegen als „nie" darin. Für „wer kauft wirklich" ist die Spalte Gesundheit gemacht — sie kommt aus den 91.992 Belegen.">
             <option value="">Kundenstatus: alle</option>
             <option value="active">Aktiver Kunde</option>
             <option value="new">Neukunde</option>
@@ -314,6 +314,17 @@
           <!-- Zustandshalter fuer die sieben Spalten, die bis 2026-09-08 kein
                Filtermenue hatten und deshalb nur "aufsteigend/absteigend"
                zeigten: Ort, SAP, Umsatz -1..-4 und Taetig in. -->
+          <!-- Gesundheit: die belegbasierte Wahrheit. Bis 2026-09-08 nur
+               Anzeigespalte, obwohl sie die geprüfte Variante ist. -->
+          <select id="custHealth" title="Aus den 91.992 SAP-Belegen: aktiv = kauft im eigenen Rhythmus · beobachten = etwas überfällig · gefährdet · verloren · einmalig = nur Kleinteile, nie etwas Wesentliches · nie = kein Beleg. Gemessen stimmig: „nie" hat 0 Belege, „aktiv" im Schnitt 42,9.">
+            <option value="">Gesundheit: alle</option>
+            <option value="aktiv">aktiv</option>
+            <option value="beobachten">beobachten</option>
+            <option value="gefährdet">gefährdet</option>
+            <option value="verloren">verloren</option>
+            <option value="einmalig">einmalig (nur Kleinteile)</option>
+            <option value="nie">nie gekauft</option>
+          </select>
           <input type="text" id="custCity">
           <select id="custSapState">
             <option value="">SAP: alle</option>
