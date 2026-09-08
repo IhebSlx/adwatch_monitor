@@ -143,6 +143,10 @@ _STOPP = {
     # katalanische Alltagswoerter, die als Weiler gefuehrt werden
     "escola", "termas", "piloto", "ancora", "barrio", "estacao", "quinta",
     "moinho", "fabrica", "cidade", "aldeia", "serra", "outeiro", "varzea",
+    # aus dem vollstaendigen Lauf 2026-09-08: die letzten zwei Alltagswoerter,
+    # die es bis in die Staedteliste geschafft haben. "Canada" ist auf
+    # Spanisch ein Hohlweg (und ein Weiler), "Altes" deutsch fuer alt.
+    "canada", "altes",
 }
 
 # Vornamen, die zugleich Ortsnamen sind. Auf Landesebene fangen sie sich an der
