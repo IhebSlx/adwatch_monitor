@@ -4591,93 +4591,6 @@ def test_lead_holt_keine_personendaten():
 
 
 
-# ---------------------------------------------------------------------------
-# Fragen-Agent: das SQL-Werkzeug ist die Sicherheitsgrenze
-# ---------------------------------------------------------------------------
-
-def test_fragen_sql_werkzeug_ist_nur_lesend(temp_db):
-    """Das SQL-Werkzeug des Fragen-Agenten darf ALLES lesen und NICHTS koennen,
-    was schreibt. Die Pruefung hat zwei Schichten, und beide werden getestet:
-    die Textpruefung (lehnt ab) und die read-only-Verbindung (koennte selbst
-    dann nicht schreiben, wenn die Textpruefung versagt)."""
-    import pytest as _pytest
-    from adwatch import fragen
-    from adwatch.models import Company
-    import json as _json
-
-    s = temp_db.SessionLocal()
-    s.add(Company(name="Test AG", country="DE", segment="Handel"))
-    s.commit(); s.close()
-
-    # lesen geht, LIMIT wird erzwungen
-    out = _json.loads(fragen.w_sql("select name, country from companies"))
-    assert out["zeilen"] == [["Test AG", "DE"]]
-
-    # jede Schreib- oder Struktur-Anweisung scheitert an der Textpruefung
-    for boese in ("update companies set name='x'",
-                  "delete from companies",
-                  "insert into companies(name) values('x')",
-                  "drop table companies",
-                  "select 1; delete from companies",       # zweite Anweisung
-                  "pragma writable_schema=1",
-                  "attach database ':memory:' as x"):
-        with _pytest.raises(ValueError):
-            fragen.w_sql(boese)
-
-    # CTEs sind erlaubt — WITH ist lesend
-    out = _json.loads(fragen.w_sql(
-        "with t as (select count(*) n from companies) select n from t"))
-    assert out["zeilen"] == [[1]]
-
-
-def test_fragen_werkzeuge_vollstaendig_registriert():
-    """Jedes Werkzeug braucht Name, Beschreibung, Schema und Funktion — ein
-    unvollstaendiger Eintrag faellt sonst erst beim ersten API-Aufruf um,
-    mitten in einer bezahlten Frage."""
-    from adwatch import fragen
-    namen = set()
-    for w in fragen.WERKZEUGE:
-        assert w["name"] and w["description"] and callable(w["fn"])
-        assert w["input_schema"]["type"] == "object"
-        assert w["name"] not in namen, "doppelter Werkzeugname"
-        namen.add(w["name"])
-    # die Angebots-Regel muss dem Modell an den zwei Stellen begegnen,
-    # an denen es Zahlen erzeugt: Systemprompt und Datenbestand-Werkzeug
-    assert "keine Rechnungen" in fragen._SYSTEM
-
-
-
-def test_fragen_ergebnis_ist_immer_gueltiges_json(temp_db):
-    """Ein gekuerztes Werkzeug-Ergebnis muss LESBAR bleiben.
-
-    Gefunden am 2026-08-20 im End-to-End-Test: `_j` serialisierte erst und
-    schnitt dann bei 6.000 Zeichen ab -- mitten in einem Firmennamen. Der Agent
-    bekam kaputtes JSON zurueck und haette mitten in einer bezahlten Frage
-    daran gescheitert. Jetzt werden ZEILEN entfernt statt Zeichen, und das
-    Ergebnis sagt selbst, dass es gekuerzt ist.
-    """
-    import json as _json
-    from adwatch import fragen
-
-    # Liste, die weit ueber dem Deckel liegt
-    gross = [{"id": i, "name": f"Musterfirma Nummer {i} GmbH & Co. KG", "ort": "Musterstadt"}
-             for i in range(400)]
-    text = fragen._j(gross)
-    assert len(text) <= fragen.MAX_ERGEBNIS_ZEICHEN
-    d = _json.loads(text)                      # <- hier scheiterte es vorher
-    assert d["gekuerzt"], "die Kuerzung muss sichtbar sein"
-    assert len(d["zeilen"]) < 400
-
-    # dasselbe fuer ein Dict mit langer Liste darin
-    text = fragen._j({"spalten": ["id", "name"], "zeilen": gross})
-    d = _json.loads(text)
-    assert len(d["zeilen"]) < 400 and "gekuerzt" in d
-
-    # kleine Ergebnisse bleiben unangetastet
-    d = _json.loads(fragen._j({"a": 1}))
-    assert d == {"a": 1}
-
-
 
 def test_kundenklasse_schliesst_nichts_aus(temp_db):
     """sl_customer_class darf NIEMANDEN aus der Auswertung werfen.
@@ -5012,65 +4925,6 @@ def test_das_land_der_baustelle_wird_erschlossen_nie_geraten(temp_db, monkeypatc
     assert geo.assign_project_centroids() == r, "der Lauf ist wiederholbar"
 
 
-def test_der_chatbot_schlaegt_laeufe_vor_und_startet_nie(temp_db, monkeypatch):
-    """Der Agent darf den Umfang bestimmen, nicht den Startknopf druecken.
-
-    Ein Lauf kostet echtes Geld und laeuft stundenlang; ein missverstandenes
-    "mach das mal fuer alle" waeren 46.810 Firmen. Deshalb liefert das Werkzeug
-    einen VORSCHLAG mit Umfang und Kosten -- und keine gestartete Arbeit.
-
-    Zweitens, und das ist der eigentliche Fallstrick: customers._apply_filters
-    ignoriert unbekannte Schluessel STILL. Beim ersten Test schrieb das Modell
-    `postal_prefix: "8"` fuer Bayern, der Server kannte den Schluessel nicht,
-    und der Vorschlag haette "Bayern" behauptet, waehrend er ganz Deutschland
-    getroffen haette. Ein Filter, der nicht wirkt, muss laut sein.
-    """
-    import json as _json
-    from adwatch import customers, fragen
-    from adwatch.models import Company
-
-    s = temp_db.SessionLocal()
-    s.add_all([
-        Company(name="Haendler DE 1", country="DE", segment="Handel"),
-        Company(name="Haendler DE 2", country="DE", segment="Handel"),
-        Company(name="Architekt DE", country="DE", segment="Architekten"),
-        Company(name="Privat DE", country="DE", segment="Private Endkunden"),
-    ])
-    s.commit(); s.close()
-    monkeypatch.setattr(customers, "SessionLocal", temp_db.SessionLocal)
-
-    # 1. Ein unbekannter Filter wird abgelehnt, nicht stillschweigend geschluckt
-    fehler = _json.loads(fragen.w_lauf_vorschlagen(
-        {"country": ["DE"], "postal_prefix": "8"}, ["anreichern"]))
-    assert "postal_prefix" in fehler["fehler"], \
-        "ein Filter, der nicht wirkt, muss als Fehler zurueckkommen"
-    assert "vorschlag" not in fehler
-
-    # 2. Ein gueltiger Filter liefert einen Vorschlag -- Private Endkunden sind
-    #    ausgeschlossen, auch wenn niemand danach gefragt hat
-    v = _json.loads(fragen.w_lauf_vorschlagen(
-        {"country": ["DE"], "segment": ["Handel"]}, ["anreichern", "identitaet"], "Test"))
-    assert v["vorschlag"] is True
-    assert v["im_lauf"] == 2, "nur die beiden Haendler"
-    assert "Private Endkunden" in v["filter"]["exclude_segment"]
-    assert v["plan"] == {"enrich": True, "identity": True}
-    assert [k["usd"] for k in v["kosten"]] == [round(0.004 * 2, 2), round(0.005 * 2, 2)]
-    # KEINE Firmen-IDs im Vorschlag: 2.000 Zahlen durch das Modell zu schicken
-    # kostet Token, und der Kuerzungsschutz von _j() warf sie beim ersten
-    # Versuch auf 500 herunter, waehrend daneben "2.000 im Lauf" stand.
-    assert "company_ids" not in v
-    assert "gekuerzt" not in v, "der Vorschlag darf nie gekappt werden"
-
-    # 3. Ein Filter ohne Treffer schlaegt nichts vor, statt einen leeren Lauf
-    leer = _json.loads(fragen.w_lauf_vorschlagen(
-        {"country": ["XX"]}, ["anreichern"]))
-    assert leer["vorschlag"] is False
-
-    # 4. Ohne Schritt gibt es keinen Lauf
-    ohne = _json.loads(fragen.w_lauf_vorschlagen({"country": ["DE"]}, []))
-    assert "fehler" in ohne
-
-
 def test_konversion_behauptet_nur_was_das_intervall_traegt(temp_db, monkeypatch):
     """Angebot -> Auftrag je Gruppe, mit Konfidenzintervall statt nackter Quote.
 
@@ -5136,47 +4990,6 @@ def test_konversion_behauptet_nur_was_das_intervall_traegt(temp_db, monkeypatch)
     # 50 von 100 bei einer Grundlinie von 50 % -> das Intervall enthaelt sie.
     assert not konversion.wilson(50, 100)[0] > 0.5
 
-
-def test_kein_filterschluessel_ohne_wirkung(temp_db, monkeypatch):
-    """Der Chatbot darf nur Filter anbieten, die es wirklich gibt.
-
-    Die Liste der erlaubten Schluessel wurde einmal von Hand gepflegt und trug
-    vier Eintraege, die gar keine Filter waren, sondern SPALTENNAMEN des
-    Excel-Exports: products_str, competitor_brands_str, mentions_solarlux_str,
-    assessment. Sie standen in der Liste, wurden also durchgewinkt -- und
-    _apply_filters ignorierte sie stillschweigend. Ein Vorschlag haette "nur
-    Firmen, die cero fuehren" behauptet und in Wahrheit alle 46.810 getroffen.
-
-    Seitdem wird die Liste aus dem Quelltext von _apply_filters gelesen. Dieser
-    Test haelt fest, dass sie das auch bleibt.
-    """
-    import json as _json
-
-    from adwatch import customers, fragen
-    from adwatch.models import Company
-
-    S = fragen._FILTER_SCHLUESSEL
-    assert len(S) > 20, "die Ableitung aus der Quelle hat offenbar nichts gefunden"
-    for phantom in ("products_str", "competitor_brands_str",
-                    "mentions_solarlux_str", "assessment"):
-        assert phantom not in S, f"{phantom} ist eine Exportspalte, kein Filter"
-    # Stichproben, die es geben MUSS -- sonst hat sich die Ableitung verlaufen
-    for echt in ("country", "segment", "q", "no_website", "fit_min", "customer_state"):
-        assert echt in S, f"{echt} fehlt in der abgeleiteten Liste"
-
-    s = temp_db.SessionLocal()
-    s.add_all([Company(name="A", country="DE", segment="Handel"),
-               Company(name="B", country="AT", segment="Handel")])
-    s.commit(); s.close()
-    monkeypatch.setattr(customers, "SessionLocal", temp_db.SessionLocal)
-
-    # Ein unbekannter Schluessel wird abgelehnt, statt wirkungslos zu bleiben
-    d = _json.loads(fragen.w_lauf_vorschlagen(
-        {"country": ["DE"], "products_str": "cero"}, ["anreichern"]))
-    assert "products_str" in d["fehler"]
-    # Ein echter Schluessel geht durch und wirkt
-    v = _json.loads(fragen.w_lauf_vorschlagen({"country": ["DE"]}, ["anreichern"]))
-    assert v["vorschlag"] is True and v["im_lauf"] == 1
 
 
 # ---------------------------------------------------------------------------

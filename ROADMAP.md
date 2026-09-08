@@ -168,7 +168,9 @@ und rot hinterlegt).
 44/44 Monate, 236.710 Leads, `createdon`, SAP-Beleg-Join auf Projektebene) ·
 Projektwert = primäre Verkaufschance statt Summe · Explorer (Karte × Liste ×
 Firmen × Projekte) · dunkle Haut mit hellem Rückweg · Projektkarte in der Höhe ·
-Spaltenfilter über der Karte · Chatbot schlägt Läufe vor.
+Spaltenfilter über der Karte.
+
+**Entfernt am 2026-09-08:** der Chatbot (`adwatch/fragen.py`, Tab, `/api/fragen`, fünf Tests) auf Ihebs Anweisung — vollständig, nicht ausgeblendet.
 
 ---
 
