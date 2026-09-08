@@ -1807,16 +1807,71 @@
     await ladeTaetigkeitsPins();
   }
 
-  async function ladeTaetigkeitsPins() {
-    if (!taetMap) return;
+  // Dieselben Daten wie die Karte, nur als Tabelle. Bewusst EIN Abruf fuer
+  // beide Ansichten -- sonst waere es zweimal derselbe Filter mit der Chance,
+  // auseinanderzulaufen.
+  let TAET = { sort: "bueros", dir: "desc", daten: null };
+
+  async function taetHolen() {
     const land = $("#taetLand").value || "ES";
     const warm = $("#taetNurWarm").checked;
-    const meine = ++taetLauf;
-    // Der Explorer-Filter reist mit -- die Spaltenleiste steht in dieser
-    // Ansicht sichtbar da, also muss sie auch wirken. Vorher tat sie nichts,
-    // und genau das ist Iheb aufgefallen: Zaehler oben 151, Karte unbeirrt 324.
     const d = await api("/api/map/taetigkeit", "POST",
       { land, nur_warm: warm, filters: currentCustomerFilters() });
+    TAET.daten = d;
+    return d;
+  }
+
+  async function ladeTaetigkeitsListe() {
+    const wahl = $("#taetLand");
+    if (!wahl.options.length) {
+      const laender = (CUST_OPTS.active_country || ["ES"]);
+      wahl.innerHTML = laender.map(l =>
+        `<option value="${esc(l)}"${l === "ES" ? " selected" : ""}>${esc(l)}</option>`).join("");
+    }
+    const d = await taetHolen();
+    zeichneTaetigkeitsListe();
+    $("#taetListeHinweis").textContent = d.ohne_koordinate.length
+      ? `${d.ohne_koordinate.length} Orte ohne Koordinate — sie stehen in der Liste, aber nicht auf der Karte: ${d.ohne_koordinate.slice(0, 8).join(", ")}`
+      : "";
+  }
+
+  function zeichneTaetigkeitsListe() {
+    const d = TAET.daten;
+    if (!d) return;
+    const richtung = TAET.dir === "asc" ? 1 : -1;
+    const zeilen = [...d.pins].sort((a, b) => {
+      const x = a[TAET.sort], y = b[TAET.sort];
+      return (typeof x === "string" ? x.localeCompare(y) : x - y) * richtung;
+    });
+    $("#taetTableBody").innerHTML = zeilen.map(p => `
+      <tr>
+        <td><b>${esc(p.ort)}</b></td>
+        <td class="num">${p.bueros}</td>
+        <td class="num">${p.warm || "—"}</td>
+        <td class="sub">${p.flaeche ? "Region" : "Ort"}</td>
+        <td class="sub">${p.liste.slice(0, 6).map(b =>
+            `${b.stufe >= 3 ? "● " : ""}${esc(b.name)}`).join(" · ")}${
+            p.liste.length > 6 ? ` … +${p.liste.length - 6}` : ""}</td>
+      </tr>`).join("");
+    $$("#taetTable thead th[data-sort]").forEach(th => {
+      th.classList.toggle("sorted-asc", th.dataset.sort === TAET.sort && TAET.dir === "asc");
+      th.classList.toggle("sorted-desc", th.dataset.sort === TAET.sort && TAET.dir === "desc");
+    });
+    $("#taetZaehler").textContent = `${d.orte} Orte · ${d.bueros} Büros`;
+  }
+
+  $$("#taetTable thead th[data-sort]").forEach(th => th.addEventListener("click", () => {
+    const k = th.dataset.sort;
+    if (TAET.sort === k) TAET.dir = TAET.dir === "asc" ? "desc" : "asc";
+    else { TAET.sort = k; TAET.dir = k === "ort" ? "asc" : "desc"; }
+    zeichneTaetigkeitsListe();
+  }));
+
+  async function ladeTaetigkeitsPins() {
+    if (!taetMap) return;
+    const meine = ++taetLauf;
+    // Derselbe Abruf wie die Liste -- eine Quelle, zwei Darstellungen.
+    const d = await taetHolen();
     if (meine !== taetLauf) return;          // ueberholt
     const groesste = Math.max(1, ...d.pins.map(p => p.bueros));
     // Zusatzfelder gehoeren nach `props` -- geoJsonAus uebernimmt genau die
@@ -2271,7 +2326,6 @@
     // beantwortet die Frage nicht, um die es geht ("wo wird gebaut?") --
     // dafuer muss man sie nebeneinander SEHEN.
     const taet = EXPLORE.bereich === "taetigkeit";
-    if (taet) EXPLORE.ansicht = "karte";
     const karte = EXPLORE.ansicht === "karte";
     const firmen = EXPLORE.bereich === "firmen";
     $$("#exploreAnsicht button").forEach(b =>
@@ -2283,9 +2337,13 @@
     $("#tab-objekte").classList.toggle("active", !firmen && !taet);
     $("#custMapWrap").classList.toggle("hidden", !(karte && firmen));
     $("#objMapWrap").classList.toggle("hidden", !(karte && !firmen && !taet));
-    $("#taetMapWrap").classList.toggle("hidden", !taet);
+    // Karte ODER Liste, auch hier. Die Liste war zuerst gesperrt, weil ich
+    // dachte, eine Aufzaehlung von Ortsnamen beantworte die Frage nicht --
+    // Iheb hat zu Recht widersprochen: eine sortierbare Tabelle „Ort, Buueros,
+    // davon mit Kontakt" ist genau das, was man exportiert und abarbeitet.
+    $("#taetMapWrap").classList.toggle("hidden", !(taet && karte));
+    $("#taetListeWrap").classList.toggle("hidden", !(taet && !karte));
     $("#taetSteuerung").classList.toggle("hidden", !taet);
-    $$("#exploreAnsicht button").forEach(b => b.disabled = taet);
     $("#exploreCount").textContent = "";
     try { localStorage.setItem("adwatch.explore", JSON.stringify(EXPLORE)); }
     catch { /* private mode */ }
@@ -2296,7 +2354,8 @@
       // findet -- ohne sie bliebe die Filterleiste leer.
       await ensureCustomersLoaded();
       spaltenFilterSpaeter("#custColFilters", "#customersTable");
-      await zeigeTaetigkeitsKarte();
+      if (karte) await zeigeTaetigkeitsKarte();
+      else await ladeTaetigkeitsListe();
       return;
     }
     if (firmen) {
@@ -2342,7 +2401,10 @@
     applyExplore();
   }));
   ["#taetLand", "#taetNurWarm"].forEach(sel =>
-    $(sel)?.addEventListener("change", () => ladeTaetigkeitsPins().catch(() => {})));
+    $(sel)?.addEventListener("change", () => {
+      const listeOffen = !$("#taetListeWrap").classList.contains("hidden");
+      (listeOffen ? ladeTaetigkeitsListe() : ladeTaetigkeitsPins()).catch(() => {});
+    }));
   $$("#exploreBereich button").forEach(b => b.addEventListener("click", () => {
     EXPLORE.bereich = b.dataset.bereich;
     applyExplore();
@@ -4665,6 +4727,8 @@
     // einer anderen Projektion, also muss sie demselben Filter folgen.
     if (!append && taetMap && !$("#taetMapWrap").classList.contains("hidden"))
       ladeTaetigkeitsPins().catch(() => {});
+    if (!append && !$("#taetListeWrap").classList.contains("hidden"))
+      ladeTaetigkeitsListe().catch(() => {});
   }
 
   // Infinite scroll: when the sentinel below the table comes into view and more

@@ -511,6 +511,26 @@
              der Kartencontainer. Leaflet lädt erst beim ersten Umschalten (lazy)
              und holt seine Pins über POST /api/map/pins mit dem AKTUELLEN
              Explorer-Filter. Private Endkunden erscheinen nie (scope, Server). -->
+        <!-- Die Ortsliste: dieselbe Auswahl wie die Taetigkeitskarte, nur als
+             Tabelle. Sie beantwortet „welche Orte" — die Frage „welche Firmen
+             sind in X taetig" beantwortet die FIRMENLISTE mit dem Filter
+             „Taetig in", und die gibt es laengst. Zwei Listen, zwei Ordnungen:
+             hier nach Ort, dort nach Firma. -->
+        <div id="taetListeWrap" class="hidden">
+          <div class="table-wrap">
+            <table id="taetTable" class="data-table">
+              <thead><tr>
+                <th data-sort="ort">Ort</th>
+                <th class="num" data-sort="bueros">Büros</th>
+                <th class="num" data-sort="warm">davon mit Kontakt</th>
+                <th>Art</th>
+                <th>Büros (die wärmsten zuerst)</th>
+              </tr></thead>
+              <tbody id="taetTableBody"></tbody>
+            </table>
+          </div>
+          <p class="hint" id="taetListeHinweis"></p>
+        </div>
         <div id="taetMapWrap" class="hidden">
           <div id="taetMap"></div>
           <div class="map-legend">
