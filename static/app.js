@@ -1719,6 +1719,73 @@
     await loadCustMapPins();
   }
 
+  // ================= TAETIGKEITSKARTE =====================================
+  // Andere Frage als die Firmenkarte, deshalb eine eigene Karte statt eines
+  // Filters: dort sitzen die Nadeln an den ADRESSEN der Bueros (Muenchen,
+  // Hamburg, London), hier an den ORTEN, an denen sie bauen.
+  //
+  // Bewusst Leaflet und nicht MapLibre: die Nadeln sind Kreise mit einer Zahl
+  // darin, kein Vektorstil und keine 3D-Saeulen. Leaflet kann das ohne WebGL,
+  // laeuft also auch dort, wo die Vektorkarte ausfaellt.
+  let taetMap = null, taetSchicht = null, taetLauf = 0;
+
+  async function zeigeTaetigkeitsKarte() {
+    const wahl = $("#taetLand");
+    if (!wahl.options.length) {
+      const laender = (CUST_OPTS.active_country || ["ES"]);
+      wahl.innerHTML = laender.map(l =>
+        `<option value="${esc(l)}"${l === "ES" ? " selected" : ""}>${esc(l)}</option>`).join("");
+    }
+    if (!taetMap) {
+      taetMap = L.map("taetMap", { zoomControl: true, worldCopyJump: false })
+                 .setView([40.4, -3.7], 5);
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+                  { maxZoom: 16, attribution: "Esri" }).addTo(taetMap);
+      taetSchicht = L.layerGroup().addTo(taetMap);
+    }
+    setTimeout(() => taetMap.invalidateSize(), 60);
+    await ladeTaetigkeitsPins();
+  }
+
+  async function ladeTaetigkeitsPins() {
+    const land = $("#taetLand").value || "ES";
+    const warm = $("#taetNurWarm").checked;
+    const meine = ++taetLauf;
+    const d = await api(`/api/map/taetigkeit?land=${encodeURIComponent(land)}&nur_warm=${warm}`);
+    if (meine !== taetLauf) return;          // ueberholt
+    taetSchicht.clearLayers();
+    if (!d.pins.length) {
+      $("#taetZaehler").textContent = "Keine Orte gefunden.";
+      return;
+    }
+    const groesste = Math.max(...d.pins.map(p => p.bueros));
+    d.pins.forEach(p => {
+      // Flaeche statt Punkt: Radius nach Wurzel, damit ein Ort mit 100 Bueros
+      // nicht das Zehnfache eines Ortes mit 10 ueberdeckt.
+      const r = 6 + 22 * Math.sqrt(p.bueros / groesste);
+      const kreis = L.circleMarker([p.lat, p.lng], {
+        radius: r, weight: p.warm ? 2.5 : 1,
+        color: p.warm ? "#34d399" : "#8b5cf6",
+        fillColor: p.flaeche ? "#6366f1" : "#8b5cf6",
+        fillOpacity: 0.55,
+      });
+      const liste = p.liste.map(b =>
+        `<div style="margin:2px 0"><b>${b.stufe >= 3 ? "● " : ""}${esc(b.name)}</b>
+         <span class="muted">${esc(b.sitz)} ${esc(b.land)}</span></div>`).join("");
+      kreis.bindPopup(
+        `<div style="max-height:260px;overflow:auto;min-width:230px">
+           <div style="font-weight:700;margin-bottom:4px">${esc(p.ort)}
+             ${p.flaeche ? '<span class="muted">(Region)</span>' : ""}</div>
+           <div class="muted" style="margin-bottom:6px">${p.bueros} Büros${p.warm ? ` · ${p.warm} mit Kontakt` : ""}</div>
+           ${liste}</div>`, { maxWidth: 320 });
+      kreis.addTo(taetSchicht);
+    });
+    $("#taetZaehler").textContent =
+      `${d.orte} Orte · ${d.bueros} Büros${d.ohne_koordinate.length ? ` · ${d.ohne_koordinate.length} ohne Koordinate` : ""}`;
+    const gruppe = L.featureGroup(taetSchicht.getLayers());
+    if (gruppe.getLayers().length) taetMap.fitBounds(gruppe.getBounds().pad(0.15));
+  }
+
   // ================= OBJEKTKARTE ==========================================
   let objMap = null, objMapPins = [], objOhne = 0;
   let objPinsKey = null, objPinsLauf = null, objPinsSeq = 0;
@@ -2148,10 +2215,15 @@
   try {
     const g = JSON.parse(localStorage.getItem("adwatch.explore") || "{}");
     if (g.ansicht === "liste" || g.ansicht === "karte") EXPLORE.ansicht = g.ansicht;
-    if (g.bereich === "firmen" || g.bereich === "projekte") EXPLORE.bereich = g.bereich;
+    if (["firmen", "projekte", "taetigkeit"].includes(g.bereich)) EXPLORE.bereich = g.bereich;
   } catch { /* private mode */ }
 
   async function applyExplore() {
+    // Die Taetigkeitssicht gibt es nur als Karte. Eine Liste von Ortsnamen
+    // beantwortet die Frage nicht, um die es geht ("wo wird gebaut?") --
+    // dafuer muss man sie nebeneinander SEHEN.
+    const taet = EXPLORE.bereich === "taetigkeit";
+    if (taet) EXPLORE.ansicht = "karte";
     const karte = EXPLORE.ansicht === "karte";
     const firmen = EXPLORE.bereich === "firmen";
     $$("#exploreAnsicht button").forEach(b =>
@@ -2159,15 +2231,22 @@
     $$("#exploreBereich button").forEach(b =>
       b.classList.toggle("active", b.dataset.bereich === EXPLORE.bereich));
     document.body.classList.toggle("explore-karte", karte);
-    $("#tab-customers").classList.toggle("active", firmen);
-    $("#tab-objekte").classList.toggle("active", !firmen);
+    $("#tab-customers").classList.toggle("active", firmen || taet);
+    $("#tab-objekte").classList.toggle("active", !firmen && !taet);
     $("#custMapWrap").classList.toggle("hidden", !(karte && firmen));
-    $("#objMapWrap").classList.toggle("hidden", !(karte && !firmen));
+    $("#objMapWrap").classList.toggle("hidden", !(karte && !firmen && !taet));
+    $("#taetMapWrap").classList.toggle("hidden", !taet);
+    $("#taetSteuerung").classList.toggle("hidden", !taet);
+    $$("#exploreAnsicht button").forEach(b => b.disabled = taet);
     $("#exploreCount").textContent = "";
     try { localStorage.setItem("adwatch.explore", JSON.stringify(EXPLORE)); }
     catch { /* private mode */ }
     // Erst den Bestand, dann die Karte — und zwar mit await: die Karte darf
     // nicht mit einem Filter losziehen, den die Tabelle gleich noch ändert.
+    if (taet) {
+      await zeigeTaetigkeitsKarte();
+      return;
+    }
     if (firmen) {
       await ensureCustomersLoaded();
       spaltenFilterSpaeter("#custColFilters", "#customersTable");
@@ -2210,6 +2289,8 @@
     EXPLORE.ansicht = b.dataset.ansicht;
     applyExplore();
   }));
+  ["#taetLand", "#taetNurWarm"].forEach(sel =>
+    $(sel)?.addEventListener("change", () => ladeTaetigkeitsPins().catch(() => {})));
   $$("#exploreBereich button").forEach(b => b.addEventListener("click", () => {
     EXPLORE.bereich = b.dataset.bereich;
     applyExplore();

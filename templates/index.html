@@ -151,6 +151,16 @@
       <div class="segmented segmented-sub" id="exploreBereich" role="tablist" aria-label="Bestand">
         <button type="button" data-bereich="firmen" class="active">Firmen</button>
         <button type="button" data-bereich="projekte">Projekte</button>
+        <!-- Dritte Sicht, andere Frage: Firmen und Projekte zeigen, WO ETWAS
+             STEHT. Diese zeigt, WO GEBAUT WIRD — die auf den Websites
+             genannten Orte, nicht die Adressen der Büros. -->
+        <button type="button" data-bereich="taetigkeit">Tätigkeit</button>
+      </div>
+      <div id="taetSteuerung" class="hidden" style="display:inline-flex;gap:8px;align-items:center">
+        <select id="taetLand" title="Zielland"></select>
+        <label class="muted" style="display:inline-flex;align-items:center;gap:5px">
+          <input type="checkbox" id="taetNurWarm"> nur Büros mit Kontakt
+        </label>
       </div>
       <span id="exploreCount" class="muted explore-count"></span>
     </div>
@@ -501,6 +511,14 @@
              der Kartencontainer. Leaflet lädt erst beim ersten Umschalten (lazy)
              und holt seine Pins über POST /api/map/pins mit dem AKTUELLEN
              Explorer-Filter. Private Endkunden erscheinen nie (scope, Server). -->
+        <div id="taetMapWrap" class="hidden">
+          <div id="taetMap"></div>
+          <div class="map-legend">
+            <span><i class="map-dot dot-kunde"></i> Ort, an dem gebaut wird — Größe = Zahl der Büros</span>
+            <span class="muted">Inseln und Regionen (Mallorca, Ibiza, Cataluña) sitzen auf dem Flächenmittelpunkt, nicht auf einer Adresse.</span>
+            <span id="taetZaehler" class="muted"></span>
+          </div>
+        </div>
         <div id="custMapWrap" class="hidden">
           <div id="custMap"></div>
           <div class="map-legend">

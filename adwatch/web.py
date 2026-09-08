@@ -623,6 +623,17 @@ def map_projekt_pins_route(status: str | None = None, min_members: int = 1,
                             min_value=min_value, lost_reason=lost_reason)
 
 
+@app.get("/api/map/taetigkeit")
+def taetigkeit_route(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False):
+    """Die im Zielland GENANNTEN Orte als Kartennadeln.
+
+    Andere Frage als /api/map/pins: dort sitzen die Nadeln an den Adressen der
+    Bueros (Muenchen, Hamburg, London), hier an den Orten, an denen sie bauen.
+    """
+    from . import taetigkeit
+    return taetigkeit.orte(land=land, min_stufe=min_stufe, nur_warm=nur_warm)
+
+
 @app.get("/api/konversion")
 def konversion_route(dimension: str = "segment", land: str | None = None,
                      min_entschieden: int = 30):

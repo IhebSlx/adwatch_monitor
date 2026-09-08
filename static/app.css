@@ -1249,7 +1249,9 @@ body.nav-collapsed .nav-badge {
 body.explore-karte .explore-liste-only { display: none !important; }
 
 /* ===================== Phase 4: Karte ===================== */
-#custMap, #objMap {
+/* Die Taetigkeitskarte teilt Groesse und Rahmen mit den anderen beiden --
+   sie ist eine dritte Sicht, keine andere Sorte Karte. */
+#custMap, #objMap, #taetMap {
   height: 68vh; min-height: 420px;
   border: 1px solid var(--border); border-radius: var(--radius);
   /* die Karte liegt UNTER Drawer und Backdrop — Leaflet-Panes bringen eigene
