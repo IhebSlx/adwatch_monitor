@@ -128,7 +128,41 @@ _STOPP = {
     "street", "stone", "banks", "bridge", "church", "market",
     # Deutsch — die im Probelauf tatsächlich aufgetretenen Fehlalarme.
     "bauen", "fragen", "diesen", "planen", "wohnen", "leben", "sehen",
+    # --- empirisch gefunden, nicht geraten -------------------------------
+    # Iheb wollte die spanischen STÄDTE je Büro sehen. Fürs Land waren diese
+    # Wörter harmlos (die Stark-Beleg-Regel fing sie ab), als Ortsliste sind
+    # sie Unsinn. Gefunden durch die Frage: welches „Ortswort" taucht bei
+    # Büros aus SECHS ODER MEHR verschiedenen Ländern auf? Echte Orte hängen
+    # an einem Land, Alltagswörter überall. Die Liste trennte sauber in
+    # bekannte Großstädte (Berlin 12, London 11, Barcelona 10 — die bleiben)
+    # und diese hier:
+    "march", "enter", "manage", "guide", "change", "court", "valley",
+    "america", "opera", "hospital", "canal", "areal", "gross", "bosch",
+    "campus", "atrium", "central", "terminal", "quartier", "carre",
 }
+
+# Vornamen, die zugleich Ortsnamen sind. Auf Landesebene fangen sie sich an der
+# Stark-Beleg-Regel; in einer STÄDTELISTE stünden sie mitten drin. Gemessen an
+# den 317 Spanien-Treffern: `maria` bei 10 Büros, `manuel` 10, `garcia` 8,
+# `javier` 7, `jesus` 6 — allesamt von Team- und Impressumsseiten.
+#
+# Eine Namensliste wird nie vollständig, taugt hier aber, weil sie nur die
+# ANZEIGE der Städte säubert und nichts an der Länderentscheidung ändert.
+_VORNAMEN = {
+    # spanisch
+    "maria", "manuel", "garcia", "javier", "jesus", "carmen", "pilar", "rosa",
+    "carlos", "antonio", "miguel", "pablo", "elena", "laura", "marta", "david",
+    "angel", "cristina", "lucia", "alba", "nuria", "gloria", "irene", "olga",
+    "paula", "rocio", "silvia", "sonia", "victoria", "belen", "pilar",
+    "fernando", "ramon", "sergio", "alvaro", "andres", "ignacio", "rafael",
+    "esteban", "lorenzo", "vicente", "salvador", "domingo", "moreno",
+    # deutsch / niederländisch / italienisch / französisch
+    "albert", "klaus", "petra", "felix", "roman", "teresa", "isabel", "vera",
+    "martin", "thomas", "walter", "werner", "hermann", "wilhelm", "ludwig",
+    "anton", "bruno", "arnold", "otto", "emil", "hugo", "oskar", "kurt",
+    "sara", "julia", "clara", "eva", "anna", "lena", "nora", "ida",
+}
+
 
 # Ab dieser Länge wird ein Ortsname überhaupt gesucht. 1.765 der 70.701 Namen
 # sind kürzer — fast durchweg Weiler, deren Namen zugleich Alltagswörter sind.
@@ -198,6 +232,7 @@ def _grossstadt_schwelle(land: str) -> int:
 
 _index_lock = threading.Lock()
 _ORT_INDEX: dict[str, dict[str, int]] | None = None
+_ANZEIGE: dict[str, str] = {}      # gefalteter Name -> echte Schreibweise
 
 
 def _falten(s: str) -> str:
@@ -228,6 +263,7 @@ def ort_index() -> dict[str, dict[str, int]]:
         if _ORT_INDEX is not None:
             return _ORT_INDEX
         idx: dict[str, dict[str, int]] = defaultdict(dict)
+        anzeige: dict[str, tuple[int, str]] = {}
         with SessionLocal() as s:
             for place, land, n in s.execute(_sql(
                     "SELECT place, country, COUNT(*) FROM plz_geo "
@@ -239,8 +275,33 @@ def ort_index() -> dict[str, dict[str, int]]:
                 if not re.fullmatch(r"[a-z][a-z0-9' \-]*", name):
                     continue      # Klammern, Ziffernpräfixe, Sonderzeichen raus
                 idx[name][land] = max(idx[name].get(land, 0), n)
+                # Schreibweise für die Anzeige: die des größten Vorkommens.
+                # Gesucht und verglichen wird gefaltet und klein ("malaga"),
+                # angezeigt werden soll aber "Málaga" — eine Städteliste in
+                # Kleinbuchstaben sieht aus wie ein Datenfehler.
+                if anzeige.get(name, (0, ""))[0] < n:
+                    anzeige[name] = (n, place.strip())
         _ORT_INDEX = dict(idx)
+        _ANZEIGE.update({k: v[1] for k, v in anzeige.items()})
         return _ORT_INDEX
+
+
+# Verbindungswörter bleiben klein: „Palma de Mallorca", nicht „Palma De
+# Mallorca". plz_geo selbst führt sie großgeschrieben (die Quelle ist durchweg
+# titelgeschrieben), was in einer Städteliste falsch aussieht.
+_KLEIN_IM_NAMEN = {"de", "del", "della", "der", "den", "la", "le", "les",
+                   "los", "di", "da", "do", "dos", "das", "van", "von", "y",
+                   "i", "of", "the", "am", "im", "an", "auf", "sur", "en",
+                   "ob", "bei", "unter", "aan", "op"}
+
+
+def ortsname(gefaltet: str) -> str:
+    """Anzeigeform eines Ortsnamens („malaga" -> „Málaga")."""
+    ort_index()          # stellt sicher, dass _ANZEIGE gefüllt ist
+    roh = _ANZEIGE.get(gefaltet) or gefaltet.title()
+    teile = roh.split()
+    return " ".join(w if i == 0 or w.lower() not in _KLEIN_IM_NAMEN else w.lower()
+                    for i, w in enumerate(teile))
 
 
 def _vorwahl_laender(roh: str) -> dict[str, int]:
@@ -400,6 +461,11 @@ def laender_aus_text(roh: str, heimat: str | None = None,
     unsicher: list[str] = []
     # Länder mit mindestens EINEM starken Beleg. Siehe _grossstadt_schwelle.
     stark: set[str] = set()
+    # Die ORTE je Land, getrennt von den Belegen. Iheb braucht sie als eigene
+    # Liste („welche Städte in Spanien?"), und die Belege taugen dafür nicht:
+    # dort stehen Vorwahl und Ländername mit drin, und sie sind auf acht
+    # Einträge gekappt — ein Büro mit dreißig Mallorca-Projekten hätte acht.
+    staedte: dict[str, set[str]] = defaultdict(set)
 
     # Vorwahl — das stärkste Signal, deshalb das höchste Gewicht
     for land, n in _vorwahl_laender(roh).items():
@@ -423,6 +489,8 @@ def laender_aus_text(roh: str, heimat: str | None = None,
             if len(laender) == 1:
                 punkte[land] += gewicht
                 belege[land].append(name)
+                if _taugt_als_ort(name):
+                    staedte[land].add(name)
                 continue
             # mehrdeutig: entscheiden, nicht würfeln
             wahl = _stichentscheid(laender, punkte, heimat, tld)
@@ -431,6 +499,8 @@ def laender_aus_text(roh: str, heimat: str | None = None,
             elif wahl == land:
                 punkte[land] += max(1, gewicht - 1)   # abgeleitet, also schwächer
                 belege[land].append(f"{name} (mehrdeutig)")
+                if _taugt_als_ort(name):
+                    staedte[land].add(name)
 
     # Heimatland des Büros — es ist dort unstrittig tätig
     if heimat:
@@ -450,7 +520,9 @@ def laender_aus_text(roh: str, heimat: str | None = None,
         if stufe == "sicher" and land not in stark:
             stufe = "moeglich"
         aus[land] = {"punkte": p, "sicherheit": stufe,
-                     "belege": sorted(set(belege[land]))[:8]}
+                     "belege": sorted(set(belege[land]))[:8],
+                     # ungekappt: genau das ist die Information, die gefragt war
+                     "staedte": [ortsname(x) for x in sorted(staedte.get(land, ()))]}
     return {"laender": dict(sorted(aus.items(), key=lambda x: -x[1]["punkte"])),
             "unsicher": sorted(set(unsicher))[:10]}
 
@@ -505,6 +577,22 @@ def _stufe(punkte: int) -> str:
     if punkte >= 4:
         return "sicher"
     return "moeglich" if punkte >= 2 else "schwach"
+
+
+def _taugt_als_ort(name: str) -> bool:
+    """Gehoert dieser Treffer in eine STAEDTELISTE?
+
+    Zwei Sorten fallen heraus, beide im Probelauf aufgetaucht:
+      * Vornamen von Team-Seiten (`maria`, `manuel`) — siehe _VORNAMEN.
+      * LAENDERNAMEN. `plz_geo` fuehrt tatsaechlich Orte namens „España" und
+        „Nederland", also stand in der Staedteliste eines spanischen Bueros
+        „Barcelona, España, Madrid". Fuers Land war das richtig, als Stadt ist
+        es Unsinn.
+
+    Regionen (`Catalonia`, `Andalusia`) bleiben ABSICHTLICH drin: „taetig in
+    Katalonien" ist eine brauchbare Auskunft, auch wenn es keine Stadt ist.
+    """
+    return name not in _VORNAMEN and name not in LAND_NAMEN
 
 
 def _stichentscheid(laender: dict[str, int], punkte: dict[str, int],

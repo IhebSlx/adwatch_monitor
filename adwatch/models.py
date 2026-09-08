@@ -310,6 +310,12 @@ class Company(Base):
     active_countries_all: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     active_countries_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     active_countries_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Die ORTE je Land: {"ES": ["Andratx", "Marbella", "Palma de Mallorca"]}.
+    # Getrennt von `active_countries_evidence`, weil dort auch Vorwahl und
+    # Ländername stehen und die Belege auf acht Einträge gekappt sind — ein
+    # Büro mit dreißig Mallorca-Projekten hätte dort acht. Diese Liste ist
+    # ungekappt und enthält nur echte Ortsnamen.
+    active_cities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Wie weit sind wir mit diesem Büro schon gekommen? 0-5, siehe
     # insights/beziehung.py. Kein Modell, nur eine Auswertung dessen, was das

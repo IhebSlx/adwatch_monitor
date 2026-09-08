@@ -248,6 +248,7 @@ def _migrate(engine) -> None:
                 ("active_countries_all", "JSON"),
                 ("active_countries_evidence", "JSON"),
                 ("active_countries_at", "DATETIME"),
+                ("active_cities", "JSON"),
                 ("relation_level", "INTEGER"),
                 ("relation_why", "VARCHAR(200)"),
             ]:

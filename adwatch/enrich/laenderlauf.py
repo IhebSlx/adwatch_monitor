@@ -424,15 +424,17 @@ def _schreiben(ergebnisse: dict[str, dict], nach_domain: dict) -> None:
                       if v["sicherheit"] == "sicher"]
             alle = {k: v["sicherheit"] for k, v in res["laender"].items()}
             belege = {k: v["belege"] for k, v in res["laender"].items()}
+            staedte = {k: v.get("staedte") or [] for k, v in res["laender"].items()
+                       if v.get("staedte")}
             if res.get("unsicher"):
                 belege["_unsicher"] = res["unsicher"]
             for cid, _ in nach_domain.get(dom, []):
                 s.execute(_sql(
                     "UPDATE companies SET active_countries = :a, "
                     "active_countries_all = :b, active_countries_evidence = :c, "
-                    "active_countries_at = :d WHERE id = :i"),
+                    "active_cities = :e, active_countries_at = :d WHERE id = :i"),
                     {"a": _json(sicher), "b": _json(alle), "c": _json(belege),
-                     "d": jetzt, "i": cid})
+                     "e": _json(staedte), "d": jetzt, "i": cid})
         s.commit()
 
 

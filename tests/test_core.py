@@ -5486,3 +5486,42 @@ def test_projektpfad_erkennt_das_wort_auch_mitten_im_abschnitt():
     assert not LL._ist_projekt_pfad("https://x.de/projekte")
     assert not LL._ist_projekt_pfad("https://x.de/portfolioreader-1784")
     assert not LL._ist_projekt_pfad("https://x.de/kontakt")
+
+
+def test_staedteliste_traegt_orte_und_keine_namen(temp_db, monkeypatch):
+    """Iheb wollte je Buero die spanischen STAEDTE sehen. Die Belege taugen
+    dafuer nicht: dort stehen Vorwahl und Landesname mit drin, und sie sind auf
+    acht Eintraege gekappt. `staedte` ist die eigene, ungekappte Liste --
+    und muss zwei Sorten Rauschen draussen halten, beide im Probelauf
+    aufgetaucht: Vornamen von Team-Seiten und Laendernamen, die plz_geo als
+    Ort fuehrt ('Espana', 'Nederland')."""
+    from adwatch.enrich import laender
+
+    monkeypatch.setattr(laender, "_SCHWELLEN", None)
+    monkeypatch.setattr(laender, "_ORT_INDEX", {
+        "marbella": {"ES": 7}, "andratx": {"ES": 3}, "malaga": {"ES": 26},
+        "maria": {"ES": 2}, "espana": {"ES": 4},
+        **{f"esdorf{i}": {"ES": 1} for i in range(200)},
+    })
+    monkeypatch.setattr(laender, "_ANZEIGE", {
+        "marbella": "Marbella", "andratx": "Andratx", "malaga": "Málaga"})
+
+    r = laender.laender_aus_text(
+        "Estudio en Malaga. +34 952 1. Proyectos en Marbella y Andratx, "
+        "en toda Espana. Nuestro equipo: Maria.", heimat="ES", tld="es")
+    staedte = r["laender"]["ES"]["staedte"]
+    assert "Marbella" in staedte and "Andratx" in staedte
+    assert not any(x.lower() == "maria" for x in staedte), "Vorname ist keine Stadt"
+    assert not any(x.lower() == "espana" for x in staedte), "Land ist keine Stadt"
+    # die Belege duerfen beides weiter enthalten -- sie sind der Nachweis,
+    # nicht die Auswertung
+    assert "maria" in r["laender"]["ES"]["belege"]
+
+
+def test_ortsname_haelt_verbindungswoerter_klein():
+    """plz_geo ist durchweg titelgeschrieben und fuehrt 'Palma De Mallorca'.
+    In einer Staedteliste sieht das nach Datenfehler aus."""
+    from adwatch.enrich import laender
+
+    assert laender.ortsname("palma de mallorca") == "Palma de Mallorca"
+    assert laender.ortsname("frankfurt am main") == "Frankfurt am Main"
