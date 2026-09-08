@@ -316,6 +316,10 @@ class Company(Base):
     # Büro mit dreißig Mallorca-Projekten hätte dort acht. Diese Liste ist
     # ungekappt und enthält nur echte Ortsnamen.
     active_cities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Woran `decision_role` erkannt wurde (enrich/rolle.py). Ohne Beleg waere
+    # das Feld eine Behauptung; mit Beleg ist jede Zeile nachpruefbar, ohne
+    # die Seite erneut zu holen.
+    decision_role_evidence: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     # Wie weit sind wir mit diesem Büro schon gekommen? 0-5, siehe
     # insights/beziehung.py. Kein Modell, nur eine Auswertung dessen, was das

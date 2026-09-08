@@ -36,7 +36,7 @@ from sqlalchemy import func, select, text as _sql
 
 from ..db import SessionLocal
 from ..models import Company
-from . import fetchpage, laender, render
+from . import fetchpage, laender, render, rolle
 
 logger = logging.getLogger("adwatch.laenderlauf")
 
@@ -374,8 +374,16 @@ def lauf(neu: bool = False, limit: int | None = None,
             if laender_der_zeilen else None
         tld = dom.rsplit(".", 1)[-1] if "." in dom else None
         try:
-            return dom, laender.laender_aus_text(bund["text"], heimat=heimat,
-                                                 tld=tld), None
+            res = laender.laender_aus_text(bund["text"], heimat=heimat, tld=tld)
+            # Die Entscheidungsrolle faellt hier gratis mit ab: der Volltext
+            # ist schon geholt, und die Rolle ist Stichwortsuche, kein Urteil.
+            # Sie NICHT hier mitzunehmen hiesse, spaeter 10.212 Seiten ein
+            # zweites Mal zu crawlen -- vier Stunden fuer etwas, das in
+            # derselben Schleife eine Millisekunde kostet.
+            r_rolle, r_belege = rolle.rolle_aus_text(bund["text"])
+            res["rolle"] = r_rolle
+            res["rolle_belege"] = r_belege
+            return dom, res, None
         except Exception as e:                      # noqa: BLE001
             return dom, None, f"auswertung: {type(e).__name__}"
 
@@ -424,17 +432,30 @@ def _schreiben(ergebnisse: dict[str, dict], nach_domain: dict) -> None:
                       if v["sicherheit"] == "sicher"]
             alle = {k: v["sicherheit"] for k, v in res["laender"].items()}
             belege = {k: v["belege"] for k, v in res["laender"].items()}
+            # Orte NUR fuer Laender, die als „sicher" gelten. Sonst schleppt
+            # die Staedteliste das Rauschen mit, das die Laenderentscheidung
+            # gerade herausgefiltert hat: ein Barcelona-Buero bekam
+            # „PT: Escola, Termas" (katalanisch/portugiesisch fuer Schule und
+            # Baeder), ein Berliner „CH: Martina" und „SE: Handen". Fuer das
+            # LAND war das folgenlos — die Stark-Beleg-Regel liess PT und CH
+            # gar nicht erst durch —, in einer Ortsliste stand es trotzdem.
             staedte = {k: v.get("staedte") or [] for k, v in res["laender"].items()
-                       if v.get("staedte")}
+                       if v.get("staedte") and v.get("sicherheit") == "sicher"}
+            r_rolle = res.get("rolle")
+            r_beleg = ", ".join(res.get("rolle_belege") or [])[:300] or None
             if res.get("unsicher"):
                 belege["_unsicher"] = res["unsicher"]
             for cid, _ in nach_domain.get(dom, []):
                 s.execute(_sql(
                     "UPDATE companies SET active_countries = :a, "
                     "active_countries_all = :b, active_countries_evidence = :c, "
-                    "active_cities = :e, active_countries_at = :d WHERE id = :i"),
+                    "active_cities = :e, active_countries_at = :d, "
+                    "decision_role = COALESCE(:r, decision_role), "
+                    "decision_role_evidence = COALESCE(:rb, decision_role_evidence) "
+                    "WHERE id = :i"),
                     {"a": _json(sicher), "b": _json(alle), "c": _json(belege),
-                     "e": _json(staedte), "d": jetzt, "i": cid})
+                     "e": _json(staedte), "d": jetzt, "r": r_rolle,
+                     "rb": r_beleg, "i": cid})
         s.commit()
 
 

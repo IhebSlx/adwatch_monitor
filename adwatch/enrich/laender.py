@@ -139,6 +139,10 @@ _STOPP = {
     "march", "enter", "manage", "guide", "change", "court", "valley",
     "america", "opera", "hospital", "canal", "areal", "gross", "bosch",
     "campus", "atrium", "central", "terminal", "quartier", "carre",
+    # aus der Sonde mit Staedteliste, 2026-09-08: portugiesische und
+    # katalanische Alltagswoerter, die als Weiler gefuehrt werden
+    "escola", "termas", "piloto", "ancora", "barrio", "estacao", "quinta",
+    "moinho", "fabrica", "cidade", "aldeia", "serra", "outeiro", "varzea",
 }
 
 # Vornamen, die zugleich Ortsnamen sind. Auf Landesebene fangen sie sich an der
