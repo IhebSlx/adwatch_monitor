@@ -88,10 +88,20 @@ def bueros(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False,
     holen sich ihre Grundmenge über denselben Filter, damit die Zahlen
     zusammenpassen.
     """
-    roh = orte(land=land, min_stufe=min_stufe, nur_warm=nur_warm, filters=filters)
+    roh = _orte_roh(land=land, min_stufe=min_stufe, nur_warm=nur_warm,
+                    filters=filters)
 
     je_buero: dict[int, dict] = {}
     for pin in roh["pins"]:
+        # `pin["liste"]` ist hier die VOLLE Liste. `orte()` kuerzt sie fuer die
+        # Karte auf 40 -- und genau daraus hat diese Funktion frueher gelesen.
+        # Gemessen 2026-09-08: Barcelona nennt 92 Bueros, Madrid 83, also
+        # fielen 95 Listeneintraege weg und die Spanien-Liste zeigte 213 statt
+        # 231 Bueros. Ein Buero, dessen einzige spanische Orte Barcelona und
+        # Madrid sind und das dort auf Platz 41 stand, kam in der Arbeitsliste
+        # ueberhaupt nicht vor -- und damit auch nicht in der Excel fuer
+        # Daniel. Eine Kuerzung fuer die ANZEIGE darf nie die DATENMENGE
+        # beschneiden.
         for b in pin["liste"]:
             zeile = je_buero.get(b["id"])
             if zeile is None:
@@ -161,8 +171,28 @@ def _je_buero_einmal(bueros: list[dict]) -> list[dict]:
     return list(beste.values()) + ohne_domain
 
 
+# Wie viele Büros je Nadel im Kartenaufruf mitfahren. Die Sprechblase zeigt
+# ohnehin nur die ersten paar Zeilen, und Barcelona mit 92 Büros an 324
+# Nadeln wäre unnötig viel Leitung. NUR eine Anzeigegrenze: `_orte_roh` gibt
+# die vollständigen Listen zurück, und `bueros()` liest von dort.
+_LISTE_JE_NADEL = 40
+
+
 def orte(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False,
          filters: dict | None = None) -> dict:
+    """Die genannten Orte eines Landes als Kartennadeln — für die Leitung.
+
+    Identisch zu `_orte_roh`, nur mit gekürzten Bürolisten je Nadel. Wer die
+    Daten braucht und nicht die Karte, nimmt `_orte_roh`.
+    """
+    d = _orte_roh(land=land, min_stufe=min_stufe, nur_warm=nur_warm,
+                  filters=filters)
+    d["pins"] = [{**p, "liste": p["liste"][:_LISTE_JE_NADEL]} for p in d["pins"]]
+    return d
+
+
+def _orte_roh(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False,
+              filters: dict | None = None) -> dict:
     """Die genannten Orte eines Landes als Kartennadeln.
 
     `min_stufe` filtert auf die Beziehungsstufe des NENNENDEN Büros — so lässt
@@ -226,9 +256,16 @@ def orte(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False,
             "bueros": len(bueros),
             "warm": sum(1 for b in bueros if b["stufe"] >= 3),
             "flaeche": ort.strip().lower() in _FLAECHEN,
-            "liste": bueros[:40],
+            "liste": bueros,
         })
     pins.sort(key=lambda p: -p["bueros"])
+    # ZWEI WAHRHEITEN FUER DIESELBE MENGE, und das war die falsche.
+    # Gezaehlt wurden bisher die rohen CRM-Zeilen (243) -- also genau die
+    # Mehrfachnennungen, die Iheb in der Liste geaergert haben ("there is a
+    # lot of repetition") und die `_je_buero_einmal` deshalb zusammenfasst.
+    # Die Kartenlegende sagte 243, die Liste darunter 213. Gezaehlt wird jetzt,
+    # was auch gezeigt wird: zusammengefasste Bueros, und nur die, deren Ort
+    # eine Koordinate hat und damit ueberhaupt auf der Karte landet.
     return {"land": land, "pins": pins, "orte": len(pins),
-            "bueros": len({b["id"] for v in je_ort.values() for b in v}),
+            "bueros": len({b["id"] for p in pins for b in p["liste"]}),
             "ohne_koordinate": sorted(ohne)}

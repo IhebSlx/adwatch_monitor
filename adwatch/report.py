@@ -112,6 +112,48 @@ def _describe_filters_de(filters: dict | None) -> str | None:
         bits.append("nur ohne Meta-Page-ID")
     if filters.get("tracked") is not None:
         bits.append("nur getrackte Firmen" if filters["tracked"] else "nur ungetrackte Firmen")
+    # --- Die Filter, die diese Zusammenfassung bis heute VERSCHWIEGEN hat ----
+    # Aufgefallen beim Taetigkeitsbericht: der Umfangskasten sagte „Segment:
+    # Architekten" und liess „Taetig in: ES" weg. Ein Bericht, dessen Kopf
+    # seinen eigenen Umfang zu weit angibt, ist schlimmer als einer ohne Kopf --
+    # der Leser haelt 213 spanienaktive Bueros fuer 20.696 Architekten.
+    if filters.get("active_country"):
+        werte = filters["active_country"]
+        werte = werte if isinstance(werte, list) else [werte]
+        lose = " (auch schwache Belege)" if filters.get("active_country_lose") else ""
+        bits.append("tätig in: " + ", ".join(werte) + lose)
+    if filters.get("relation_min") is not None:
+        bits.append(f"Beziehung mindestens {filters['relation_min']}")
+    if filters.get("health"):
+        werte = filters["health"]
+        bits.append("Kundenzustand: " + ", ".join(werte if isinstance(werte, list) else [werte]))
+    if filters.get("city"):
+        bits.append(f'Ort enthält: "{filters["city"]}"')
+    if filters.get("sap_state") == "with":
+        bits.append("nur mit SAP-Nummer")
+    elif filters.get("sap_state") == "without":
+        bits.append("nur ohne SAP-Nummer")
+    for jahr in (1, 2, 3, 4):
+        lo, hi = filters.get(f"revenue_y{jahr}_min"), filters.get(f"revenue_y{jahr}_max")
+        if lo is None and hi is None:
+            continue
+        spanne = (f"{_eur(lo)}–{_eur(hi)}" if lo is not None and hi is not None
+                  else f"ab {_eur(lo)}" if lo is not None else f"bis {_eur(hi)}")
+        bits.append(f"Umsatz Jahr -{jahr}: {spanne}")
+    for feld, label in (("solarlux_relevance", "Solarlux-Relevanz"),
+                        ("solarlux_fit", "Solarlux-Passung"),
+                        ("decision_role", "Rolle"),
+                        ("office_type", "Bürotyp"),
+                        ("enrichment_status", "Anreicherung"),
+                        ("customer_state", "Kundenstatus"),
+                        ("lead_source", "Leadquelle")):
+        werte = filters.get(feld)
+        if werte:
+            bits.append(f"{label}: " + ", ".join(werte if isinstance(werte, list) else [werte]))
+    if filters.get("fit_min") is not None:
+        bits.append(f"Fit-Score ab {filters['fit_min']}")
+    if filters.get("no_website"):
+        bits.append("nur ohne Website")
     return "Gefiltert nach: " + "; ".join(bits) if bits else None
 
 
@@ -163,7 +205,12 @@ def next_report_path(prefix: str, label: str | None = None) -> Path:
         n += 1
 
 
-_REPORT_FILENAME_RE = re.compile(r"^adwatch_(top5|report)_(KW\d{2}_\d{4})(?:_(\d{2}))?\.pdf$")
+# ACHTUNG: Diese Regex ist zugleich die Download-Weiche. `_safe_report_path`
+# in web.py laesst nur Dateinamen durch, die hier passen -- ein neuer
+# Berichtstyp, der hier fehlt, laesst sich erzeugen und dann nicht
+# herunterladen (und im E-Mail-Versand auch nicht anhaengen).
+_REPORT_FILENAME_RE = re.compile(
+    r"^adwatch_(top5|report|taetigkeit)_(KW\d{2}_\d{4})(?:_(\d{2}))?\.pdf$")
 
 
 def parse_report_filename(filename: str) -> dict | None:
@@ -173,8 +220,9 @@ def parse_report_filename(filename: str) -> dict | None:
     if not m:
         return None
     kind, label, version = m.groups()
-    return {"report_type": "top5" if kind == "top5" else "full",
-           "label": label, "version": int(version) if version else None}
+    art = {"top5": "top5", "taetigkeit": "taetigkeit"}.get(kind, "full")
+    return {"report_type": art,
+            "label": label, "version": int(version) if version else None}
 
 
 def subject_for_filename(filename: str) -> str:
@@ -1149,7 +1197,184 @@ def build_top5_report(path: str | None = None, filters: dict | None = None) -> s
     return path
 
 
-REPORT_TYPE_LABEL = {"top5": "Top 5", "full": "Full report"}
+REPORT_TYPE_LABEL = {"top5": "Top 5", "full": "Full report",
+                     "taetigkeit": "Tätigkeit"}
+
+
+_TAET_STUFE = {5: "gemeinsames Objekt", 4: "auf einer Verkaufschance",
+               3: "Schriftverkehr", 2: "Debitor angelegt",
+               1: "als Lead erfasst", 0: "nur Stammdaten"}
+
+# Landesnamen für den Berichtstitel. Bewusst kurz und ohne Anspruch auf
+# Vollständigkeit: fehlt ein Code, steht der Code da — besser ein „PL" im
+# Titel als ein falscher Landesname.
+_LAND_TITEL = {
+    "ES": "Spanien", "PT": "Portugal", "FR": "Frankreich", "IT": "Italien",
+    "DE": "Deutschland", "AT": "Österreich", "CH": "Schweiz",
+    "NL": "Niederlande", "BE": "Belgien", "LU": "Luxemburg", "DK": "Dänemark",
+    "SE": "Schweden", "NO": "Norwegen", "FI": "Finnland", "PL": "Polen",
+    "CZ": "Tschechien", "GB": "Großbritannien", "IE": "Irland",
+    "GR": "Griechenland", "HU": "Ungarn", "RO": "Rumänien", "HR": "Kroatien",
+    "SI": "Slowenien", "SK": "Slowakei", "LI": "Liechtenstein",
+}
+
+
+def build_taetigkeit_report(land: str, zeilen: list[dict],
+                            tabellenfilter: str | None = None,
+                            filters: dict | None = None,
+                            path: str | None = None) -> str:
+    """Die Tätigkeitsliste als PDF — genau die Zeilen, die auf dem Schirm stehen.
+
+    WARUM EIN EIGENER BERICHT UND NICHT DER VORHANDENE.
+    „Report erstellen" baut den Anzeigen-Aktivitätsbericht: Divergenz,
+    Profile, Qualifizierung, Anzeigenzahlen. Der kennt die Spalte „Orte im
+    Zielland" nicht — und die IST diese Tabelle. Er richtet sich außerdem nach
+    dem Explorer-Filter, während die Kopffilter der Tätigkeitsliste nur im
+    Browser leben; ein Bericht „über diese fünf Büros" wäre dort still zu 213
+    geworden.
+
+    Deshalb: die IDs kommen vom Browser (in der sichtbaren Reihenfolge), die
+    DATEN kommen aus der Datenbank. Der Bildschirm bestimmt die Auswahl, nicht
+    den Inhalt.
+
+    Querformat, weil die Ortsspalte die eigentliche Nachricht ist — und hier
+    steht sie VOLLSTÄNDIG, nicht auf acht Orte gekürzt wie in der Tabelle.
+    """
+    from reportlab.lib.pagesizes import landscape
+
+    if path is None:
+        path = str(next_report_path("adwatch_taetigkeit"))
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    landname = _LAND_TITEL.get((land or "").upper(), (land or "").upper())
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Title"], textColor=INK, fontSize=19,
+                        spaceAfter=2, alignment=0)
+    sub = ParagraphStyle("sub", parent=styles["Normal"], textColor=MUTED, fontSize=9)
+    body = ParagraphStyle("body", parent=styles["Normal"], textColor=INK,
+                          fontSize=9, leading=12.5)
+    note = ParagraphStyle("note", parent=styles["Normal"], textColor=MUTED,
+                          fontSize=7.5, leading=10.5)
+    cellh = ParagraphStyle("cellh", parent=styles["Normal"], textColor=colors.white,
+                           fontSize=8, leading=10)
+    cellhr = ParagraphStyle("cellhr", parent=cellh, alignment=TA_RIGHT)
+    cell = ParagraphStyle("cell", parent=styles["Normal"], textColor=INK,
+                          fontSize=8, leading=10.5)
+    cellr = ParagraphStyle("cellr", parent=cell, alignment=TA_RIGHT)
+    cellm = ParagraphStyle("cellm", parent=cell, textColor=MUTED, fontSize=7.5)
+
+    doc = SimpleDocTemplate(path, pagesize=landscape(A4),
+                            leftMargin=12 * mm, rightMargin=12 * mm,
+                            topMargin=12 * mm, bottomMargin=13 * mm,
+                            title="AdWatch — Tätigkeitsbericht " + landname)
+
+    warm = sum(1 for z in zeilen if (z.get("stufe") or 0) >= 3)
+    gewonnen = sum(1 for z in zeilen if (z.get("gewonnen") or 0) > 0)
+    orte_ges = len({o for z in zeilen for o in (z.get("orte") or [])})
+
+    umfang = [_describe_filters_de(filters), tabellenfilter]
+    umfang_text = " &nbsp;·&nbsp; ".join(_esc(x) for x in umfang if x) \
+        or "Kein Filter — alle Büros mit Projekten in diesem Land"
+
+    story = [
+        Paragraph("Wer baut in " + _esc(landname) + "?", h1),
+        Paragraph("Architektur- und Planungsbüros mit Projekten in "
+                  + _esc(landname) + " &nbsp;·&nbsp; erstellt am "
+                  + _de_datetime(dt.datetime.now()), sub),
+        Spacer(1, 9),
+    ]
+
+    lbl = ParagraphStyle("lbl", parent=styles["Normal"], textColor=ACCENT,
+                         fontSize=8, leading=11, spaceAfter=1)
+    val = ParagraphStyle("val", parent=styles["Normal"], textColor=INK,
+                         fontSize=10, leading=13.5)
+    metastil = ParagraphStyle("meta", parent=styles["Normal"], textColor=MUTED,
+                              fontSize=8.5, leading=12, spaceBefore=2)
+    kasten = Table([[[
+        Paragraph("BERICHT-UMFANG", lbl),
+        Paragraph(umfang_text, val),
+        Paragraph(f"<b>{len(zeilen)}</b> Büros &nbsp;·&nbsp; {orte_ges} "
+                  f"genannte Orte &nbsp;·&nbsp; <b>{warm}</b> mit bestehendem "
+                  f"Kontakt (Beziehung ≥ 3) &nbsp;·&nbsp; {gewonnen} mit "
+                  f"bereits gewonnenem Objekt", metastil),
+    ]]], colWidths=[249 * mm])
+    kasten.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), ACCENT_SOFT),
+        ("LINEBEFORE", (0, 0), (0, -1), 3, ACCENT),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story += [kasten, Spacer(1, 8)]
+
+    # Woher die Spalten kommen. Steht VOR der Tabelle, nicht als Fußnote: wer
+    # die Liste weitergibt, gibt die Einschränkungen mit weiter.
+    story += [Paragraph(
+        "<b>Woher die Angaben kommen.</b> Die Orte sind aus den Websites der "
+        "Büros gelesen (Referenz- und Projektseiten), nicht aus dem CRM — sie "
+        "sagen „hier wurde gebaut oder geplant“ und tragen kein Datum. "
+        "<b>Beziehung</b> ist die im CRM belegte Nähe: 5 = gemeinsames Objekt "
+        "gewonnen, 4 = auf einer Verkaufschance, 3 = Schriftverkehr, 2 = Debitor "
+        "angelegt, 1 = als Lead erfasst, 0 = nur Stammdaten. <b>Rolle</b> ist aus "
+        "dem Wortlaut der Website erkannt (Bauleitung, Ausschreibung, "
+        "dirección de obra …) und ist <b>keine Rangfolge</b>: gemessen sagt sie "
+        "nichts darüber, wer eher abschließt. Ein Strich bedeutet „nicht "
+        "erkennbar“, nicht „nein“.", note), Spacer(1, 7)]
+
+    if not zeilen:
+        story.append(Paragraph("Keine Büros entsprechen dem gewählten Filter.", body))
+        doc.build(story)
+        return path
+
+    daten = [[Paragraph("Büro", cellh), Paragraph("Bez.", cellhr),
+              Paragraph("was genau", cellh), Paragraph("Sitz", cellh),
+              Paragraph("Rolle", cellh), Paragraph("Orte", cellhr),
+              Paragraph("Orte in " + _esc(landname), cellh),
+              Paragraph("gew.", cellhr)]]
+    grau = MUTED.hexval()[2:]
+    for z in zeilen:
+        name = "<b>" + _esc(z.get("name") or "") + "</b>"
+        web = z.get("website")
+        if web:
+            name += '<br/><font size="7" color="#%s">%s</font>' % (grau, _esc(web))
+        stufe = z.get("stufe") or 0
+        sitz = (z.get("sitz") or "") + ((" · " + z["land"]) if z.get("land") else "")
+        daten.append([
+            Paragraph(name, cell),
+            Paragraph(("● " if stufe >= 3 else "") + str(stufe), cellr),
+            Paragraph(_esc(_TAET_STUFE.get(stufe, "")), cellm),
+            Paragraph(_esc(sitz), cellm),
+            Paragraph(_esc(z.get("rolle") or "—"), cellm),
+            Paragraph(str(len(z.get("orte") or [])), cellr),
+            Paragraph(_esc(", ".join(z.get("orte") or [])), cell),
+            Paragraph(str(z.get("gewonnen") or "—"), cellr),
+        ])
+
+    tab = Table(daten, colWidths=[52 * mm, 10 * mm, 26 * mm, 30 * mm, 24 * mm,
+                                  10 * mm, 84 * mm, 11 * mm],
+                repeatRows=1)
+    stil = [
+        ("BACKGROUND", (0, 0), (-1, 0), INK),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]
+    # Die Zeilen mit bestehendem Kontakt bekommen Farbe. Das ist die einzige
+    # Hervorhebung im Bericht, weil es die einzige ist, die eine Handlung nach
+    # sich zieht: hier gibt es schon einen Faden, an dem man ziehen kann.
+    for i, z in enumerate(zeilen, start=1):
+        if (z.get("stufe") or 0) >= 3:
+            stil.append(("BACKGROUND", (0, i), (-1, i), ACCENT_SOFT))
+        elif i % 2 == 0:
+            stil.append(("BACKGROUND", (0, i), (-1, i), BG))
+    tab.setStyle(TableStyle(stil))
+    story.append(tab)
+    doc.build(story)
+    return path
 
 
 def _meta_path(pdf_path) -> Path:

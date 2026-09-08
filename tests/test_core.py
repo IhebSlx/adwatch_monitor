@@ -5430,3 +5430,126 @@ def test_gesundheit_ist_filterbar_und_customer_state_bleibt_luecke(temp_db, monk
     # kann den zahlenden Kunden nicht von der leeren Zeile trennen
     assert customers.query_companies({"customer_state": ["never"]},
                                      page_size=1)["total"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Tätigkeit: die Kartenkürzung darf die Arbeitsliste nicht beschneiden
+# ---------------------------------------------------------------------------
+
+def test_bueros_liste_wird_nicht_von_der_kartenkuerzung_beschnitten(temp_db, monkeypatch):
+    """Gemessen 2026-09-08: die Spanien-Liste zeigte 213 statt 231 Büros.
+
+    `orte()` kürzt die Büroliste je Kartennadel auf 40 — verständlich, die
+    Sprechblase zeigt ohnehin nur die ersten Zeilen. `bueros()` las aber genau
+    aus diesem gekürzten Ergebnis. Barcelona nennt 92 Büros, Madrid 83, also
+    fielen 95 Listeneinträge weg, und ein Büro, dessen einzige spanische Orte
+    Barcelona und Madrid sind und das dort auf Platz 41 stand, fehlte in der
+    Arbeitsliste vollständig — samt Excel und PDF, die daraus entstehen.
+
+    Eine Kürzung für die ANZEIGE darf nie die DATENMENGE beschneiden.
+    """
+    from adwatch import taetigkeit
+    from adwatch.models import Company
+
+    monkeypatch.setattr(taetigkeit, "SessionLocal", temp_db.SessionLocal)
+    # Ein Ort, mehr Büros als in eine Nadel passen. Der Ort braucht eine
+    # Koordinate, sonst landet er gar nicht auf der Karte -- "Mallorca" steht
+    # in _FLAECHEN und ist damit unabhängig von der plz_geo-Tabelle.
+    n = taetigkeit._LISTE_JE_NADEL + 12
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name=f"Büro {i:03d}", segment="Architekten",
+                sub_segment="Architekturbüro",
+                website_domain=f"buero{i:03d}.example",
+                active_cities={"ES": ["Mallorca"]}, relation_level=0)
+        for i in range(n)
+    ])
+    s.commit(); s.close()
+
+    karte = taetigkeit.orte(land="ES")
+    liste = taetigkeit.bueros(land="ES")
+
+    # Die Karte darf kürzen ...
+    assert len(karte["pins"]) == 1
+    assert len(karte["pins"][0]["liste"]) == taetigkeit._LISTE_JE_NADEL
+    # ... die Nadel muss aber die WAHRE Zahl nennen, nicht die Länge ihrer Liste
+    assert karte["pins"][0]["bueros"] == n
+    # ... und die Arbeitsliste muss vollständig sein
+    assert liste["bueros"] == n
+    assert len(liste["rows"]) == n
+    # Karte und Liste sind zwei Ansichten EINER Menge: eine Zahl, nicht zwei.
+    assert karte["bueros"] == liste["bueros"]
+
+
+def test_taetigkeit_bericht_nimmt_genau_die_uebergebenen_ids(temp_db, monkeypatch, tmp_path):
+    """Die Kopffilter der Tätigkeitsliste leben nur im Browser — der Bericht
+    bekommt deshalb die sichtbaren IDs mitgeschickt, in der sichtbaren
+    Reihenfolge. Die DATEN kommen trotzdem aus der Datenbank: der Bildschirm
+    bestimmt die Auswahl, nicht den Inhalt."""
+    from pypdf import PdfReader
+
+    from adwatch import taetigkeit
+    from adwatch.models import Company
+    from adwatch.report import build_taetigkeit_report
+
+    monkeypatch.setattr(taetigkeit, "SessionLocal", temp_db.SessionLocal)
+    s = temp_db.SessionLocal()
+    s.add_all([
+        Company(name="Warmes Büro", segment="Architekten",
+                sub_segment="Architekturbüro", website_domain="warm.example",
+                city="Lübeck", country="DE",
+                active_cities={"ES": ["Mallorca"]}, relation_level=4),
+        Company(name="Kaltes Büro", segment="Architekten",
+                sub_segment="Architekturbüro", website_domain="kalt.example",
+                city="Essen", country="DE",
+                active_cities={"ES": ["Mallorca"]}, relation_level=0),
+    ])
+    s.commit(); s.close()
+
+    alle = taetigkeit.bueros(land="ES")["rows"]
+    assert len(alle) == 2
+    warm = [z for z in alle if z["stufe"] >= 3]
+
+    pfad = build_taetigkeit_report(
+        land="ES", zeilen=warm, filters={"segment": ["Architekten"]},
+        tabellenfilter="Tabellenfilter: Beziehung mindestens 3",
+        path=str(tmp_path / "probe.pdf"))
+    text = "\n".join(pg.extract_text() for pg in PdfReader(pfad).pages)
+    assert "Warmes Büro" in text
+    assert "Kaltes Büro" not in text          # gefiltert heißt gefiltert
+    assert "Beziehung mindestens 3" in text     # der Filter steht im Kopf
+    assert "Mallorca" in text
+    assert "keine Rangfolge" in text            # der Rollen-Vorbehalt fährt mit
+
+
+def test_taetigkeit_dateiname_kommt_durch_die_download_weiche():
+    """`_REPORT_FILENAME_RE` ist nicht nur für die Historie da —
+    `_safe_report_path` lässt nur durch, was dort passt. Ein Berichtstyp, der
+    in der Regex fehlt, lässt sich erzeugen und dann nicht herunterladen."""
+    from adwatch.report import parse_report_filename
+
+    p = parse_report_filename("adwatch_taetigkeit_KW37_2026.pdf")
+    assert p and p["report_type"] == "taetigkeit" and p["label"] == "KW37_2026"
+    # die bestehenden Typen dürfen sich dabei nicht verschoben haben
+    assert parse_report_filename("adwatch_report_KW37_2026.pdf")["report_type"] == "full"
+    assert parse_report_filename("adwatch_top5_KW37_2026_02.pdf")["report_type"] == "top5"
+    assert parse_report_filename("../../etc/passwd") is None
+
+
+def test_filterbeschreibung_verschweigt_die_taetigkeitsfilter_nicht():
+    """Der Umfangskasten sagte "Segment: Architekten" und ließ "tätig in: ES"
+    weg — ein Bericht, dessen Kopf seinen eigenen Umfang zu WEIT angibt, ist
+    schlimmer als einer ohne Kopf: der Leser hält 213 spanienaktive Büros für
+    20.696 Architekten."""
+    from adwatch.report import _describe_filters_de
+
+    d = _describe_filters_de({"segment": ["Architekten"], "active_country": ["ES"],
+                              "relation_min": 3, "city": "Mallorca",
+                              "sap_state": "with"})
+    assert "Segment: Architekten" in d
+    assert "tätig in: ES" in d
+    assert "Beziehung mindestens 3" in d
+    assert "Mallorca" in d
+    assert "SAP-Nummer" in d
+    assert _describe_filters_de({}) is None
+

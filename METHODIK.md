@@ -345,3 +345,42 @@ gebaut, in die Oberfläche gestellt und nie gegen ein Ergebnis gehalten.** Was
 zählbar aussieht, wird sortiert. Die Regel daraus: eine Spalte, die eine
 Rangfolge suggeriert, braucht entweder eine Messung gegen echte Ausgänge oder
 einen Hinweis, dass sie keine hat.
+
+## Nachtrag 2026-09-08: die Anzeigegrenze, die die Datenmenge beschnitten hat
+
+Beim Bau des Tätigkeitsberichts als PDF fielen zwei Zahlen für dieselbe Menge
+auf: die Kartenlegende sagte **243 Büros**, die Liste darunter **213**. Beide
+waren falsch.
+
+`orte()` kürzt die Büroliste je Kartennadel auf 40 — richtig, die Sprechblase
+zeigt ohnehin nur die ersten Zeilen, und 324 Nadeln mit vollen Listen wären
+unnötig viel Leitung. `bueros()` las aber genau aus diesem **gekürzten**
+Ergebnis:
+
+| Nadel | Büros | in der Liste |
+|---|---|---|
+| Barcelona | 92 | 40 |
+| Madrid | 83 | 40 |
+
+95 Listeneinträge fielen weg. Ein Büro, dessen einzige spanischen Orte
+Barcelona und Madrid sind und das dort auf Platz 41 stand, kam in der
+Arbeitsliste überhaupt nicht vor — und damit auch nicht in der Excel und nicht
+im PDF. Wahre Zahl: **231**, nicht 213.
+
+Die 243 waren der andere Fehler: gezählt wurden die rohen CRM-Zeilen, also
+genau die Mehrfachnennungen, die `_je_buero_einmal` für die Anzeige
+zusammenfasst (`bofill.com` dreimal, `gmp-architekten.de` dreimal). Die
+Legende nannte damit eine Zahl, die in der Liste absichtlich nicht mehr
+auftauchte, und rechnete zusätzlich Orte ohne Koordinate mit, die auf der
+Karte nie erscheinen.
+
+Beides behoben: `_orte_roh()` rechnet mit vollen Listen, `orte()` kürzt nur
+noch für die Leitung, und gezählt wird, was auch gezeigt wird. Karte und Liste
+nennen jetzt dieselbe Zahl.
+
+**Die Regel daraus:** eine Kürzung für die ANZEIGE darf nie die DATENMENGE
+beschneiden — und wenn zwei Ansichten derselben Menge zwei Zahlen nennen, ist
+mindestens eine davon falsch. Beides ist jetzt in `tests/test_core.py`
+festgehalten, weil ein solcher Fehler nichts kaputt macht, sondern nur
+weniger liefert; er fällt nur auf, wenn jemand nachzählt.
+

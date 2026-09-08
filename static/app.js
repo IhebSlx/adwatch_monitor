@@ -1876,11 +1876,19 @@
     });
     $$("#taetTable thead th[data-tf]").forEach(th =>
       th.classList.toggle("th-filtered", taetFilterAktiv(th.dataset.tf)));
+    // Was hier steht, ist auch das, was in das PDF geht -- inklusive
+    // Reihenfolge. Der Bildschirm bestimmt die Auswahl, nicht die Datenbank.
+    TAET.sichtbar = zeilen;
     // Der Zaehler nennt BEIDE Zahlen, sobald gefiltert wird -- sonst sieht es
-    // aus, als waere der Bestand kleiner geworden.
-    $("#taetZaehler").textContent = zeilen.length === d.rows.length
+    // aus, als waere der Bestand kleiner geworden. Er steht an ZWEI Stellen:
+    // in der Kartenlegende und ueber der Liste, weil immer nur eine von beiden
+    // sichtbar ist.
+    const zText = zeilen.length === d.rows.length
       ? `${d.bueros} B\u00fcros \u00b7 ${d.orte} Orte`
       : `${zeilen.length} von ${d.bueros} B\u00fcros`;
+    $("#taetZaehler").textContent = zText;
+    $("#taetListeZaehler").textContent = zText;
+    $("#taetFilterResetBtn").classList.toggle("hidden", zeilen.length === d.rows.length);
     $$("#taetTableBody tr[data-id]").forEach(tr =>
       tr.addEventListener("click", () => openCompanyDrawer(Number(tr.dataset.id))));
   }
@@ -2011,6 +2019,57 @@
     e.stopPropagation();
     taetMenuOeffnen(th);
   }));
+
+  // Die gesetzten Kopffilter in Worten -- fuer den Berichtskopf. Der Filter
+  // lebt nur im Browser, also muss der Browser ihn mitschicken; sonst traegt
+  // ein Bericht ueber fuenf Bueros einen Kopf, der 213 behauptet.
+  function taetFilterText() {
+    const f = TAET.f, s = [];
+    if (f.name) s.push(`Name enth\u00e4lt "${f.name}"`);
+    if (f.stufeMin != null) s.push(`Beziehung mindestens ${f.stufeMin}`);
+    if (f.sitz.length) s.push(`Sitzland: ${f.sitz.join(", ")}`);
+    if (f.rolle.length)
+      s.push(`Rolle: ${f.rolle.map(r => r || "nicht erkennbar").join(", ")}`);
+    if (f.anzahlMin != null) s.push(`mindestens ${f.anzahlMin} Orte`);
+    if (f.ort) s.push(`Ort enth\u00e4lt "${f.ort}"`);
+    if (f.gewonnenMin != null) s.push(`mindestens ${f.gewonnenMin} gewonnen`);
+    return s.length ? "Tabellenfilter: " + s.join("; ") : null;
+  }
+
+  $("#taetFilterResetBtn")?.addEventListener("click", () => {
+    TAET.f = { name: "", stufeMin: null, sitz: [], rolle: [], anzahlMin: null,
+               ort: "", gewonnenMin: null };
+    zeichneTaetigkeitsListe();
+  });
+
+  // PDF genau ueber die sichtbaren Zeilen. Der vorhandene "Report erstellen"
+  // kann das nicht: er baut den Anzeigen-Aktivitaetsbericht nach dem
+  // EXPLORER-Filter, kennt die Ortsspalte nicht und wuerde die Kopffilter
+  // stillschweigend uebergehen -- aus fuenf Bueros wuerden 213.
+  $("#taetPdfBtn")?.addEventListener("click", async () => {
+    const knopf = $("#taetPdfBtn");
+    const zeilen = TAET.sichtbar || [];
+    if (!zeilen.length) { toast("Keine B\u00fcros in der Liste \u2014 der Filter ist zu eng.", "error"); return; }
+    const alt = knopf.textContent;
+    knopf.disabled = true; knopf.textContent = "Erstelle \u2026";
+    try {
+      const { filename, bueros } = await api("/api/taetigkeit/bericht", "POST", {
+        land: $("#taetLand").value || "ES",
+        nur_warm: $("#taetNurWarm").checked,
+        filters: currentCustomerFilters(),
+        ids: zeilen.map(z => z.id),
+        tabellenfilter: taetFilterText(),
+      });
+      LAST_REPORT = { filename, filters: currentCustomerFilters(), reportType: "taetigkeit" };
+      await showReportReadyPanel(filename,
+        `\u2713 T\u00e4tigkeitsbericht \u00fcber ${bueros} ${bueros === 1 ? "B\u00fcro" : "B\u00fcros"} erstellt`);
+      try { await loadReports(); } catch { /* Reports-Liste ist Nebensache */ }
+    } catch (e) {
+      toast(`PDF fehlgeschlagen: ${e.message}`, "error");
+    } finally {
+      knopf.disabled = false; knopf.textContent = alt;
+    }
+  });
 
   async function ladeTaetigkeitsPins() {
     if (!taetMap) return;
@@ -3295,8 +3354,12 @@
     $("#reportReadyInfo").textContent = infoText || "";
     $("#reportReadyDownload").href = `/api/reports/${encodeURIComponent(filename)}`;
     renderRecipientChecks($("#reportReadyRecipients"), recipients);
-    // "Save as report" only makes sense for a reusable filter, not a one-off id selection.
-    const savable = !(LAST_REPORT && LAST_REPORT.filters && LAST_REPORT.filters.ids);
+    // "Save as report" only makes sense for a reusable filter, not a one-off id
+    // selection — and not for a Tätigkeitsbericht: a saved definition rebuilds
+    // the ad-activity report, so the button would promise a repeat of
+    // something else than what was just downloaded.
+    const savable = !(LAST_REPORT && LAST_REPORT.filters && LAST_REPORT.filters.ids)
+      && !(LAST_REPORT && LAST_REPORT.reportType === "taetigkeit");
     $("#reportReadySaveBtn").classList.toggle("hidden", !savable);
     hideCompanyPanels();
     const p = $("#reportReadyPanel");

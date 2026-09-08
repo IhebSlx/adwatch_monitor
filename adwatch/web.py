@@ -635,6 +635,41 @@ def taetigkeit_bueros_route(payload: dict):
                              filters=payload.get("filters") or None)
 
 
+@app.post("/api/taetigkeit/bericht")
+def taetigkeit_bericht_route(payload: dict):
+    """Die Tätigkeitsliste als PDF — genau die Zeilen, die im Browser stehen.
+
+    `ids` ist die sichtbare Auswahl in der sichtbaren Reihenfolge; die Daten
+    dazu kommen frisch aus `bueros()`. Der Bildschirm bestimmt also die
+    Auswahl, nicht den Inhalt — ein manipulierter Rumpf kann keine erfundene
+    Zeile in einen Bericht schreiben, nur eine echte weglassen.
+
+    Ohne `ids` (oder mit leerer Liste) geht die ganze gefilterte Menge in den
+    Bericht. Das ist der Fall „Bericht über alles, was der Explorer-Filter
+    hergibt".
+    """
+    from . import taetigkeit
+    from .report import build_taetigkeit_report, write_report_meta
+
+    land = str(payload.get("land") or "ES")
+    filters = payload.get("filters") or None
+    daten = taetigkeit.bueros(land=land,
+                              min_stufe=int(payload.get("min_stufe") or 0),
+                              nur_warm=bool(payload.get("nur_warm")),
+                              filters=filters)
+    zeilen = daten["rows"]
+    ids = payload.get("ids")
+    if ids:
+        # Reihenfolge des Bildschirms, nicht die der Datenbank: der Bericht
+        # soll dieselbe Sortierung tragen wie die Tabelle, aus der er kommt.
+        nach_id = {z["id"]: z for z in zeilen}
+        zeilen = [nach_id[i] for i in ids if i in nach_id]
+    pfad = build_taetigkeit_report(land=land, zeilen=zeilen, filters=filters,
+                                   tabellenfilter=payload.get("tabellenfilter") or None)
+    write_report_meta(pfad, filters=filters, source="manual")
+    return {"filename": Path(pfad).name, "bueros": len(zeilen)}
+
+
 @app.post("/api/map/taetigkeit")
 def taetigkeit_route(payload: dict):
     """Wie unten, aber mit dem Explorer-Filter im Rumpf (wie /api/map/pins)."""

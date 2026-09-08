@@ -528,6 +528,16 @@
              „Taetig in", und die gibt es laengst. Zwei Listen, zwei Ordnungen:
              hier nach Ort, dort nach Firma. -->
         <div id="taetListeWrap" class="hidden">
+          <!-- Der Zähler stand nur in der Kartenlegende — und die ist in der
+               Listenansicht ausgeblendet. „5 von 213 Büros" war damit genau
+               dort unsichtbar, wo gefiltert wird. Hier steht er sichtbar,
+               zusammen mit dem Weg nach draußen: PDF und Filter löschen. -->
+          <div class="inline-form" style="margin-bottom:8px;align-items:center">
+            <span id="taetListeZaehler" class="muted"></span>
+            <span style="flex:1"></span>
+            <button id="taetFilterResetBtn" class="btn btn-sm btn-ghost hidden">Alle Filter zurücksetzen</button>
+            <button id="taetPdfBtn" class="btn btn-sm" title="PDF genau über die Büros, die hier stehen — mit den vollständigen Ortslisten und dem verwendeten Filter im Kopf">📄 PDF</button>
+          </div>
           <div class="table-wrap">
             <table id="taetTable" class="data-table">
               <!-- data-tf: welcher Filter an diesem Kopf haengt. Ohne den
