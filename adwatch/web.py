@@ -623,8 +623,18 @@ def map_projekt_pins_route(status: str | None = None, min_members: int = 1,
                             min_value=min_value, lost_reason=lost_reason)
 
 
+@app.post("/api/map/taetigkeit")
+def taetigkeit_route(payload: dict):
+    """Wie unten, aber mit dem Explorer-Filter im Rumpf (wie /api/map/pins)."""
+    from . import taetigkeit
+    return taetigkeit.orte(land=str(payload.get("land") or "ES"),
+                           min_stufe=int(payload.get("min_stufe") or 0),
+                           nur_warm=bool(payload.get("nur_warm")),
+                           filters=payload.get("filters") or None)
+
+
 @app.get("/api/map/taetigkeit")
-def taetigkeit_route(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False):
+def taetigkeit_get_route(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False):
     """Die im Zielland GENANNTEN Orte als Kartennadeln.
 
     Andere Frage als /api/map/pins: dort sitzen die Nadeln an den Adressen der

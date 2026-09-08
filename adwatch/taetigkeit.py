@@ -74,29 +74,53 @@ def _koordinaten(land: str, namen: set[str]) -> dict[str, tuple[float, float]]:
     return aus
 
 
-def orte(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False) -> dict:
+def orte(land: str = "ES", min_stufe: int = 0, nur_warm: bool = False,
+         filters: dict | None = None) -> dict:
     """Die genannten Orte eines Landes als Kartennadeln.
 
     `min_stufe` filtert auf die Beziehungsstufe des NENNENDEN Büros — so lässt
     sich fragen „wo bauen die Büros, mit denen wir schon gearbeitet haben?",
     was etwas anderes ist als „wo wird überhaupt gebaut".
+
+    `filters` ist DASSELBE Filterobjekt wie im Firmen-Explorer
+    (`customers._apply_filters`). Ohne diesen Durchstich war die Karte ein
+    Fremdkörper: Iheb hatte die Spaltenfilter über der Karte gesetzt, die Zahl
+    oben sprang auf 151 — und die Karte zeigte unbeirrt alle 324 Orte. Die
+    Filterleiste steht in dieser Ansicht sichtbar da, also MUSS sie wirken;
+    eine sichtbare Bedienung, die nichts tut, ist schlimmer als keine.
+
+    Die Grundmenge bleibt trotzdem eingegrenzt: gezeigt werden nur
+    Architekturbüros mit erkannten Orten. Ein Filter kann diese Menge
+    verkleinern, aber nicht über sie hinausgreifen.
     """
+    from sqlalchemy import select
+
+    from .customers import _apply_filters
+    from .models import Company
+
     land = (land or "ES").upper()
     with SessionLocal() as s:
-        rows = s.execute(_sql("""
-            SELECT id, name, city, country, website_domain, active_cities,
-                   COALESCE(relation_level, 0)
-            FROM companies
-            WHERE segment = 'Architekten' AND sub_segment = 'Architekturbüro'
-              AND duplicate_of IS NULL AND active_cities IS NOT NULL
-              AND active_cities <> '{}'
-        """)).all()
+        stmt = select(Company.id, Company.name, Company.city, Company.country,
+                      Company.website_domain, Company.active_cities,
+                      Company.relation_level).where(
+            Company.segment == "Architekten",
+            Company.sub_segment == "Architekturbüro",
+            Company.duplicate_of.is_(None),
+            Company.active_cities.is_not(None),
+            Company.active_cities != "{}")
+        if filters:
+            stmt = _apply_filters(stmt, filters)
+        rows = s.execute(stmt).all()
 
     je_ort: dict[str, list[dict]] = defaultdict(list)
     for cid, name, stadt, sitz, web, roh, stufe in rows:
+        stufe = stufe or 0
         if stufe < min_stufe or (nur_warm and stufe < 3):
             continue
-        for ort in (json.loads(roh or "{}").get(land) or []):
+        # Ueber die ORM-Spalte kommt bereits ein dict zurueck, ueber rohes SQL
+        # ein String. Beides zulassen statt sich auf eine Herkunft zu verlassen.
+        staedte = roh if isinstance(roh, dict) else json.loads(roh or "{}")
+        for ort in (staedte.get(land) or []):
             je_ort[ort].append({"id": cid, "name": name, "sitz": stadt or "",
                                 "land": sitz or "", "website": web or "",
                                 "stufe": stufe})

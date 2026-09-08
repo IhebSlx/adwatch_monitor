@@ -1812,7 +1812,11 @@
     const land = $("#taetLand").value || "ES";
     const warm = $("#taetNurWarm").checked;
     const meine = ++taetLauf;
-    const d = await api(`/api/map/taetigkeit?land=${encodeURIComponent(land)}&nur_warm=${warm}`);
+    // Der Explorer-Filter reist mit -- die Spaltenleiste steht in dieser
+    // Ansicht sichtbar da, also muss sie auch wirken. Vorher tat sie nichts,
+    // und genau das ist Iheb aufgefallen: Zaehler oben 151, Karte unbeirrt 324.
+    const d = await api("/api/map/taetigkeit", "POST",
+      { land, nur_warm: warm, filters: currentCustomerFilters() });
     if (meine !== taetLauf) return;          // ueberholt
     const groesste = Math.max(1, ...d.pins.map(p => p.bueros));
     // Zusatzfelder gehoeren nach `props` -- geoJsonAus uebernimmt genau die
@@ -2288,6 +2292,10 @@
     // Erst den Bestand, dann die Karte — und zwar mit await: die Karte darf
     // nicht mit einem Filter losziehen, den die Tabelle gleich noch ändert.
     if (taet) {
+      // Die Firmenliste wird gebraucht, damit die Spaltenleiste ihre Koepfe
+      // findet -- ohne sie bliebe die Filterleiste leer.
+      await ensureCustomersLoaded();
+      spaltenFilterSpaeter("#custColFilters", "#customersTable");
       await zeigeTaetigkeitsKarte();
       return;
     }
@@ -4653,6 +4661,10 @@
     // blieben stehen, während die (unsichtbare) Tabelle längst gefiltert war.
     if (!append && custMap && !$("#custMapWrap").classList.contains("hidden"))
       loadCustMapPins().catch(() => {});
+    // Dasselbe fuer die Taetigkeitskarte: sie zeigt dieselbe Grundmenge in
+    // einer anderen Projektion, also muss sie demselben Filter folgen.
+    if (!append && taetMap && !$("#taetMapWrap").classList.contains("hidden"))
+      ladeTaetigkeitsPins().catch(() => {});
   }
 
   // Infinite scroll: when the sentinel below the table comes into view and more
