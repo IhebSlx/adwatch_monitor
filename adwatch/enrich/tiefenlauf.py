@@ -64,7 +64,13 @@ ARBEITER = 20
 # Wie viele Chromium-Instanzen gleichzeitig laufen duerfen. Wer keinen Platz
 # bekommt, rendert nicht -- der einfache Abruf steht ja schon da. Ein duenner
 # Text ist ein kleiner Verlust, ein erschoepfter Arbeitsspeicher ein grosser.
-_BROWSER = threading.BoundedSemaphore(3)
+# Gemessen auf Ihebs Rechner: ein Browser sind VIER Prozesse und 349 MB.
+# Drei Browser waren mit 1,7 GB Spitze weit unter den 33,8 GB der Maschine --
+# die Schranke war also zu vorsichtig, und sie war zugleich der Engpass: im
+# breiten Bestand feuerte das Rendern 6,3 mal je Domain (duenne und
+# JavaScript-Seiten sind dort die Regel, nicht die Ausnahme). Acht Browser
+# sind knapp 3 GB und heben die Obergrenze des ganzen Laufs deutlich.
+_BROWSER = threading.BoundedSemaphore(8)
 _BROWSER_WARTEN = 20        # Sekunden, dann ohne Browser weiter
 
 # Die Notbremse, nicht das Ziel. „Die ganze Website" heißt in der Praxis: bis
@@ -487,6 +493,38 @@ _INSELN = {"mallorca", "majorca", "menorca", "ibiza", "eivissa", "formentera",
            "costa blanca"}
 _GROSSSTADT_PLZ = 5      # ab so vielen Postleitzahlen ist ein Ort eine Stadt
 
+# Der Ort eines VERLAGS ist nicht der Ort des Projekts.
+#
+# herzogdemeuron.com fuehrt unter jedem Projekt sein Literaturverzeichnis:
+#
+#     In: Luis Fernandez-Galiano (Ed.). "Arquitectura Viva Proyectos."
+#     Vol. No. 089, Madrid, Arquitectura Viva SL, 2018. pp. 40-47.
+#     ... Vol. No. 129/130, Madrid, El Croquis, 2006.
+#
+# Ergebnis vor dieser Regel: 140 von 223 spanischen "Projekten" lagen in
+# Madrid -- darunter "St. Jakob-Park Basel". Ernsthafte Bueros pflegen solche
+# Verzeichnisse, also trifft der Fehler gerade die interessantesten Adressen.
+_ZITAT_DAVOR = re.compile(
+    r"(In:|\(Ed\.\)|Ed\.:|Eds\.|Vol\.|pp\.|ISBN|Hrsg|Hg\.|"
+    r"Verlag|Press|Editorial|Editions?|Publisher|croquis|"
+    r"arquitectura viva|domus)", re.I)
+# "Madrid, Arquitectura Viva SL, 2018" -- Ort, Verlag, Jahr ist die Form einer
+# Literaturangabe und nie die einer Bauadresse.
+_ZITAT_DANACH = re.compile(r"^\s*,[^,]{2,60},\s*(19|20)\d\d")
+
+# Landes- und Regionsnamen sind keine Staedte. "Espana" tauchte bei
+# cruzyortiz.com 52-mal als Ort auf und wurde -- weil es eine gleichnamige
+# Gemeinde gibt -- der Comunidad de Madrid zugeschlagen.
+_KEIN_ORT = {"espana", "espanya", "spain", "spanien", "espagne", "spagna",
+             "europa", "europe", "iberia", "peninsula"}
+
+
+def _ist_literaturangabe(text_gef: str, start: int, ende: int) -> bool:
+    """Steht dieser Ortstreffer in einer Literaturangabe?"""
+    davor = text_gef[max(0, start - 120):start]
+    danach = text_gef[ende:ende + 70]
+    return bool(_ZITAT_DAVOR.search(davor) or _ZITAT_DANACH.match(danach))
+
 
 def _ort_belegt(name: str, titel_gef: str, text_gef: str,
                 gewicht: int) -> str | None:
@@ -496,15 +534,26 @@ def _ort_belegt(name: str, titel_gef: str, text_gef: str,
     nachvollziehbaren Grund in einer Liste steht, ist genau das, was diesen
     Datenbestand schon zweimal verdorben hat.
     """
+    if name in _KEIN_ORT:
+        return None
     if name in titel_gef:
         return "im Projekttitel"
+
+    # Jedes Vorkommen im Text durchgehen und Literaturangaben ueberspringen.
+    # Steht der Ort NUR in Zitaten, ist er der Sitz eines Verlags.
+    stellen = list(re.finditer(re.escape(name), text_gef))
+    echte = [m for m in stellen
+             if not _ist_literaturangabe(text_gef, m.start(), m.end())]
+    if stellen and not echte:
+        return None
+
     if name in _INSELN:
         return "Insel oder Region"
     if gewicht >= _GROSSSTADT_PLZ:
         return f"Stadt ({gewicht} PLZ)"
-    # „Marbella, Spanien" \u2014 der Landesname in Sichtweite macht aus dem
-    # Namen einen Ort. 60 Zeichen sind eine Zeile Adresse, nicht mehr.
-    for m in re.finditer(re.escape(name), text_gef):
+    # "Marbella, Spanien" -- der Landesname in Sichtweite macht aus dem Namen
+    # einen Ort. 60 Zeichen sind eine Zeile Adresse, nicht mehr.
+    for m in echte:
         umfeld = text_gef[max(0, m.start() - 60):m.end() + 60]
         if _SPANIENWORT.search(umfeld):
             return "neben dem Landesnamen"

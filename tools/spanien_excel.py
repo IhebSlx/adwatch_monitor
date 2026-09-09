@@ -202,17 +202,36 @@ def bauen(d: dict, pfad: str | None = None) -> str:
     ]
     _kopfzeile(ws, spalten)
 
-    zeilen = []
+    # WER IN DIE LISTE GEHOERT. Gescannt wurde mehr, als hier steht: ein Buero
+    # ohne ein einziges spanisches Projekt UND ohne Niederlassung ist kein
+    # "europaeisches Buero, das in Spanien baut" -- es ist ein geprueftes
+    # Buero, bei dem nichts gefunden wurde. Solche Zeilen gehoeren in die
+    # Methodik (als Zahl), nicht in die Arbeitsliste.
+    zeilen, geprueft_leer = [], 0
     for dom, sc in scans.items():
         f = firmen.get(dom)
         if not f:
             continue
+        hat_es = any(p[8] == "ES" for p in je_domain.get(dom, []))
+        hat_nl = bool(json.loads(sc[7] or "null"))
+        if not hat_es and not hat_nl:
+            geprueft_leer += 1
+            continue
         ps = je_domain.get(dom, [])
         es_p = [p for p in ps if p[8] == "ES"]
         es_urls = {p[1] for p in es_p}
-        regionen_hier = Counter(p[6] or p[5] for p in es_p if (p[5] or p[6]))
+        # JE PROJEKT einmal, nicht je Ortszeile. Ein Projekt, das "Mallorca"
+        # und "Andratx" nennt, steht zweimal in arch_web_projects -- gezaehlt
+        # als zwei Balearen-Projekte ergab das bei mathes.de "44 davon
+        # Balearen" bei 41 spanischen Projekten insgesamt. Eine Teilmenge, die
+        # groesser ist als die Menge, ist ein Rechenfehler und sieht auch so aus.
+        je_projekt: dict[str, set] = defaultdict(set)
+        for p in es_p:
+            if p[5] or p[6]:
+                je_projekt[p[6] or p[5]].add(p[1])
+        regionen_hier = Counter({r: len(u) for r, u in je_projekt.items()})
         staedte = sorted({regionen.ort_schoen(p[3]) for p in es_p if p[3]})
-        balearen = sum(1 for p in es_p if (p[5] or "") == "Illes Balears")
+        balearen = len({p[1] for p in es_p if (p[5] or "") == "Illes Balears"})
         mit_ort, in_es = sc[5] or 0, len(es_urls)
         anteil = (in_es / mit_ort) if mit_ort else None
         nl = json.loads(sc[7] or "null")
@@ -291,8 +310,11 @@ def bauen(d: dict, pfad: str | None = None) -> str:
         es_p = [p for p in je_domain.get(dom, []) if p[8] == "ES"]
         if not es_p:
             continue
-        zaehl = Counter(p[6] or p[5] for p in es_p if (p[5] or p[6]))
-        reihe = [werte[0], dom, werte[7]] + [zaehl.get(reg, 0) or "" for reg in alle_regionen]
+        proj_je_region: dict[str, set] = defaultdict(set)
+        for p in es_p:
+            if p[5] or p[6]:
+                proj_je_region[p[6] or p[5]].add(p[1])
+        reihe = [werte[0], dom, werte[7]] +             [len(proj_je_region.get(reg, ())) or "" for reg in alle_regionen]
         for c, v in enumerate(reihe, start=1):
             z = wr.cell(row=r, column=c, value=v)
             z.border = RAND
@@ -399,6 +421,13 @@ def bauen(d: dict, pfad: str | None = None) -> str:
          "Die Rolle („vergibt Aufträge\") wurde gegen echte Ausgänge geprüft und "
          "trennt nicht; sie steht als Information da, nicht als Punkte. Die "
          "Relevanz-Schätzung aus dem Sprachmodell ebenso wenig."),
+        ("Wer NICHT in der Liste steht",
+         f"{geprueft_leer} weitere Büros wurden vollständig gelesen und haben "
+         f"weder ein spanisches Projekt noch eine Niederlassung in Spanien. Sie "
+         f"fehlen hier bewusst: geprüft und nichts gefunden ist etwas anderes "
+         f"als nicht geprüft, aber in eine Arbeitsliste gehören sie nicht. Ein "
+         f"Teil davon war vom früheren flachen Durchgang fälschlich als "
+         f"spanienaktiv gemeldet worden — der tiefe Lauf korrigiert das."),
         ("Grenzen",
          f"Die Orte tragen kein Datum — ein Projekt von 2011 sieht aus wie eines "
          f"von 2025. {fehler} Domains waren beim Scan nicht erreichbar. Büros, "

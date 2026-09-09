@@ -106,6 +106,14 @@ _FLAECHE_ZU_PROVINZ: dict[str, str] = {
     "galicia": "A Coruña", "andalucia": "Sevilla", "andalucía": "Sevilla",
     "costa del sol": "Málaga", "costa brava": "Girona",
     "costa blanca": "Alicante", "pais vasco": "Bizkaia",
+    # Englische und deutsche Schreibweisen. `laender._EXONYME` erkennt sie als
+    # Ort, `plz_geo` kennt sie nicht -- ohne diese Zeilen bleibt die Region
+    # leer, obwohl der Ort eindeutig ist (cruzyortiz.com: 64x "seville").
+    "seville": "Sevilla", "saragossa": "Zaragoza", "cordova": "Córdoba",
+    "catalonia": "Barcelona", "andalusia": "Sevilla", "andalusien": "Sevilla",
+    "katalonien": "Barcelona", "balearics": "Baleares", "minorca": "Baleares",
+    "canary islands": "Las Palmas", "basque country": "Bizkaia",
+    "baskenland": "Bizkaia", "biscay": "Bizkaia", "corunna": "A Coruña",
 }
 
 _lock = threading.Lock()
