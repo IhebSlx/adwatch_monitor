@@ -970,6 +970,26 @@ def _tabellen(s) -> None:
         CREATE TABLE IF NOT EXISTS arch_web_contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT, url TEXT,
             email TEXT, name TEXT, spanien_bezug INTEGER, gescannt_am TEXT)"""))
+    # CREATE TABLE IF NOT EXISTS fuegt einer BESTEHENDEN Tabelle keine Spalte
+    # hinzu. Genau daran ist der erste Haiku-Lauf gescheitert: `quelle` und
+    # `sicherheit` fehlten, jedes INSERT einer spanischen Projektzeile warf
+    # einen Fehler, die ganze Speicher-Transaktion fiel um -- und weil
+    # `_speichern` in einem try/except haengt, lief der Lauf scheinbar weiter
+    # und verlor dabei JEDE spanische Projektzeile. 36 von 176 Domains
+    # betroffen, ohne dass etwas rot geworden waere.
+    for tabelle, spalten in (
+            ("arch_web_projects", (("beleg", "TEXT"), ("quelle", "TEXT"),
+                                   ("sicherheit", "TEXT"))),
+            ("arch_web_scan", (("projekt_urls_bekannt", "INTEGER"),
+                               ("chrome_orte", "TEXT"), ("ki_gekappt", "INTEGER"),
+                               ("ki_aufrufe", "INTEGER"), ("ki_kosten", "REAL"))),
+            ("arch_web_contacts", (("spanien_bezug", "INTEGER"),)),
+    ):
+        da = {r[1] for r in s.execute(_sql(f"PRAGMA table_info({tabelle})"))}
+        for name, typ in spalten:
+            if name not in da:
+                s.execute(_sql(f"ALTER TABLE {tabelle} ADD COLUMN {name} {typ}"))
+                logger.info("Spalte %s.%s ergaenzt", tabelle, name)
     s.execute(_sql("CREATE INDEX IF NOT EXISTS ix_awp_domain ON arch_web_projects(domain)"))
     s.execute(_sql("CREATE INDEX IF NOT EXISTS ix_awc_domain ON arch_web_contacts(domain)"))
 
@@ -1114,7 +1134,19 @@ def lauf(nur_spanien_aktiv: bool = True, ohne_spanische: bool = True,
             try:
                 _speichern(dom, ids, res, fehler)
             except Exception as e:                          # noqa: BLE001
-                logger.warning("speichern %s: %s", dom, e)
+                # Ein Schreibfehler ist KEIN Schoenheitsfehler: er kostet alle
+                # Projektzeilen dieser Domain. Er wird deshalb als Fehler der
+                # Domain gezaehlt und nicht nur ins Log geschrieben -- sonst
+                # sieht ein Lauf, der nichts speichert, aus wie ein Lauf ohne
+                # Treffer.
+                logger.error("speichern %s: %s", dom, e)
+                with _lock:
+                    _fortschritt["fehler"] += 1
+                    _fortschritt["schreibfehler"] =                         _fortschritt.get("schreibfehler", 0) + 1
+                try:
+                    _speichern(dom, ids, None, f"speichern: {type(e).__name__}")
+                except Exception:                           # noqa: BLE001
+                    pass
             with _lock:
                 _fortschritt["fertig"] += 1
                 _fortschritt["aktuell"] = dom
