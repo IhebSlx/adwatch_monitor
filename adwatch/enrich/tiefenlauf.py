@@ -47,7 +47,7 @@ from sqlalchemy import text as _sql
 
 from ..db import SessionLocal
 from ..identity.website_source import _UA
-from . import laender, regionen, render
+from . import laender, regionen, render, spanienverdacht
 from .laenderlauf import _ist_projekt_pfad, _KEIN_INHALT, _startseite
 
 logger = logging.getLogger("adwatch.tiefenlauf")
@@ -82,9 +82,18 @@ MAX_PROJEKTSEITEN = 600
 _PAUSE = 0.20                # Höflichkeit gegenüber dem einzelnen Host
 _ZEICHEN_JE_SEITE = 12000
 
+# Wie viele Seiten je Domain hoechstens an das Modell gehen. Eine Notbremse
+# gegen die Ausreisser: arup.com hat 462 Projektseiten, und wenn die alle
+# verdaechtig waeren, kostete diese eine Domain mehr als hundert andere
+# zusammen. Gemessen liegt die Verdachtsquote bei rund 13 %, die Grenze
+# greift also selten -- wo sie greift, steht es in `ki_gekappt`.
+MAX_KI_JE_DOMAIN = 80
+
 _fortschritt = {"gesamt": 0, "fertig": 0, "projekte": 0, "spanien": 0,
                 "fehler": 0, "laeuft": False, "start": None, "aktuell": None,
-                "gerendert": 0, "render_uebersprungen": 0}
+                "gerendert": 0, "render_uebersprungen": 0,
+                "ki_aufrufe": 0, "ki_kosten": 0.0, "ki_fehler": 0,
+                "ki_verworfen": 0}
 _lock = threading.Lock()
 
 
@@ -212,7 +221,7 @@ def _sitemap_alles(domain: str, grenze: int = 4000) -> list[str]:
 # --- Der Lauf über EINE Domain --------------------------------------------
 
 def website_lesen(domain: str, heimat: str | None = None,
-                  firmenname: str | None = None) -> dict | None:
+                  firmenname: str | None = None, ki_client=None) -> dict | None:
     """Die ganze Website: alle Seiten, alle Projektseiten einzeln ausgewertet.
 
     Rückgabe:
@@ -234,6 +243,7 @@ def website_lesen(domain: str, heimat: str | None = None,
     # bedeutet. Die Wörter des eigenen Namens und der eigenen Domain zählen
     # deshalb nicht als Ortsbeleg.
     eigene_woerter = _eigene_woerter(domain, firmenname)
+    ki_zaehler = [0]
 
     # 1) Die Karte der Website: sitemap zuerst, dann Links folgen.
     bekannt: list[str] = []
@@ -309,7 +319,15 @@ def website_lesen(domain: str, heimat: str | None = None,
                 text = ws._page_text(html, limit=_ZEICHEN_JE_SEITE, drop_chrome=True)
 
         if art == "projekt":
-            projekte.append(_projekt_auswerten(url, html, text, eigene_woerter))
+            befund = _projekt_auswerten(url, html, text, eigene_woerter)
+            if ki_client is not None and ki_zaehler[0] < MAX_KI_JE_DOMAIN:
+                vorher = _fortschritt["ki_aufrufe"]
+                befund = _mit_ki_pruefen(befund["titel"], url, text, html,
+                                         befund, ki_client)
+                if _fortschritt["ki_aufrufe"] > vorher:
+                    ki_zaehler[0] += 1
+            if not befund.get("kein_projekt"):
+                projekte.append(befund)
         elif art in ("kontakt", "team"):
             kontakt_text.append(text)
             kontakte += _kontakte_lesen(url, html, text)
@@ -345,6 +363,7 @@ def website_lesen(domain: str, heimat: str | None = None,
         # Gemessen an acme.ac: 73 Projektadressen in der Sitemap, 0 gelesen,
         # weil der Host nach meinen Probelaeufen dichtmachte.
         "projekt_urls_bekannt": max(projekt_urls, len(projekte)),
+        "ki_gekappt": ki_zaehler[0] >= MAX_KI_JE_DOMAIN,
         "abgeschnitten": abgeschnitten,
         "projekte": projekte,
         "niederlassung_es": _niederlassung(kontakt_text),
@@ -749,6 +768,52 @@ def ortszone(titel: str, text: str) -> str:
     return roh[:m.start()] if m else roh
 
 
+def _mit_ki_pruefen(titel: str, url: str, text: str, html: str,
+                    roh: dict, client) -> dict:
+    """Die Seite von Haiku lesen lassen, wenn es einen Grund dafuer gibt.
+
+    Der deterministische Befund (`roh`) bleibt als Rueckfall stehen: faellt der
+    Aufruf aus, ist das Ergebnis das alte und nicht etwa leer. Ein
+    verschluckter Modellfehler hat in diesem Projekt schon einmal einen
+    ganzen Lauf als „0 Fehler" durchgehen lassen.
+    """
+    gruende = spanienverdacht.gruende(text, url, html)
+    if not gruende:
+        roh["ki"] = None
+        return roh
+    d = spanienverdacht.beurteilen(titel, url, text, client)
+    with _lock:
+        _fortschritt["ki_aufrufe"] += 1
+        _fortschritt["ki_kosten"] += d.get("kosten", 0.0)
+        if "fehler" in d:
+            _fortschritt["ki_fehler"] += 1
+    if "fehler" in d:
+        roh["ki"] = {"fehler": d["fehler"]}
+        return roh
+
+    roh["ki"] = d
+    # Keine Projektseite -> zaehlt gar nicht mit. Das trifft Archive,
+    # Uebersichten, Nachrichten und Buerovorstellungen, die den Pfadtest
+    # bestehen -- und es korrigiert den NENNER, nicht nur den Zaehler.
+    if d.get("ist_projekt") is False:
+        roh["kein_projekt"] = True
+        with _lock:
+            _fortschritt["ki_verworfen"] += 1
+        return roh
+
+    if d.get("in_spanien") and d.get("ort"):
+        roh["orte_es"] = [laender._falten(str(d["ort"]))]
+        roh["gruende"] = {roh["orte_es"][0]: "Haiku: " + str(d.get("beleg") or "")[:120]}
+        roh["ki_sicherheit"] = d.get("sicherheit")
+    else:
+        # Das Modell sagt: nicht in Spanien. Es hat die ganze Seite gelesen,
+        # der Ortsabgleich nur ein Fenster -- also gewinnt das Modell.
+        roh["orte_es"] = []
+        roh["gruende"] = {}
+    roh["hat_ort"] = bool(roh["orte_es"] or roh["orte_andere"] or d.get("ort"))
+    return roh
+
+
 def _projekt_auswerten(url: str, html: str, text: str,
                        eigene_woerter: set[str]) -> dict:
     """Eine Projektseite: Titel, spanische Orte, Orte anderswo.
@@ -899,7 +964,8 @@ def _tabellen(s) -> None:
         CREATE TABLE IF NOT EXISTS arch_web_projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT, url TEXT,
             titel TEXT, ort TEXT, provinz TEXT, region TEXT, region_de TEXT,
-            region_eindeutig INTEGER, land TEXT, beleg TEXT, gescannt_am TEXT)"""))
+            region_eindeutig INTEGER, land TEXT, beleg TEXT, quelle TEXT,
+            sicherheit TEXT, gescannt_am TEXT)"""))
     s.execute(_sql("""
         CREATE TABLE IF NOT EXISTS arch_web_contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT, url TEXT,
@@ -925,12 +991,15 @@ def _speichern(dom: str, ids: list[int], res: dict | None, fehler: str | None) -
                     s.execute(_sql(
                         "INSERT INTO arch_web_projects (domain, url, titel, ort, "
                         "provinz, region, region_de, region_eindeutig, land, "
-                        "beleg, gescannt_am) "
-                        "VALUES (:d,:u,:t,:o,:p,:r,:rd,:e,'ES',:b,:z)"),
+                        "beleg, quelle, sicherheit, gescannt_am) "
+                        "VALUES (:d,:u,:t,:o,:p,:r,:rd,:e,'ES',:b,:q,:s,:z)"),
                         {"d": dom, "u": p["url"], "t": p["titel"], "o": ort,
                          "p": r["provinz"], "r": r["region"], "rd": r["region_de"],
                          "e": None if r["eindeutig"] is None else int(r["eindeutig"]),
-                         "b": (p.get("gruende") or {}).get(ort), "z": jetzt})
+                         "b": (p.get("gruende") or {}).get(ort),
+                         "q": "Haiku" if p.get("ki") and not p["ki"].get("fehler")
+                              else "Regel",
+                         "s": p.get("ki_sicherheit"), "z": jetzt})
             elif p["orte_andere"]:
                 land = sorted(p["orte_andere"])[0]
                 s.execute(_sql(
@@ -996,7 +1065,14 @@ def grundgesamtheit(nur_spanien_aktiv: bool = True,
 
 def lauf(nur_spanien_aktiv: bool = True, ohne_spanische: bool = True,
          limit: int | None = None, arbeiter: int = ARBEITER,
-         neu: bool = False) -> dict:
+         neu: bool = False, mit_ki: bool = True) -> dict:
+    ki_client = None
+    if mit_ki:
+        try:
+            ki_client = spanienverdacht._client()
+        except Exception as e:                              # noqa: BLE001
+            # Lieber ohne Modell weiterlaufen als gar nicht -- aber sichtbar.
+            logger.warning("Kein Modell verfuegbar, rein deterministisch: %s", e)
     nach_domain = grundgesamtheit(nur_spanien_aktiv, ohne_spanische)
     domains = sorted(nach_domain)
     with SessionLocal() as s:
@@ -1022,7 +1098,8 @@ def lauf(nur_spanien_aktiv: bool = True, ohne_spanische: bool = True,
         heimat = max(set(laender_der_zeilen), key=laender_der_zeilen.count) \
             if laender_der_zeilen else None
         try:
-            res = website_lesen(dom, heimat=heimat, firmenname=namen.get(dom))
+            res = website_lesen(dom, heimat=heimat, firmenname=namen.get(dom),
+                                ki_client=ki_client)
         except Exception as e:                              # noqa: BLE001
             return dom, None, f"{type(e).__name__}: {e}"[:200]
         if res is None:
