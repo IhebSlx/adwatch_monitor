@@ -5553,3 +5553,135 @@ def test_filterbeschreibung_verschweigt_die_taetigkeitsfilter_nicht():
     assert "SAP-Nummer" in d
     assert _describe_filters_de({}) is None
 
+
+# ---------------------------------------------------------------------------
+# Spanien-Tiefenlauf: Region, Ortsbeleg, Niederlassung
+# ---------------------------------------------------------------------------
+
+def test_region_aus_postleitzahl(temp_db, monkeypatch):
+    """Ort \u2192 Provinz \u2192 Autonome Gemeinschaft, ohne Dienst und ohne Schl\u00fcssel.
+
+    Die ersten zwei Ziffern der spanischen PLZ sind die Provinz; die Zuordnung
+    Provinz \u2192 Region ist ein feststehendes Verzeichnis. Damit l\u00e4sst sich nach
+    \u201eKatalonien" filtern, ohne eine Spalte zu kaufen.
+    """
+    from sqlalchemy import text as _t
+
+    from adwatch.enrich import regionen
+
+    monkeypatch.setattr(regionen, "SessionLocal", temp_db.SessionLocal)
+    regionen._index = None
+    regionen._schreibweisen = None
+    s = temp_db.SessionLocal()
+    s.execute(_t("CREATE TABLE IF NOT EXISTS plz_geo (id INTEGER PRIMARY KEY, "
+                 "country TEXT, plz TEXT, lat REAL, lng REAL, place TEXT)"))
+    for plz, ort in (("08001", "Barcelona"), ("28001", "Madrid"),
+                     ("29602", "Marbella"), ("07001", "Palma De Mallorca"),
+                     ("23670", "Los Villares"), ("37183", "Los Villares"),
+                     ("37184", "Los Villares")):
+        s.execute(_t("INSERT INTO plz_geo (country, plz, lat, lng, place) "
+                     "VALUES ('ES', :p, 0.0, 0.0, :o)"), {"p": plz, "o": ort})
+    s.commit(); s.close()
+
+    assert regionen.einordnen("Barcelona")["region"] == "Cataluña"
+    assert regionen.einordnen("Marbella")["region_de"] == "Andalusien"
+    assert regionen.einordnen("Madrid")["provinz"] == "Madrid"
+    # Inseln haben keine eigene PLZ und kommen aus der Handtabelle
+    assert regionen.einordnen("Mallorca")["region"] == "Illes Balears"
+    # Ein Ortsname in zwei Provinzen: die haeufigere gewinnt, und die Spalte
+    # sagt, dass geraten wurde.
+    mehrdeutig = regionen.einordnen("Los Villares")
+    assert mehrdeutig["provinz"] == "Salamanca"      # 2 PLZ gegen 1
+    assert mehrdeutig["eindeutig"] is False
+    assert regionen.einordnen("Kein Ort Dieser Welt")["region"] is None
+    # Die Verbindungswoerter bleiben klein, obwohl die Quelle sie gross fuehrt
+    assert regionen.ort_schoen("palma de mallorca") == "Palma de Mallorca"
+
+
+def test_spanischer_ort_braucht_einen_grund():
+    """Ein spanischer Ortsname auf einer Projektseite z\u00e4hlt nur mit Beleg.
+
+    Gemessen 2026-09-09: acme.ac (London) meldete neun spanische Projekte \u2014
+    \u201eCanopy by Hilton, London City" mit dem Ort \u201eMaria", \u201eMamsha Gardens" mit
+    \u201eCastillo" und \u201eJavier". Das waren die Namen der Projektteams. Spanische
+    Vor- und Nachnamen sind fast immer auch Gemeindenamen, und die Gr\u00f6\u00dfe des
+    Ortes trennt sie nicht: Andratx, Calvi\u00e0 und Sitges haben genauso genau eine
+    Postleitzahl wie Maria, Borja und Cabra.
+    """
+    from adwatch.enrich.tiefenlauf import _ort_belegt
+
+    # Titel \u2014 der staerkste Beleg
+    assert _ort_belegt("andratx", "ausbau ferienhaus mallorca, port andratx",
+                       "ausbau ferienhaus mallorca, port andratx", 1) == "im Projekttitel"
+    # Insel
+    assert _ort_belegt("mallorca", "villa", "villa auf mallorca", 0) == "Insel oder Region"
+    # Grossstadt
+    assert _ort_belegt("madrid", "buerogebaeude", "neubau in madrid", 63).startswith("Stadt")
+    # Landesname daneben
+    assert _ort_belegt("sitges", "casa s", "casa s in sitges, spanien",
+                       1) == "neben dem Landesnamen"
+    # Und der Fall, der die Regel ausgeloest hat: ein Vorname im Projektteam
+    assert _ort_belegt("maria", "canopy by hilton, london city",
+                       "canopy by hilton, london city. team: maria, javier", 1) is None
+    assert _ort_belegt("castillo", "mamsha gardens",
+                       "mamsha gardens abu dhabi. castillo, javier", 1) is None
+
+
+def test_niederlassung_braucht_mehr_als_das_wort_spanien(temp_db, monkeypatch):
+    """Eine deutsche PLZ ist kein Beleg f\u00fcr eine spanische Niederlassung.
+
+    Der erste Anlauf verlangte \u201ezwei von drei Belegen" (PLZ, +34, das Wort
+    Spanien) und meldete bei holle-architekten.de eine Niederlassung: die
+    Belege waren \u201e45133 Essen" und das Wort \u201eSpanien" irgendwo im Text. Der
+    deutsche Postleitzahlenbereich liegt fast vollst\u00e4ndig \u00fcber dem spanischen,
+    also ist eine f\u00fcnfstellige Zahl allein wertlos.
+    """
+    from sqlalchemy import text as _t
+
+    from adwatch.enrich import tiefenlauf
+
+    monkeypatch.setattr(tiefenlauf, "SessionLocal", temp_db.SessionLocal)
+    s = temp_db.SessionLocal()
+    s.execute(_t("CREATE TABLE IF NOT EXISTS plz_geo (id INTEGER PRIMARY KEY, "
+                 "country TEXT, plz TEXT, lat REAL, lng REAL, place TEXT)"))
+    s.execute(_t("INSERT INTO plz_geo (country, plz, lat, lng, place) "
+                 "VALUES ('ES','07157',39.54,2.39,'Port d''Andratx')"))
+    s.commit(); s.close()
+
+    # Der Fall aus dem Probelauf: deutsche Adresse, Wort „Spanien" im Text
+    assert tiefenlauf._niederlassung(
+        ["Holle Architekten, Meisenburgstr. 173, 45133 Essen. "
+         "Wir bauen auch in Spanien."]) is None
+    # Eine echte spanische Adresse: PLZ UND ihr Ort
+    echt = tiefenlauf._niederlassung(["Oficina Mallorca, 07157 Port d'Andratx"])
+    assert echt and echt["plz_mit_ort"].startswith("07157")
+    # Oder die Vorwahl
+    vorwahl = tiefenlauf._niederlassung(["Estudio Madrid  T +34 91 123 45 67"])
+    assert vorwahl and vorwahl["vorwahl_34"] is True
+
+
+def test_projekte_werden_entdoppelt():
+    """Dasselbe Projekt unter mehreren Adressen z\u00e4hlt einmal.
+
+    ab-grimm.de f\u00fchrt jedes Projekt unter `/080_port-andratx/index.htm` UND
+    unter `/080_port-andratx/080_port-andratx.htm`. Beim ANTEIL faellt das
+    nicht auf, weil Z\u00e4hler und Nenner mitwachsen \u2014 bei der absoluten Zahl
+    schon, und die geht in die Bewertung ein.
+    """
+    from adwatch.enrich.tiefenlauf import _projekte_entdoppeln
+
+    roh = [
+        {"url": "https://x.de/projekte/080_port-andratx/index.htm",
+         "titel": "Ausbau Ferienhaus", "orte_es": ["andratx"], "orte_andere": {},
+         "hat_ort": True},
+        {"url": "https://x.de/projekte/080_port-andratx/080_port-andratx.htm",
+         "titel": "Ausbau Ferienhaus", "orte_es": ["andratx"], "orte_andere": {},
+         "hat_ort": True},
+        {"url": "https://x.de/projekte/081_anderes/index.htm",
+         "titel": "Anderes Haus", "orte_es": [], "orte_andere": {"DE": ["essen"]},
+         "hat_ort": True},
+    ]
+    aus = _projekte_entdoppeln(roh)
+    assert len(aus) == 2
+    assert sum(1 for p in aus if p["orte_es"]) == 1
+
