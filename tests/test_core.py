@@ -5685,3 +5685,78 @@ def test_projekte_werden_entdoppelt():
     assert len(aus) == 2
     assert sum(1 for p in aus if p["orte_es"]) == 1
 
+
+def test_ort_im_seitenfuss_ist_keine_projektadresse():
+    """Ein Ort auf FAST JEDER Projektseite geh\u00f6rt zur Vorlage, nicht zum Projekt.
+
+    Gemessen 2026-09-09, und der Fehler war gross: bfl-architekten.de meldete
+    169 spanische Projekte \u2014 darunter \u201eDachausbau Berlin-K\u00f6penick" und
+    \u201eGrundschule Berlin-Spandau". Im Seitenfu\u00df steht:
+
+        B\u00fcro Valencia (ES)  E-46018 Valencia  T. +34 636508235
+
+    big.dk dasselbe: \u201eRonda de Sant Pere, 56 Bajos, 08010 Barcelona" im Fu\u00df,
+    268 von 268 Projekten angeblich in Spanien \u2014 und \u201eRonda" ist dort ein
+    STRASSENNAME, gelesen als andalusische Kleinstadt.
+
+    `drop_chrome` entfernt Navigationsmen\u00fcs, aber keine Fu\u00dfzeilen. Statt
+    Fu\u00dfzeilen zu erkennen z\u00e4hlt die Regel nach: was auf 60 % aller
+    Projektseiten steht, ist Vorlage. Titeltreffer bleiben ausgenommen.
+    """
+    from adwatch.enrich.tiefenlauf import _chrome_orte_entfernen
+
+    # 10 Berliner Projekte, alle mit „valencia" aus dem Fuss
+    projekte = [{"url": f"https://x.de/p{i}", "titel": f"Dachausbau Berlin {i}",
+                 "orte_es": ["valencia"], "orte_andere": {"DE": ["berlin"]},
+                 "gruende": {"valencia": "Stadt (30 PLZ)"}, "hat_ort": True}
+                for i in range(10)]
+    aus, chrome = _chrome_orte_entfernen(projekte)
+    assert chrome == {"valencia": 10}
+    assert all(not p["orte_es"] for p in aus)
+    assert all(p["hat_ort"] for p in aus)          # der deutsche Ort bleibt
+
+    # Gegenprobe: ein Buero mit wenigen echten Spanien-Projekten behaelt sie
+    echte = [{"url": f"https://y.de/p{i}", "titel": t_, "orte_es": o,
+              "orte_andere": {}, "gruende": {x: "im Projekttitel" for x in o},
+              "hat_ort": True}
+             for i, (t_, o) in enumerate([
+                 ("Ausbau Ferienhaus Mallorca", ["mallorca"]),
+                 ("Umbau Cala Llamp", ["mallorca"]),
+                 ("Weinstube Aschaffenburg", []), ("Wohnhaus Goldbach", []),
+                 ("Scheune Obernau", []), ("Haus Hoesbach", []),
+                 ("Praxis Alzenau", []), ("Buero Kahl", [])])]
+    aus2, chrome2 = _chrome_orte_entfernen(echte)
+    assert chrome2 == {}
+    assert sum(1 for p in aus2 if p["orte_es"]) == 2
+
+    # Und der Grenzfall: ein Ort auf allen Seiten, aber jedes Mal im TITEL —
+    # ein Buero, das wirklich nur auf Mallorca baut, verliert seine Orte nicht.
+    nur_mallorca = [{"url": f"https://z.de/p{i}", "titel": f"Finca {i} Mallorca",
+                     "orte_es": ["mallorca"], "orte_andere": {},
+                     "gruende": {"mallorca": "im Projekttitel"}, "hat_ort": True}
+                    for i in range(9)]
+    aus3, chrome3 = _chrome_orte_entfernen(nur_mallorca)
+    assert chrome3 == {"mallorca": 9}
+    assert all(p["orte_es"] == ["mallorca"] for p in aus3)
+
+
+def test_uebersichtsseite_ist_kein_projekt():
+    """`big.dk/projects/architecture` besteht den Pfadtest, ist aber der Katalog.
+
+    Erkennbar strukturell: die Adresse einer \u00dcbersicht ist der ANFANG der
+    Adressen ihrer Eintr\u00e4ge. Ohne diese Regel z\u00e4hlte der Katalog als Projekt \u2014
+    mit dem Seitentitel als Projekttitel (\u201eBjarke Ingels Group") und den Orten
+    aller verlinkten Projekte.
+    """
+    from adwatch.enrich.tiefenlauf import _projekte_indexseiten_raus
+
+    roh = [{"url": "https://big.dk/projects/architecture", "titel": "BIG"},
+           {"url": "https://big.dk/projects/architecture/mountain-dwellings", "titel": "A"},
+           {"url": "https://big.dk/projects/architecture/8-house", "titel": "B"},
+           {"url": "https://big.dk/projects/architecture/via-57", "titel": "C"},
+           {"url": "https://big.dk/projects/landscape/balconies", "titel": "D"}]
+    aus = _projekte_indexseiten_raus(roh)
+    adressen = {p["url"] for p in aus}
+    assert "https://big.dk/projects/architecture" not in adressen
+    assert len(aus) == 4
+

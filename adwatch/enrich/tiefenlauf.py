@@ -272,6 +272,12 @@ def website_lesen(domain: str, heimat: str | None = None,
         elif art in ("kontakt", "team"):
             kontakt_text.append(text)
             kontakte += _kontakte_lesen(url, html, text)
+        elif seiten_gelesen == 1:
+            # Die Startseite: ihre Fusszeile traegt bei vielen Bueros die
+            # Auslandsadressen. bfl-architekten.de fuehrt sein „Buero Valencia
+            # (ES)" dort und nirgends sonst.
+            kontakt_text.append(text)
+            kontakte += _kontakte_lesen(url, html, text)
 
         # Neue Links nur von Übersichts- und Startseiten aufsammeln: eine
         # Projektdetailseite verlinkt meist nur Nachbarprojekte, die schon in
@@ -283,8 +289,11 @@ def website_lesen(domain: str, heimat: str | None = None,
                 if len(bekannt) > vorher:
                     warteschlange.append(bekannt[-1])
 
+    projekte = _projekte_indexseiten_raus(projekte)
     projekte = _projekte_entdoppeln(projekte)
+    projekte, chrome_orte = _chrome_orte_entfernen(projekte)
     return {
+        "chrome_orte": chrome_orte,
         "domain": domain,
         "seiten_gelesen": seiten_gelesen,
         # Wie viele Projektadressen die Karte kannte. Weicht die Zahl stark von
@@ -298,6 +307,76 @@ def website_lesen(domain: str, heimat: str | None = None,
         "niederlassung_es": _niederlassung(kontakt_text),
         "kontakte": kontakte,
     }
+
+
+# Ab wie vielen Projektseiten ein Ort als Bestandteil der Seitenvorlage gilt.
+# 60 % ist grosszuegig gewaehlt: ein Buero, das WIRKLICH ueberall in Mallorca
+# baut, nennt den Ort auch im Titel, und Titeltreffer sind ausgenommen.
+_CHROME_ANTEIL = 0.6
+_CHROME_MINDEST = 5
+
+
+def _chrome_orte_entfernen(projekte: list[dict]) -> tuple[list[dict], dict]:
+    """Ein Ort, der auf FAST JEDER Projektseite steht, ist keine Projektadresse.
+
+    DER FEHLER, DER DIESE REGEL ERZWUNGEN HAT.
+    bfl-architekten.de meldete 169 spanische Projekte \u2014 auch \u201eDachausbau
+    Berlin-K\u00f6penick" und \u201eGrundschule Berlin-Spandau". Der Grund stand im
+    Seitenfu\u00df:
+
+        B\u00fcro Valencia (ES)  E-46018 Valencia  T. +34 636508235
+
+    big.dk dasselbe mit \u201eRonda de Sant Pere, 56 Bajos, 08010 Barcelona" \u2014 dort
+    wurde zus\u00e4tzlich der STRASSENNAME \u201eRonda" als andalusische Kleinstadt
+    gelesen. 268 von 268 Projekten lagen angeblich in Spanien.
+
+    `drop_chrome` entfernt Navigationsmen\u00fcs, aber keine Fu\u00dfzeilen \u2014 und die
+    Fu\u00dfzeile ist genau der Ort, an dem B\u00fcros ihre Auslandsadressen f\u00fchren.
+    Statt Fu\u00dfzeilen zu erkennen (jede Seite baut sie anders) z\u00e4hlt diese Regel
+    nach: was auf 60 % aller Projektseiten steht, geh\u00f6rt zur Vorlage.
+
+    Die Adresse geht dabei NICHT verloren \u2014 im Gegenteil: sie ist der beste
+    Beleg f\u00fcr eine Niederlassung und wird dort ausgewertet. Sie ist nur keine
+    Projektadresse.
+    """
+    if not projekte:
+        return projekte, {}
+    zaehler: dict[str, int] = defaultdict(int)
+    for p in projekte:
+        for ort in p["orte_es"]:
+            zaehler[ort] += 1
+    grenze = max(_CHROME_MINDEST, int(len(projekte) * _CHROME_ANTEIL))
+    chrome = {ort: k for ort, k in zaehler.items()
+              if k >= grenze and k >= _CHROME_MINDEST}
+    if not chrome:
+        return projekte, {}
+    for p in projekte:
+        # Ein Titeltreffer bleibt: steht der Ort im Titel DIESES Projekts,
+        # ist er dessen Adresse und nicht die des Buros.
+        p["orte_es"] = [o for o in p["orte_es"]
+                        if o not in chrome
+                        or p.get("gruende", {}).get(o) == "im Projekttitel"]
+        p["hat_ort"] = bool(p["orte_es"] or p["orte_andere"])
+    return projekte, chrome
+
+
+def _projekte_indexseiten_raus(projekte: list[dict]) -> list[dict]:
+    """\u00dcbersichtsseiten z\u00e4hlen nicht als Projekt.
+
+    `big.dk/projects/architecture` besteht den Pfadtest \u2014 \u201eprojects" als
+    Abschnitt, ein weiterer Abschnitt dahinter \u2014 ist aber der Katalog und
+    nicht ein Projekt. Erkennbar ist das strukturell: die Adresse einer
+    \u00dcbersicht ist der ANFANG der Adressen ihrer Eintr\u00e4ge.
+    """
+    pfade = [urlsplit(p["url"]).path.rstrip("/") for p in projekte]
+    aus = []
+    for p, pfad in zip(projekte, pfade):
+        kinder = sum(1 for anderer in pfade
+                     if anderer != pfad and anderer.startswith(pfad + "/"))
+        if kinder >= 3:
+            continue
+        aus.append(p)
+    return aus
 
 
 def _projekte_entdoppeln(projekte: list[dict]) -> list[dict]:
@@ -538,7 +617,7 @@ def _tabellen(s) -> None:
             domain TEXT PRIMARY KEY, company_ids TEXT, seiten_gelesen INTEGER,
             abgeschnitten INTEGER, projekte_gesamt INTEGER, projekte_mit_ort INTEGER,
             projekte_es INTEGER, niederlassung_es TEXT, gescannt_am TEXT,
-            projekt_urls_bekannt INTEGER, fehler TEXT)"""))
+            projekt_urls_bekannt INTEGER, chrome_orte TEXT, fehler TEXT)"""))
     s.execute(_sql("""
         CREATE TABLE IF NOT EXISTS arch_web_projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT, url TEXT,
@@ -591,17 +670,20 @@ def _speichern(dom: str, ids: list[int], res: dict | None, fehler: str | None) -
         s.execute(_sql("""
             INSERT INTO arch_web_scan (domain, company_ids, seiten_gelesen,
                 abgeschnitten, projekte_gesamt, projekte_mit_ort, projekte_es,
-                niederlassung_es, gescannt_am, projekt_urls_bekannt, fehler)
-            VALUES (:d,:c,:s,:a,:pg,:pm,:pe,:n,:z,:pu,:f)
+                niederlassung_es, gescannt_am, projekt_urls_bekannt,
+                chrome_orte, fehler)
+            VALUES (:d,:c,:s,:a,:pg,:pm,:pe,:n,:z,:pu,:co,:f)
             ON CONFLICT(domain) DO UPDATE SET company_ids=:c, seiten_gelesen=:s,
                 abgeschnitten=:a, projekte_gesamt=:pg, projekte_mit_ort=:pm,
                 projekte_es=:pe, niederlassung_es=:n, gescannt_am=:z,
-                projekt_urls_bekannt=:pu, fehler=:f"""),
+                projekt_urls_bekannt=:pu, chrome_orte=:co, fehler=:f"""),
             {"d": dom, "c": json.dumps(ids), "s": (res or {}).get("seiten_gelesen", 0),
              "a": int(bool((res or {}).get("abgeschnitten"))),
              "pg": len(projekte), "pm": len(mit_ort), "pe": len(es),
              "n": json.dumps((res or {}).get("niederlassung_es"), ensure_ascii=False),
              "pu": (res or {}).get("projekt_urls_bekannt", 0),
+             "co": json.dumps((res or {}).get("chrome_orte") or {},
+                              ensure_ascii=False),
              "z": jetzt, "f": fehler})
         s.commit()
 
