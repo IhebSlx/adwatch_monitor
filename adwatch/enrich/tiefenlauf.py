@@ -52,7 +52,20 @@ from .laenderlauf import _ist_projekt_pfad, _KEIN_INHALT, _startseite
 
 logger = logging.getLogger("adwatch.tiefenlauf")
 
-ARBEITER = 6
+# Zwanzig gleichzeitige Domains. Die Grenze ist NICHT die Hoeflichkeit -- jeder
+# Arbeiter haelt einen anderen Host, und innerhalb einer Site wird ohnehin
+# sequenziell mit Pause gelesen. Die Grenze war der BROWSER: `render_html`
+# startet je Aufruf ein eigenes Chromium, und zwanzig davon gleichzeitig sind
+# mehrere Gigabyte. Deshalb haengt das Rendern jetzt an einer eigenen,
+# kleineren Schranke (`_BROWSER`) und nicht mehr an der Zahl der Arbeiter.
+# 14 Kerne, I/O-gebundene Arbeit, gemessen 0 Fehler bei 6 Arbeitern.
+ARBEITER = 20
+
+# Wie viele Chromium-Instanzen gleichzeitig laufen duerfen. Wer keinen Platz
+# bekommt, rendert nicht -- der einfache Abruf steht ja schon da. Ein duenner
+# Text ist ein kleiner Verlust, ein erschoepfter Arbeitsspeicher ein grosser.
+_BROWSER = threading.BoundedSemaphore(3)
+_BROWSER_WARTEN = 20        # Sekunden, dann ohne Browser weiter
 
 # Die Notbremse, nicht das Ziel. „Die ganze Website" heißt in der Praxis: bis
 # hierhin. Ob sie gegriffen hat, steht in `abgeschnitten` und wandert bis in
@@ -64,7 +77,8 @@ _PAUSE = 0.20                # Höflichkeit gegenüber dem einzelnen Host
 _ZEICHEN_JE_SEITE = 12000
 
 _fortschritt = {"gesamt": 0, "fertig": 0, "projekte": 0, "spanien": 0,
-                "fehler": 0, "laeuft": False, "start": None, "aktuell": None}
+                "fehler": 0, "laeuft": False, "start": None, "aktuell": None,
+                "gerendert": 0, "render_uebersprungen": 0}
 _lock = threading.Lock()
 
 
@@ -261,7 +275,7 @@ def website_lesen(domain: str, heimat: str | None = None,
         text = ws._page_text(html, limit=_ZEICHEN_JE_SEITE, drop_chrome=True)
         if len(text) < render.RENDER_BELOW_CHARS and art == "projekt" \
                 and render.available():
-            besser = render.render_html(url)
+            besser = _rendern(url)
             if besser and len(ws._page_text(besser, limit=_ZEICHEN_JE_SEITE,
                                             drop_chrome=True)) > len(text):
                 html = besser
@@ -411,6 +425,28 @@ def _projekte_entdoppeln(projekte: list[dict]) -> list[dict]:
             gesehen.add(zweit)
         aus.append(p)
     return aus
+
+
+def _rendern(url: str) -> str | None:
+    """Die Seite im Browser holen — aber nur, wenn ein Browserplatz frei ist.
+
+    Ohne diese Schranke war die Zahl der Arbeiter zugleich die Zahl der
+    moeglichen Chromium-Prozesse. Das hat die Crawl-Geschwindigkeit an den
+    Arbeitsspeicher gekettet, obwohl gerendert wird: selten. Jetzt sind es
+    zwei getrennte Groessen — viele Arbeiter, wenige Browser.
+    """
+    if not render.available():
+        return None
+    if not _BROWSER.acquire(timeout=_BROWSER_WARTEN):
+        with _lock:
+            _fortschritt["render_uebersprungen"] =                 _fortschritt.get("render_uebersprungen", 0) + 1
+        return None
+    try:
+        with _lock:
+            _fortschritt["gerendert"] = _fortschritt.get("gerendert", 0) + 1
+        return render.render_html(url)
+    finally:
+        _BROWSER.release()
 
 
 def _registrierte_domain(url: str) -> str:
