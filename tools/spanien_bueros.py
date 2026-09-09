@@ -34,6 +34,7 @@ import datetime as dt
 import json
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -226,8 +227,8 @@ def bauen(daten: dict, pfad: str | None = None) -> str:
 
         kopf = Table([[
             Paragraph(f"<b>{nr}. {_esc(z['name'])}</b>", kname),
-            Paragraph(f"Beziehung {stufe}", kbadge),
-        ]], colWidths=[B - 74, 74 - 12])
+            Paragraph(f"Beziehung {stufe} von 5", kbadge),
+        ]], colWidths=[B - 92, 92 - 12])
         kopf.setStyle(TableStyle([
             ("BACKGROUND", (1, 0), (1, 0), ACCENT if stufe >= 3 else MUTED),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -379,7 +380,50 @@ def bauen(daten: dict, pfad: str | None = None) -> str:
         ("TOPPADDING", (0, 0), (-1, -1), 9),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
     ]))
-    S += [reihen, Spacer(1, 6)]
+    leiter = [[Paragraph("<b>Stufe</b>", kzeile), Paragraph("<b>heißt</b>", kzeile),
+               Paragraph("<b>in dieser Liste</b>", kzeile)]]
+    verteilung = Counter((z["stufe"] or 0) for z in daten["zeilen"])
+    for stufe, was in (
+            (5, "gemeinsames Objekt gewonnen"),
+            (4, "auf einer Verkaufschance benannt"),
+            (3, "Schriftverkehr vorhanden"),
+            (2, "als Debitor angelegt"),
+            (1, "als Lead erfasst"),
+            (0, "nur Stammdaten, keine Berührung")):
+        anzahl = verteilung.get(stufe, 0)
+        stil = kzeile if anzahl else klabel
+        leiter.append([
+            Paragraph(f"<b>{stufe}</b>" if anzahl else str(stufe), stil),
+            Paragraph(_esc(was), stil),
+            Paragraph(f"{anzahl} Büros" if anzahl else "keines", stil),
+        ])
+    lt = Table(leiter, colWidths=[14 * mm, B - 52 * mm, 38 * mm])
+    lt.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.6, LINE),
+        ("LEFTPADDING", (0, 0), (0, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    beziehung = Table([[[
+        Paragraph("<b>Was „Beziehung 4“ bedeutet</b>", body),
+        Paragraph("Die Zahl auf jedem Eintrag ist die im CRM <b>belegte</b> Nähe zu "
+                  "Solarlux — keine Einschätzung, sondern das, was an Spuren da ist. "
+                  "Jede Stufe schließt die darunter ein.", body),
+        lt,
+        Paragraph("Die Leiter endet in dieser Liste bei 4: kein einziges der 231 Büros "
+                  "hat mit uns bisher ein Objekt gewonnen. Das ist der offene Punkt und "
+                  "zugleich der Grund, warum Stufe A oben steht.", body),
+    ]]], colWidths=[B])
+    beziehung.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), BG),
+        ("LINEBEFORE", (0, 0), (0, -1), 3, LINE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 11),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 11),
+        ("TOPPADDING", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+    ]))
+    S += [reihen, Spacer(1, 8), beziehung, Spacer(1, 6)]
     S.append(Paragraph(
         "Die Orte stammen von den Websites der Büros und tragen kein Datum; ein Projekt von "
         "2011 sieht aus wie eines von 2025. Adresse, Beziehung und CRM-Objekte kommen aus dem "
