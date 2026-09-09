@@ -5814,3 +5814,36 @@ def test_regexe_enthalten_keine_steuerzeichen():
                 treffer.append(f"{datei.name}: {schlimm[zeichen]}")
     assert not treffer, "Steuerzeichen in Quelldateien: " + ", ".join(treffer)
 
+
+def test_anhang_wird_abgeschnitten():
+    """Literaturverzeichnis und Verwandtenliste stehen HINTER dem Projekt.
+
+    Eine Projektseite von herzogdemeuron.com hat drei Teile:
+
+        0    - 4000   das Projekt
+        4078 - 6748   das Literaturverzeichnis
+        7000 - 7988   "weitere Projekte" mit Titeln und Orten
+
+    Der Ort des Projekts steht im ersten. Die anderen tragen die Orte von
+    VERLAGEN und von ANDEREN Projekten -- so wurde "St. Jakob-Park Basel" zu
+    einem Projekt in Barcelona (aus "313 nou camp nou barcelona, spain" in der
+    Verwandtenliste) und zu einem in Madrid (aus "vol. no. 89, madrid,
+    arquitectura viva").
+    """
+    from adwatch.enrich.tiefenlauf import ohne_anhang
+
+    projekt = "a" * 900 + " stadion in basel, fertig 2001. "
+    voll = projekt + "in: el croquis, vol. 129, madrid, 2006. "                      "weitere projekte: 313 nou camp nou barcelona, spain."
+    gekuerzt = ohne_anhang(voll)
+    assert "madrid" not in gekuerzt
+    assert "barcelona" not in gekuerzt
+    assert "basel" in gekuerzt
+
+    # Kurze Seiten werden nicht zerschnitten, auch wenn sie frueh zitieren.
+    kurz = "haus am hang, mallorca. in: bauwelt 2019."
+    assert ohne_anhang(kurz) == kurz
+
+    # Ohne Anhang bleibt alles stehen.
+    ohne = "b" * 2000 + " projekt in sevilla"
+    assert ohne_anhang(ohne) == ohne
+

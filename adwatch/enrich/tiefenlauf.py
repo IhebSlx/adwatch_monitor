@@ -519,6 +519,41 @@ _KEIN_ORT = {"espana", "espanya", "spain", "spanien", "espagne", "spagna",
              "europa", "europe", "iberia", "peninsula"}
 
 
+# Wo der Projekttext aufhoert und der Anhang anfaengt.
+#
+# Eine Projektseite von herzogdemeuron.com hat drei Teile:
+#
+#     0    - 4000   das Projekt selbst
+#     4078 - 6748   das Literaturverzeichnis
+#     7000 - 7988   "weitere Projekte" mit Titeln und Orten
+#
+# Der Ort des Projekts steht im ersten Teil. Die beiden anderen tragen die
+# Orte von VERLAGEN und von ANDEREN Projekten -- so wurde "St. Jakob-Park
+# Basel" zu einem Projekt in Barcelona (aus "313 nou camp nou barcelona,
+# spain" in der Verwandtenliste) und zu einem in Madrid (aus "vol. no. 89,
+# madrid, arquitectura viva").
+#
+# Beide Anhaenge auf einmal loswerden: ab dem ersten Zitatmarker wird nicht
+# mehr gelesen. Die Verwandtenliste steht immer dahinter.
+_ANHANG = re.compile(
+    r"(\b(?:in:|vol\.|pp\.|isbn|eds?\.[:.]|hrsg|verlag)"
+    r"|weitere projekte|aehnliche projekte|ähnliche projekte|related projects"
+    r"|more projects|otros proyectos|proyectos relacionados|verwandte projekte)",
+    re.I)
+_ANHANG_FRUEHESTENS = 800     # so viel Text bleibt in jedem Fall stehen
+
+
+def ohne_anhang(text_gef: str) -> str:
+    """Den Projekttext ohne Literaturverzeichnis und Verwandtenliste.
+
+    Schneidet am ersten Zitat- oder Verwandten-Marker, aber nie vor Zeichen
+    800 -- eine kurze Seite, die frueh zitiert, soll nicht auf einen Satz
+    zusammenschrumpfen.
+    """
+    m = _ANHANG.search(text_gef, _ANHANG_FRUEHESTENS)
+    return text_gef[:m.start()] if m else text_gef
+
+
 def _ist_literaturangabe(text_gef: str, start: int, ende: int) -> bool:
     """Steht dieser Ortstreffer in einer Literaturangabe?"""
     davor = text_gef[max(0, start - 120):start]
@@ -574,6 +609,10 @@ def _projekt_auswerten(url: str, html: str, text: str,
     Auszeichnungen und Teamlisten stehen.
     """
     titel = _titel(html)
+    # Anhang weg, BEVOR die Orte gesucht werden. Danach ist es zu spaet: der
+    # Ortsabgleich kennt den Unterschied zwischen einem Bauort und dem Sitz
+    # eines Verlags nicht.
+    text = ohne_anhang(text)
     volltext = f"{titel}\n{text}"
     treffer = laender._ort_treffer(volltext)
     titel_gef = laender._falten(titel)
