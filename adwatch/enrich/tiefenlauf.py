@@ -1057,7 +1057,8 @@ def _speichern(dom: str, ids: list[int], res: dict | None, fehler: str | None) -
 # --- Der Lauf --------------------------------------------------------------
 
 def grundgesamtheit(nur_spanien_aktiv: bool = True,
-                    ohne_spanische: bool = True) -> dict[str, list]:
+                    ohne_spanische: bool = True,
+                    nur_vorab_verdacht: bool = False) -> dict[str, list]:
     """Domain → [(company_id, heimatland)].
 
     `nur_spanien_aktiv`: nur Büros, bei denen der Länderlauf Spanien gefunden
@@ -1074,18 +1075,28 @@ def grundgesamtheit(nur_spanien_aktiv: bool = True,
     if nur_spanien_aktiv:
         wo.append("active_cities IS NOT NULL AND active_cities <> '{}' "
                   "AND active_cities LIKE '%\"ES\"%'")
+    if nur_vorab_verdacht:
+        # Iheb's Zweistufigkeit: nur was der Vorabtest weitergereicht hat.
+        # Der Vorabtest liest 2,6 Seiten je Domain und schlaegt bei 8 % an --
+        # aus 10.212 Domains werden so rund 900, aus zwei Tagen sieben Stunden.
+        from .vorlauf import verdachtsdomains
+        erlaubt = set(verdachtsdomains())
     nach: dict[str, list] = defaultdict(list)
     with SessionLocal() as s:
         for cid, dom, land in s.execute(_sql(
                 f"SELECT id, website_domain, country FROM companies "
                 f"WHERE {' AND '.join(wo)}")):
-            nach[(dom or "").strip().lower()].append((cid, land))
+            schluessel = (dom or "").strip().lower()
+            if nur_vorab_verdacht and schluessel not in erlaubt:
+                continue
+            nach[schluessel].append((cid, land))
     return dict(nach)
 
 
 def lauf(nur_spanien_aktiv: bool = True, ohne_spanische: bool = True,
          limit: int | None = None, arbeiter: int = ARBEITER,
-         neu: bool = False, mit_ki: bool = True) -> dict:
+         neu: bool = False, mit_ki: bool = True,
+         nur_vorab_verdacht: bool = False) -> dict:
     ki_client = None
     if mit_ki:
         try:
@@ -1093,7 +1104,8 @@ def lauf(nur_spanien_aktiv: bool = True, ohne_spanische: bool = True,
         except Exception as e:                              # noqa: BLE001
             # Lieber ohne Modell weiterlaufen als gar nicht -- aber sichtbar.
             logger.warning("Kein Modell verfuegbar, rein deterministisch: %s", e)
-    nach_domain = grundgesamtheit(nur_spanien_aktiv, ohne_spanische)
+    nach_domain = grundgesamtheit(nur_spanien_aktiv, ohne_spanische,
+                                  nur_vorab_verdacht)
     domains = sorted(nach_domain)
     with SessionLocal() as s:
         namen = {(r[0] or "").strip().lower(): r[1] for r in s.execute(_sql(
