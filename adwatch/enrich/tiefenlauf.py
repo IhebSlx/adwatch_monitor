@@ -505,12 +505,12 @@ _GROSSSTADT_PLZ = 5      # ab so vielen Postleitzahlen ist ein Ort eine Stadt
 # Madrid -- darunter "St. Jakob-Park Basel". Ernsthafte Bueros pflegen solche
 # Verzeichnisse, also trifft der Fehler gerade die interessantesten Adressen.
 _ZITAT_DAVOR = re.compile(
-    r"(In:|\(Ed\.\)|Ed\.:|Eds\.|Vol\.|pp\.|ISBN|Hrsg|Hg\.|"
-    r"Verlag|Press|Editorial|Editions?|Publisher|croquis|"
-    r"arquitectura viva|domus)", re.I)
+    r"(\bIn:|\(Ed\.\)|\bEd\.:|\bEds\.|\bVol\.|\bpp\.|\bISBN|\bHrsg|\bHg\.|"
+    r"\bVerlag\b|\bPress\b|\bEditorial\b|\bEditions?\b|\bPublisher|\bcroquis\b|"
+    r"\barquitectura viva\b|\bdomus\b)", re.I)
 # "Madrid, Arquitectura Viva SL, 2018" -- Ort, Verlag, Jahr ist die Form einer
 # Literaturangabe und nie die einer Bauadresse.
-_ZITAT_DANACH = re.compile(r"^\s*,[^,]{2,60},\s*(19|20)\d\d")
+_ZITAT_DANACH = re.compile(r"^\s*,[^,]{2,60},\s*(19|20)\d\d\b")
 
 # Landes- und Regionsnamen sind keine Staedte. "Espana" tauchte bei
 # cruzyortiz.com 52-mal als Ort auf und wurde -- weil es eine gleichnamige

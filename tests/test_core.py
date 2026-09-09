@@ -5760,3 +5760,57 @@ def test_uebersichtsseite_ist_kein_projekt():
     assert "https://big.dk/projects/architecture" not in adressen
     assert len(aus) == 4
 
+
+def test_verlagsort_ist_kein_projektort():
+    """Der Ort in einer Literaturangabe ist der Sitz des Verlags.
+
+    herzogdemeuron.com f\u00fchrt unter jedem Projekt sein Literaturverzeichnis:
+
+        Vol. No. 089, Madrid, Arquitectura Viva SL, 2018. pp. 40\u201347.
+
+    Ohne diese Regel lagen 140 von 223 spanischen \u201eProjekten" in Madrid \u2014
+    darunter \u201eSt. Jakob-Park Basel". Ernsthafte B\u00fcros pflegen solche
+    Verzeichnisse, der Fehler trifft also gerade die interessantesten Adressen.
+    """
+    from adwatch.enrich.tiefenlauf import _ist_literaturangabe, _ort_belegt
+
+    zitat = ("st. jakob-park basel. in: luis fernandez-galiano (ed.): arquitectura "
+             "viva. herzog & de meuron 1978-2007. 2nd rev. ed. madrid, "
+             "arquitectura viva, 2007. vol. no. 109/110, madrid, el croquis, 2002.")
+    assert _ort_belegt("madrid", "st. jakob-park basel", zitat, 63) is None
+
+    # Dasselbe B\u00fcro hat ein ECHTES Madrider Projekt \u2014 das muss bleiben.
+    echt = "caixaforum madrid. umbau eines kraftwerks in madrid, spanien."
+    assert _ort_belegt("madrid", "caixaforum madrid", echt, 63) == "im Projekttitel"
+
+    # Ein Ort, der einmal im Zitat und einmal im Text steht, zaehlt.
+    gemischt = ("wohnhaus. der bau steht in sevilla. in: el croquis, "
+                "vol. 129, sevilla, 2006.")
+    assert _ort_belegt("sevilla", "wohnhaus", gemischt, 24) is not None
+
+    # Die Form „Ort, Verlag, Jahr" allein reicht als Erkennung
+    assert _ist_literaturangabe("x madrid, el croquis, 2006", 2, 8) is True
+
+
+def test_regexe_enthalten_keine_steuerzeichen():
+    """Ein `\\b`, das als Backspace in der Datei landet, macht das Muster still
+    wirkungslos.
+
+    Genau das ist passiert: `_ZITAT_DAVOR` stand als
+    `(\\x08In:|\\(Ed\\.\\)|\\x08Vol\\.|...)` in der Datei und traf deshalb NIE \u2014
+    die Literaturregel lief ins Leere, ohne einen Fehler zu werfen. Ein Muster,
+    das nichts findet, sieht aus wie ein Datenbestand ohne Treffer.
+    """
+    import io
+    import pathlib
+
+    schlimm = {"\x08": "\\b", "\x0c": "\\f", "\x07": "\\a", "\x0b": "\\v"}
+    wurzel = pathlib.Path(__file__).resolve().parent.parent
+    treffer = []
+    for datei in sorted((wurzel / "adwatch").rglob("*.py")):
+        roh = io.open(datei, encoding="utf-8").read()
+        for zeichen in schlimm:
+            if zeichen in roh:
+                treffer.append(f"{datei.name}: {schlimm[zeichen]}")
+    assert not treffer, "Steuerzeichen in Quelldateien: " + ", ".join(treffer)
+
