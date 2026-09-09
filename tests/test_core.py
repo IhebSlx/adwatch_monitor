@@ -5907,3 +5907,60 @@ def test_orte_die_immer_gemeinsam_auftreten(temp_db, monkeypatch):
     assert bericht3 == {}
     assert sum(len(p["orte_es"]) for p in aus3) == 80
 
+
+def test_projektort_steht_in_einer_engen_zone():
+    """Der Projektort steht im Titel, in einem beschrifteten Feld oder im Kopf.
+
+    Eine Stichprobe von 14 erkannten Projektzeilen, gegen die echten Seiten
+    gelesen: 2 richtig, 12 falsch. Die falschen kamen aus
+    Literaturverzeichnissen, Verwandtenlisten, eingebetteten Projektlisten und
+    aus Werbeprosa -- "Vienna coffee-house meets Barcelona" machte ein Wiener
+    Lokal zu einem Projekt in Barcelona.
+
+    Dieselben Seiten mit der Zonenregel: 11 von 11 richtig.
+    """
+    from adwatch.enrich.tiefenlauf import ortszone
+
+    # 1. Beschriftetes Feld gewinnt
+    z = ortszone("Plaza Norte 2", "Plaza Norte 2 Location City: Madrid, Spain Renovation")
+    assert "Madrid" in z and "Renovation" in z
+
+    # 2. Ohne Feld: der Bereich hinter dem letzten Vorkommen des Titels.
+    #    Davor steht bei grossen Bueros die ganze Kopf- und Fusszeile.
+    seite = ("226 National Stadium - Herzog & de Meuron Menu Close News Projects "
+             "Basel, Switzerland Email: info@ "
+             "226 National Stadium Main Stadium for the 2008 Olympic Games "
+             "Beijing, China Competition 2002")
+    z2 = ortszone("226 National Stadium", seite)
+    assert "Beijing" in z2
+    assert "Basel" not in z2          # der Bueros itz faellt heraus
+
+    # 3. Der Anhang wird auch in der Zone abgeschnitten: bei mathes.de stand
+    #    "weitere projekte ... Villa, Mallorca" direkt hinter einem
+    #    IBIZA-Projekt und machte daraus ein Mallorca-Projekt.
+    z3 = ortszone("Wohlfuehloase im Sueden, Ibiza",
+                  "Wohlfuehloase im Sueden, Ibiza Mehr erfahren "
+                  "Weitere Projekte Villa, Mallorca Mehr erfahren")
+    assert "Ibiza" in z3
+    assert "Mallorca" not in z3
+
+
+def test_archivseiten_sind_keine_projekte():
+    """Jahres- und Kategorienarchive bestehen den Pfadtest, sind aber Kataloge.
+
+    cruzyortiz.com fuehrt /project-year/1999-en und
+    /project-category/museums-galleries-en. Beide enthalten "project", beide
+    listen ein Dutzend Projekte mit ein Dutzend Orten. Fuenf von vierzehn
+    Stichproben kamen von solchen Seiten.
+    """
+    from adwatch.enrich.tiefenlauf import _art, _ist_archivseite
+
+    assert _ist_archivseite("https://x.com/en/project-year/1999-en")
+    assert _ist_archivseite("https://x.com/en/project-category/museums-en")
+    assert _ist_archivseite("https://x.com/projekte/tag/wohnbau")
+    assert _ist_archivseite("https://x.com/p/1", "1999 archivos")
+    assert not _ist_archivseite("https://x.com/projekte/haus-am-see")
+
+    assert _art("https://x.com/en/project-category/museums") == "sonstige"
+    assert _art("https://x.com/projekte/haus-am-see") == "projekt"
+

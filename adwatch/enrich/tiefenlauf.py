@@ -114,8 +114,29 @@ _ES_VORWAHL = re.compile(r"\+\s?34[\s\-/.]?\d")
 _ES_WORT = re.compile(r"\b(espa[nñ]a|spanien|spain|espagne|spagna)\b", re.I)
 
 
+# Archiv- und Kategorieseiten. Sie bestehen den Pfadtest, weil "project" darin
+# vorkommt -- cruzyortiz.com fuehrt /project-year/1999-en und
+# /project-category/museums-galleries-en. Das sind KATALOGE: eine Seite, viele
+# Projekte, viele Orte. Fuenf von vierzehn Stichproben kamen daher.
+_INDEX_WORT = ("project-year", "project-category", "projekt-kategorie",
+               "/category/", "/categoria/", "/kategorie/", "/tag/", "/etiqueta/",
+               "/year/", "/jahr/", "/ano/", "/archive", "/archiv", "/archivo",
+               "/page/", "/seite/", "/author/", "/autor/", "/search",
+               "/project-type", "/project-status", "/proyecto-tipo")
+_NUR_JAHR = re.compile(r"^(19|20)\d\d( archivos?| archive)?$", re.I)
+
+
+def _ist_archivseite(url: str, titel: str = "") -> bool:
+    pfad = unquote(urlsplit(url).path).lower()
+    if any(w in pfad for w in _INDEX_WORT):
+        return True
+    return bool(_NUR_JAHR.match((titel or "").strip()))
+
+
 def _art(url: str) -> str:
     pfad = unquote(urlsplit(url).path).lower()
+    if _ist_archivseite(url):
+        return "sonstige"
     if _ist_projekt_pfad(url):
         return "projekt"
     if any(w in pfad for w in _KONTAKT_WORT):
@@ -674,6 +695,60 @@ def _ort_belegt(name: str, titel_gef: str, text_gef: str,
     return None
 
 
+# WO AUF EINER PROJEKTSEITE DER PROJEKTORT STEHT.
+#
+# Bis hierher wurde die ganze Seite nach Ortsnamen durchsucht. Eine Stichprobe
+# von 14 Projektzeilen hat gezeigt, was das taugt: 2 richtig, 12 falsch. Die
+# falschen kamen aus Literaturverzeichnissen, Verwandtenlisten, eingebetteten
+# Projektlisten und aus Werbeprosa -- "Vienna coffee-house meets Barcelona"
+# machte ein Wiener Lokal zu einem Projekt in Barcelona.
+#
+# Der Ort steht in Wirklichkeit fast immer an einer von drei Stellen:
+#
+#   1. in einem BESCHRIFTETEN Feld    "Location City: Madrid, Spain"
+#   2. im TITEL                        "Deutsche Schule Madrid"
+#   3. im KOPF des Projektblocks       "226 National Stadium
+#                                       Main Stadium for the 2008 Olympic
+#                                       Games / Beijing, China / 2002-2008"
+#
+# Der Titel wiederholt sich am Anfang des Inhaltsblocks -- er dient deshalb als
+# Anker fuer Fall 3. Gemessen an denselben 14 Seiten: 8 von 8 entscheidbaren
+# richtig, einschliesslich aller vier, die NICHT spanisch sein durften.
+_ORTSLABEL = re.compile(
+    r"\b(?:location|ort|standort|ubicaci[oó]n|localizaci[oó]n|lugar"
+    r"|place|site|adresse|address|land|country|stadt|city|pa[ií]s|projektort"
+    r"|bauort|emplacement|luogo)\b[ ]*(?:city)?[ ]*[:\-–][ ]*",
+    re.I)
+_ZONE_LAENGE = 420
+_ZONE_LABEL_LAENGE = 90
+
+
+def ortszone(titel: str, text: str) -> str:
+    """Der Ausschnitt, in dem der Projektort stehen kann.
+
+    Beschriftete Felder gewinnen; sonst der Bereich hinter dem letzten
+    Vorkommen des Titels; sonst der Anfang. Der Anhang (Literatur, verwandte
+    Projekte) wird auch hier abgeschnitten -- bei mathes.de stand
+    "weitere projekte ... villa, mallorca" direkt hinter einem Ibiza-Projekt.
+    """
+    felder = [text[m.end():m.end() + _ZONE_LABEL_LAENGE]
+              for m in _ORTSLABEL.finditer(text)]
+    if felder:
+        return " ".join(felder[:6])
+    anker = (titel or "")[:28].strip()
+    roh = text
+    if anker:
+        pos = text.rfind(anker)
+        if pos >= 0:
+            roh = text[pos:pos + _ZONE_LAENGE]
+        else:
+            roh = text[:_ZONE_LAENGE]
+    else:
+        roh = text[:_ZONE_LAENGE]
+    m = _ANHANG.search(roh, 40)
+    return roh[:m.start()] if m else roh
+
+
 def _projekt_auswerten(url: str, html: str, text: str,
                        eigene_woerter: set[str]) -> dict:
     """Eine Projektseite: Titel, spanische Orte, Orte anderswo.
@@ -688,10 +763,9 @@ def _projekt_auswerten(url: str, html: str, text: str,
     Auszeichnungen und Teamlisten stehen.
     """
     titel = _titel(html)
-    # Anhang weg, BEVOR die Orte gesucht werden. Danach ist es zu spaet: der
-    # Ortsabgleich kennt den Unterschied zwischen einem Bauort und dem Sitz
-    # eines Verlags nicht.
-    text = ohne_anhang(text)
+    # NUR die Ortszone, nicht die ganze Seite. Siehe den Kommentar oben:
+    # die ganze Seite lieferte 2 von 14 richtig.
+    text = ortszone(titel, ohne_anhang(text))
     volltext = f"{titel}\n{text}"
     treffer = laender._ort_treffer(volltext)
     titel_gef = laender._falten(titel)
