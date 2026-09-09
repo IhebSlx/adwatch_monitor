@@ -104,8 +104,20 @@ Antworte NUR mit JSON, ohne Vorrede und ohne Code-Zaun:
  "in_spanien": true/false,
  "ort": "Stadt oder Gemeinde, sonst null",
  "provinz_oder_region": "sonst null",
+ "baujahr": "Jahr als Zahl, sonst null",
+ "baujahr_art": "fertig"/"baubeginn"/"wettbewerb"/"planung"/"unklar",
+ "gebaeudeart": "Wohnbau"/"Hotel/Gastro"/"Gewerbe"/"Buero"/"Oeffentlich"/"Bildung"/"Gesundheit"/"Industrie"/"Sport"/"Kultur"/"Verkehr"/"Sonstiges"/null,
  "sicherheit": "hoch"/"mittel"/"niedrig",
  "beleg": "der Wortlaut der Seite, aus dem der Ort hervorgeht, max. 120 Zeichen"}
+
+Zum baujahr: nimm das Jahr der FERTIGSTELLUNG, wenn die Seite es nennt, und
+setze baujahr_art entsprechend. Steht nur eine Bauzeit ("2019-2021"), nimm das
+letzte Jahr. Steht nur ein Wettbewerbsjahr, nimm das und sage es. Ein
+Copyright-Jahr in der Fusszeile ist KEIN Baujahr -- dann null.
+
+Zur gebaeudeart: wonach das Gebaeude genutzt wird, nicht wonach es aussieht.
+Eine Villa ist Wohnbau, ein Hotel Hotel/Gastro, ein Buerohaus Buero, eine
+Schule Bildung. Bei null bleibt es, wenn die Seite es nicht hergibt.
 
 ist_projekt=false, wenn die Seite eine Übersicht, ein Archiv, eine Nachricht \
 oder eine Bürovorstellung ist statt ein einzelnes Projekt.

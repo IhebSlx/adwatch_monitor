@@ -979,7 +979,9 @@ def _tabellen(s) -> None:
     # betroffen, ohne dass etwas rot geworden waere.
     for tabelle, spalten in (
             ("arch_web_projects", (("beleg", "TEXT"), ("quelle", "TEXT"),
-                                   ("sicherheit", "TEXT"))),
+                                   ("sicherheit", "TEXT"), ("baujahr", "INTEGER"),
+                                   ("baujahr_art", "TEXT"), ("gebaeudeart", "TEXT"),
+                                   ("ki_region", "TEXT"))),
             ("arch_web_scan", (("projekt_urls_bekannt", "INTEGER"),
                                ("chrome_orte", "TEXT"), ("ki_gekappt", "INTEGER"),
                                ("ki_aufrufe", "INTEGER"), ("ki_kosten", "REAL"))),
@@ -997,6 +999,16 @@ def _tabellen(s) -> None:
 def _speichern(dom: str, ids: list[int], res: dict | None, fehler: str | None) -> None:
     import json
     jetzt = dt.datetime.now().isoformat(timespec="seconds")
+
+    def _jahr(x):
+        """Nur eine plausible Jahreszahl. Haiku liefert gelegentlich "2019-2021"
+        oder "ca. 2005" -- und ein Copyright-Jahr waere hier ein falsches
+        Baujahr, also wird alles ausserhalb 1900-2035 verworfen."""
+        try:
+            j = int(str(x)[:4])
+        except (TypeError, ValueError):
+            return None
+        return j if 1900 <= j <= 2035 else None
     with SessionLocal() as s:
         _tabellen(s)
         for tab in ("arch_web_projects", "arch_web_contacts"):
@@ -1005,21 +1017,29 @@ def _speichern(dom: str, ids: list[int], res: dict | None, fehler: str | None) -
         mit_ort = [p for p in projekte if p["hat_ort"]]
         es = [p for p in projekte if p["orte_es"]]
         for p in projekte:
+            ki = (p.get("ki") or {}) if isinstance(p.get("ki"), dict) else {}
             if p["orte_es"]:
                 for ort in p["orte_es"]:
                     r = regionen.einordnen(ort)
                     s.execute(_sql(
                         "INSERT INTO arch_web_projects (domain, url, titel, ort, "
                         "provinz, region, region_de, region_eindeutig, land, "
-                        "beleg, quelle, sicherheit, gescannt_am) "
-                        "VALUES (:d,:u,:t,:o,:p,:r,:rd,:e,'ES',:b,:q,:s,:z)"),
+                        "beleg, quelle, sicherheit, baujahr, baujahr_art, "
+                        "gebaeudeart, ki_region, gescannt_am) "
+                        "VALUES (:d,:u,:t,:o,:p,:r,:rd,:e,'ES',:b,:q,:s,"
+                        ":jahr,:jart,:gart,:kreg,:z)"),
                         {"d": dom, "u": p["url"], "t": p["titel"], "o": ort,
                          "p": r["provinz"], "r": r["region"], "rd": r["region_de"],
                          "e": None if r["eindeutig"] is None else int(r["eindeutig"]),
                          "b": (p.get("gruende") or {}).get(ort),
                          "q": "Haiku" if p.get("ki") and not p["ki"].get("fehler")
                               else "Regel",
-                         "s": p.get("ki_sicherheit"), "z": jetzt})
+                         "s": p.get("ki_sicherheit"),
+                         "jahr": _jahr(ki.get("baujahr")),
+                         "jart": ki.get("baujahr_art"),
+                         "gart": ki.get("gebaeudeart"),
+                         "kreg": ki.get("provinz_oder_region"),
+                         "z": jetzt})
             elif p["orte_andere"]:
                 land = sorted(p["orte_andere"])[0]
                 s.execute(_sql(
