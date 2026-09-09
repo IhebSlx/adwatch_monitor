@@ -5847,3 +5847,63 @@ def test_anhang_wird_abgeschnitten():
     ohne = "b" * 2000 + " projekt in sevilla"
     assert ohne_anhang(ohne) == ohne
 
+
+def test_orte_die_immer_gemeinsam_auftreten(temp_db, monkeypatch):
+    """Zwei Orte auf fast denselben Seiten sind ein Artefakt — aber welches?
+
+    Gemessen ueber die 82 Bueros (Jaccard der Seitenmengen):
+
+        behzadi-architekten.de   madrid 196 | barcelona 193   0,93
+        herzogdemeuron.com       tenerife 19 | santa cruz 18  0,95
+        cruzyortiz.com           seville 64 | madrid 43       0,26
+        mathes.de                mallorca 42 | ibiza 9        0,16
+
+    Haeufigkeit allein trennt sie NICHT: behzadis Madrid steht auf 49 % der
+    Seiten, Cruz y Ortiz' Sevilla auf ebenfalls 49 % — nur ist das eine ein
+    Phantom aus einer eingebetteten Projektliste und das andere die Heimatstadt
+    eines sevillanischen Buros. Echte Projektorte WECHSELN.
+
+    Zwei Ursachen, zwei Heilungen: Madrid+Barcelona kommen aus einer geteilten
+    Liste und muessen beide weg; tenerife+santa cruz sind EIN Ort (Santa Cruz
+    de Tenerife) und gehoeren zusammengefasst, sonst faellt ein echtes Projekt
+    heraus.
+    """
+    from sqlalchemy import text as _t
+
+    from adwatch.enrich import regionen, tiefenlauf
+
+    monkeypatch.setattr(regionen, "SessionLocal", temp_db.SessionLocal)
+    regionen._index = None
+    s = temp_db.SessionLocal()
+    s.execute(_t("CREATE TABLE IF NOT EXISTS plz_geo (id INTEGER PRIMARY KEY, "
+                 "country TEXT, plz TEXT, lat REAL, lng REAL, place TEXT)"))
+    s.execute(_t("INSERT INTO plz_geo (country, plz, lat, lng, place) "
+                 "VALUES ('ES','38001',28.46,-16.25,'Santa Cruz de Tenerife')"))
+    s.commit(); s.close()
+
+    def seiten(n, orte, praefix):
+        return [{"url": f"https://x.de/{praefix}{i}", "titel": f"Projekt {i}",
+                 "orte_es": list(orte), "orte_andere": {}, "gruende": {},
+                 "hat_ort": True} for i in range(n)]
+
+    # Geteilte Projektliste: beide Orte verschwinden
+    aus, bericht = tiefenlauf._ortspaare_bereinigen(
+        seiten(20, ("madrid", "barcelona"), "l"))
+    assert set(bericht) == {"madrid", "barcelona"}
+    assert all(not p["orte_es"] for p in aus)
+
+    # Ein Ort, doppelt erkannt: zusammengefasst statt geloescht
+    aus2, _ = tiefenlauf._ortspaare_bereinigen(
+        seiten(19, ("tenerife", "santa cruz"), "t"))
+    assert all(p["orte_es"] == ["santa cruz de tenerife"] for p in aus2)
+
+    # Wechselnde echte Orte bleiben unangetastet
+    import random
+    random.seed(1)
+    echt = [{"url": f"https://y.de/p{i}", "titel": "x",
+             "orte_es": random.sample(["seville", "madrid", "granada", "cadiz"], 2),
+             "orte_andere": {}, "gruende": {}, "hat_ort": True} for i in range(40)]
+    aus3, bericht3 = tiefenlauf._ortspaare_bereinigen(echt)
+    assert bericht3 == {}
+    assert sum(len(p["orte_es"]) for p in aus3) == 80
+

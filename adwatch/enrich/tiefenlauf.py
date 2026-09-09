@@ -312,6 +312,8 @@ def website_lesen(domain: str, heimat: str | None = None,
     projekte = _projekte_indexseiten_raus(projekte)
     projekte = _projekte_entdoppeln(projekte)
     projekte, chrome_orte = _chrome_orte_entfernen(projekte)
+    projekte, paare = _ortspaare_bereinigen(projekte)
+    chrome_orte = {**chrome_orte, **paare}
     return {
         "chrome_orte": chrome_orte,
         "domain": domain,
@@ -378,6 +380,83 @@ def _chrome_orte_entfernen(projekte: list[dict]) -> tuple[list[dict], dict]:
                         or p.get("gruende", {}).get(o) == "im Projekttitel"]
         p["hat_ort"] = bool(p["orte_es"] or p["orte_andere"])
     return projekte, chrome
+
+
+# Zwei Orte, die auf FAST DENSELBEN Seiten stehen, sind kein Zufall.
+#
+# Gemessen ueber die 82 Bueros (Jaccard der Seitenmengen):
+#
+#     behzadi-architekten.de   madrid  196 | barcelona 193   0,93
+#     herzogdemeuron.com       tenerife 19 | santa cruz 18   0,95
+#     cruzyortiz.com           seville  64 | madrid     43   0,26
+#     mathes.de                mallorca 42 | ibiza       9   0,16
+#
+# Die ersten beiden Paare sind Artefakte, die letzten beiden echt — und die
+# blosse Haeufigkeit trennt sie NICHT: behzadis Madrid steht auf 49 % der
+# Seiten, Cruz y Ortiz' Sevilla auf ebenfalls 49 %. Der Unterschied ist, dass
+# echte Projektorte WECHSELN und Artefakte gemeinsam auftreten.
+#
+# Zwei Ursachen, zwei Heilungen:
+#
+#   * behzadi bettet seine ganze Projektliste in jede Projektseite ein
+#     ("residenz des botschafters, madrid", "hotel barcelona ... berlin" —
+#     letzteres ist ein GEBAEUDENAME in Berlin). Beide Orte muessen weg.
+#   * Bei Herzog sind "tenerife" und "santa cruz" derselbe Ort: Santa Cruz de
+#     Tenerife, in zwei Treffer zerfallen. Die gehoeren zusammengefasst, nicht
+#     geloescht — sonst faellt ein echtes Projekt heraus.
+#
+# Unterschieden wird ueber das Ortsverzeichnis: gibt es einen spanischen Ort,
+# dessen Name BEIDE enthaelt, ist es einer. Sonst sind es zwei aus einer Liste.
+_PAAR_SCHWELLE = 0.85
+_PAAR_MINDEST = 5
+
+
+def _gemeinsamer_ort(a: str, b: str) -> str | None:
+    """Ein spanischer Ortsname, der beide Teile enthaelt — oder None."""
+    from . import regionen
+    for kandidat in (f"{b} de {a}", f"{a} de {b}", f"{b} {a}", f"{a} {b}"):
+        if regionen._plz_index().get(kandidat):
+            return kandidat
+    return None
+
+
+def _ortspaare_bereinigen(projekte: list[dict]) -> tuple[list[dict], dict]:
+    """Orte zusammenfassen oder verwerfen, die immer gemeinsam auftreten."""
+    seiten: dict[str, set] = defaultdict(set)
+    for p in projekte:
+        for ort in p["orte_es"]:
+            seiten[ort].add(p["url"])
+    gross = {o: u for o, u in seiten.items() if len(u) >= _PAAR_MINDEST}
+    verwerfen: set[str] = set()
+    ersetzen: dict[str, str] = {}
+    namen = sorted(gross, key=lambda o: -len(gross[o]))
+    for i, a in enumerate(namen):
+        for b in namen[i + 1:]:
+            ua, ub = gross[a], gross[b]
+            if not (ua & ub):
+                continue
+            if len(ua & ub) / len(ua | ub) < _PAAR_SCHWELLE:
+                continue
+            zusammen = _gemeinsamer_ort(a, b)
+            if zusammen:
+                ersetzen[a] = zusammen
+                ersetzen[b] = zusammen
+            else:
+                verwerfen.add(a)
+                verwerfen.add(b)
+    if not verwerfen and not ersetzen:
+        return projekte, {}
+    for p in projekte:
+        neu_orte = []
+        for o in p["orte_es"]:
+            if o in verwerfen and p.get("gruende", {}).get(o) != "im Projekttitel":
+                continue
+            neu_orte.append(ersetzen.get(o, o))
+        p["orte_es"] = sorted(set(neu_orte))
+        p["hat_ort"] = bool(p["orte_es"] or p["orte_andere"])
+    bericht = {o: len(seiten[o]) for o in verwerfen}
+    bericht.update({f"{a} -> {b}": len(seiten[a]) for a, b in ersetzen.items()})
+    return projekte, bericht
 
 
 def _projekte_indexseiten_raus(projekte: list[dict]) -> list[dict]:
