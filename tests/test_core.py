@@ -6011,3 +6011,24 @@ def test_excel_hat_die_bestellten_spalten():
                    "Projekte in ES", "Anteil ES", "Link", "Ort", "Region",
                    "Baujahr", "Gebäudeart", "Quelle"):
         assert f'("{spalte}"' in quelle, f"Spalte fehlt: {spalte}"
+
+
+def test_beleg_niederlassung_zeigt_das_signal_nicht_den_seitentitel():
+    """Ein Beleg muss belegen.
+
+    In der Spalte stand der Titel der Fundseite: "People - Nordic Office of
+    Architecture - We are 400 architects...". Daneben ein "ja". Iheb hat
+    zurecht gefragt, wie diese Zeilen in die Liste kommen. Jetzt steht dort,
+    WAS gefunden wurde: Adresse, Telefonnummer, und erst danach die Fundstelle.
+    """
+    from tools.spanien_excel import _beleg_nl
+
+    b = _beleg_nl({"plz_mit_ort": "28010 Madrid", "vorwahl_34": True,
+                   "wort_spanien": True, "zeile": "Contact | Broadway Malyan"})
+    assert b.startswith("Adresse 28010 Madrid, Telefonnummer +34")
+    assert "Contact | Broadway Malyan" in b
+
+    # Das Wort allein ist kein Beleg -- es steht auf jeder Seite eines Bueros,
+    # das in Spanien baut.
+    assert _beleg_nl({"wort_spanien": True, "zeile": "x"}) == "kein harter Beleg"
+    assert _beleg_nl(None) == ""

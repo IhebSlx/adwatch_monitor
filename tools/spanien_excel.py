@@ -63,9 +63,17 @@ RAND = Border(bottom=Side("thin", color="D9E2EC"))
 # den ersten acht Treffern. Geprüft wird deshalb der HOST DER PROJEKT-URL, nicht
 # nur die CRM-Domain; die übrigen 14 abweichenden Hosts im Bestand sind echte
 # Umbenennungen (esteva.es → esteva.eu, oma.eu → oma.com) und bleiben drin.
+# Dazu Plattformen, die im CRM als „Website" eines Büros stehen, weil das Büro
+# keine eigene hat: RBA Mueller Ltd hat linkedin.com, Rapp+Bihlmaier hat
+# sites.google.com, EMT hat german-architects.com. Was dort gecrawlt wurde,
+# gehört der Plattform, nicht dem Büro.
 PORTALE = {"archilovers.com", "architonic.com", "archdaily.com",
-           "world-architects.com", "dezeen.com", "divisare.com",
-           "architektur-aktuell.at", "baunetz.de", "detail.de"}
+           "world-architects.com", "german-architects.com",
+           "austria-architects.com", "swiss-architects.com",
+           "dezeen.com", "divisare.com", "architektur-aktuell.at",
+           "baunetz.de", "detail.de", "competitionline.com", "houzz.de",
+           "houzz.com", "linkedin.com", "facebook.com", "instagram.com",
+           "sites.google.com", "wixsite.com", "jimdosite.com"}
 
 
 def _ist_portal(url_oder_domain: str) -> bool:
@@ -138,6 +146,29 @@ def _punkte(es, anteil, stufe, niederlassung, balearen, jung) -> tuple[int, str]
     return p, "; ".join(w) or "keine Merkmale"
 
 
+def _beleg_nl(nl: dict | None) -> str:
+    """Der Beleg für eine Niederlassung — die Signale, nicht der Seitentitel.
+
+    Hier stand vorher `nl["zeile"]`, also Titel und Anriss der Fundseite:
+    „People – Nordic Office of Architecture · We are 400 architects…". Das
+    belegt gar nichts. Was zählt, ist eine +34-Nummer oder eine spanische PLZ
+    mit passendem Ort; das Wort „España" allein steht auf jeder Seite eines
+    Büros, das in Spanien baut, und reicht deshalb nie.
+    """
+    if not nl:
+        return ""
+    teile = []
+    if nl.get("plz_mit_ort"):
+        teile.append(f"Adresse {nl['plz_mit_ort']}")
+    if nl.get("vorwahl_34"):
+        teile.append("Telefonnummer +34")
+    if not teile:
+        return "kein harter Beleg"
+    if nl.get("wort_spanien"):
+        teile.append("Wort España/Spanien")
+    return ", ".join(teile) + f" — auf: {(nl.get('zeile') or '')[:70]}"
+
+
 def _vollstaendig(sc) -> str:
     if sc[7]:
         return "nein (Fehler)"
@@ -156,7 +187,9 @@ def _kopf(ws, spalten, zeile=1):
         z.alignment = Alignment(vertical="center", wrap_text=True)
         ws.column_dimensions[get_column_letter(i)].width = breite
     ws.row_dimensions[zeile].height = 30
-    ws.freeze_panes = ws.cell(row=zeile + 1, column=1)
+    # Spalte A bleibt beim Scrollen stehen. Ohne das sieht man in einer breiten
+    # Tabelle irgendwann Zahlen ohne Büronamen daneben.
+    ws.freeze_panes = ws.cell(row=zeile + 1, column=2)
     ws.auto_filter.ref = f"A{zeile}:{get_column_letter(len(spalten))}{zeile}"
 
 
@@ -177,6 +210,15 @@ def bauen(d: dict, pfad: str | None = None) -> str:
     wb = Workbook()
 
     # ---------------- Blatt 1: Büros ---------------------------------------
+    #
+    # JE REGION EINE SPALTE, nicht eine Spalte mit allen Regionen darin.
+    # Vorher stand hier ein Text wie „Andalusien (2), Balearen (1), Katalonien
+    # (1)". Für den Excel-Filter ist das EIN Wert: das Auswahlmenü zeigte
+    # dutzende Kombinationen und keine einzige Region. Nach Katalonien filtern
+    # hieß, jede Kombination anzuhaken, in der Katalonien vorkommt.
+    # Jetzt: Spalte „ES: Katalonien" auf „größer als 0" — fertig.
+    reg_spalten = sorted({p[6] for ps in je_dom.values() for p in ps if p[6]})
+
     ws = wb.active
     ws.title = "Büros"
     spalten = [
@@ -185,8 +227,10 @@ def bauen(d: dict, pfad: str | None = None) -> str:
         ("Hauptsitz Land", 12),
         ("Niederlassung in ES", 15), ("Beleg Niederlassung", 34),
         ("Projekte gesamt", 12), ("Projekte mit Ort", 12), ("Projekte in ES", 12),
-        ("Anteil ES", 10), ("davon Balearen", 12), ("seit 2018", 10),
-        ("Regionen in ES", 30), ("Städte in ES", 34), ("Gebäudearten", 26),
+        ("Anteil ES", 10), ("seit 2018", 10),
+        ("Hauptregion", 18),
+    ] + [(f"ES: {x}", 13) for x in reg_spalten] + [
+        ("Städte in ES", 34), ("Gebäudearten", 26),
         ("Beziehung", 10), ("Beziehung heißt", 24), ("Punkte", 8),
         ("Punkte woraus", 44), ("Rolle", 15), ("Telefon", 16),
         ("Kontaktseite", 26), ("Ortsangaben geprüft", 15),
@@ -195,7 +239,7 @@ def bauen(d: dict, pfad: str | None = None) -> str:
     ]
     _kopf(ws, spalten)
 
-    zeilen, leer, portale_raus = [], 0, []
+    zeilen, leer, portale_raus, nur_nl = [], 0, [], []
     for dom, sc in scans.items():
         f = firmen.get(dom)
         if not f:
@@ -205,8 +249,22 @@ def bauen(d: dict, pfad: str | None = None) -> str:
             continue
         ps = je_dom.get(dom, [])
         nl = json.loads(sc[5] or "null")
-        if not ps and not nl:
-            leer += 1
+        if not ps:
+            # KEIN PROJEKT IN SPANIEN, ALSO NICHT IN DIESE LISTE. Bis eben
+            # genügte ein Niederlassungsbefund, und weil der 20 Punkte gibt,
+            # standen 21 Büros mit null spanischen Projekten ganz OBEN — Drees
+            # & Sommer, Nordic Office of Architecture, Hofman Dujardin. Die
+            # Liste soll Büros zeigen, die in Spanien bauen.
+            #
+            # Weggeworfen werden sie trotzdem nicht: die mit hartem Beleg
+            # stehen im eigenen Blatt „Niederlassung ohne Projekt". Ein
+            # Madrider Büro von Drees & Sommer ist eine Information, nur eben
+            # keine Projektliste.
+            if nl:
+                nur_nl.append((f[1], dom, f[5] or "", _beleg_nl(nl),
+                               sc[3] or 0, sc[4] or 0, sc[1] or 0))
+            else:
+                leer += 1
             continue
         urls = {p[1] for p in ps}
         bal = len({p[1] for p in ps if (p[6] or "") == "Balearen"})
@@ -224,10 +282,14 @@ def bauen(d: dict, pfad: str | None = None) -> str:
         kontakt = next((k[1] for k in d["kontakte"] if k[0] == dom and k[4]), "")
         zeilen.append((pkt, [
             f[1], dom, f[2] or "", f[3] or "", f[4] or "", f[5] or "",
-            "ja" if nl else "nein",
-            (nl or {}).get("zeile") or (nl or {}).get("plz_mit_ort") or "",
-            sc[3] or 0, mit_ort, len(urls), anteil, bal, jung,
-            ", ".join(f"{r} ({n})" for r, n in reg.most_common()),
+            "ja" if nl else "nein", _beleg_nl(nl),
+            sc[3] or 0, mit_ort, len(urls), anteil, jung,
+            # Bei Gleichstand alphabetisch, nicht nach Einlesereihenfolge:
+            # sonst wechselt die Hauptregion zwischen zwei Läufen, ohne dass
+            # sich an den Daten etwas geändert hat.
+            (sorted(reg.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+             if reg else ""),
+        ] + [reg.get(x, 0) or "" for x in reg_spalten] + [
             ", ".join(staedte[:12]) + (f" … +{len(staedte)-12}" if len(staedte) > 12 else ""),
             ", ".join(f"{a} ({n})" for a, n in arten.most_common(4)),
             stufe, STUFENTEXT.get(stufe, ""), pkt, warum,
@@ -235,9 +297,9 @@ def bauen(d: dict, pfad: str | None = None) -> str:
             f"{gepr} von {len(urls)}" if urls else "",
             max((sc[3] or 0) - mit_ort, 0), sc[1] or 0, _vollstaendig(sc), sc[6],
         ]))
-    zeilen.sort(key=lambda x: (-x[0], -(x[1][10] or 0)))
-
     i = {n: k for k, (n, _) in enumerate(spalten)}
+    zeilen.sort(key=lambda x: (-x[0], -(x[1][i["Projekte in ES"]] or 0)))
+
     for r, (_, werte) in enumerate(zeilen, start=2):
         for c, v in enumerate(werte, start=1):
             z = ws.cell(row=r, column=c, value=v)
@@ -289,29 +351,37 @@ def bauen(d: dict, pfad: str | None = None) -> str:
                     wp.cell(row=r, column=c).fill = ROT
             r += 1
 
-    # ---------------- Blatt 3: Regionen ------------------------------------
-    wr = wb.create_sheet("Regionen")
-    alle = sorted({p[6] for p in d["projekte"] if p[6]})
-    _kopf(wr, [("Büro", 32), ("Hauptsitz Land", 12), ("Website", 22),
-               ("Projekte in ES", 12)] + [(x, 14) for x in alle])
-    r = 2
-    for pkt, werte in zeilen:
-        dom = werte[1]
-        ps = je_dom.get(dom, [])
-        if not ps:
-            continue
-        je_reg = defaultdict(set)
-        for p in ps:
-            if p[6]:
-                je_reg[p[6]].add(p[1])
-        reihe = [werte[0], werte[5], dom, werte[10]] + \
-                [len(je_reg.get(x, ())) or "" for x in alle]
+    # ---------------- Blatt 3: Niederlassung ohne Projekt ------------------
+    wn = wb.create_sheet("Niederlassung ohne Projekt")
+    wn.cell(row=1, column=1, value=(
+        "Büros mit einem Hinweis auf ein Büro in Spanien, aber OHNE ein "
+        "einziges gefundenes Projekt dort. Sie stehen absichtlich nicht in "
+        "der Hauptliste: die zeigt Büros, die in Spanien bauen. Der Hinweis "
+        "kann echt sein (Drees & Sommer hat ein Büro in Madrid) oder ein "
+        "Fehlalarm — eine +34-Nummer auf einer Teamseite belegt keine "
+        "Niederlassung. Ohne Projekt gibt es nichts zum Nachprüfen."))
+    wn.cell(row=1, column=1).font = Font(bold=True, size=10)
+    wn.merge_cells(start_row=1, start_column=1, end_row=1, end_column=7)
+    wn.row_dimensions[1].height = 46
+    wn.cell(row=1, column=1).alignment = Alignment(wrap_text=True, vertical="center")
+    _kopf(wn, [("Büro", 34), ("Website", 24), ("Hauptsitz Land", 12),
+               ("Beleg", 76), ("Projekte gesamt", 12), ("Projekte mit Ort", 12),
+               ("Seiten gelesen", 12)], zeile=2)
+    r = 3
+    for reihe in sorted(nur_nl, key=lambda x: (x[2] == "ES", x[0])):
         for c, v in enumerate(reihe, start=1):
-            z = wr.cell(row=r, column=c, value=v)
+            z = wn.cell(row=r, column=c, value=v)
             z.border = RAND
-            if c > 4 and v:
-                z.fill = WARM
+            if c == 2 and v:
+                z.font, z.hyperlink = LINK, f"https://{v}"
+        if reihe[2] == "ES":
+            for c in range(1, 8):
+                wn.cell(row=r, column=c).fill = ROT
         r += 1
+
+    # Ein eigenes Blatt „Regionen" gab es hier bis eben. Es steht jetzt
+    # als Spalten in „Büros" — dieselben Zahlen an zwei Stellen wären
+    # zwei Stellen, an denen sie auseinanderlaufen können.
 
     # ---------------- Blatt 4: Kontakte (löschbar) -------------------------
     wk = wb.create_sheet("Kontakte (personenbezogen)")
@@ -361,9 +431,14 @@ def bauen(d: dict, pfad: str | None = None) -> str:
     n_reg = sum(1 for p in d["projekte"] if (p[9] or "Regel") == "Regel")
     texte = [
         ("Was diese Datei ist",
-         f"Architektur- und Planungsbüros mit Projekten in Spanien. "
-         f"{len(zeilen)} Büros, {len({p[1] for p in d['projekte']})} Projekte. "
-         f"Spanische Büros sind enthalten — über „Hauptsitz Land\" filterbar."),
+         f"Architektur- und Planungsbüros mit MINDESTENS EINEM gefundenen "
+         f"Projekt in Spanien: {len(zeilen)} Büros, "
+         f"{sum(len({p[1] for p in v}) for v in je_dom.values())} Projekte. "
+         f"Spanische Büros sind enthalten — über „Hauptsitz Land“ filterbar. "
+         f"Wer kein Projekt in Spanien hat, steht nicht hier; {len(nur_nl)} "
+         f"Büros mit einem Niederlassungshinweis ohne Projekt stehen im "
+         f"Blatt „Niederlassung ohne Projekt“, {leer} gescannte Büros ohne "
+         f"beides gar nicht."),
         ("Die wichtigste Spalte: Quelle",
          f"Je Projekt steht, woher der Ort kommt. `Haiku` ({n_ki}): ein Modell "
          f"hat die ganze Seite gelesen. `gelesen` ({n_gel}): im Chat geprüft, "
@@ -371,6 +446,17 @@ def bauen(d: dict, pfad: str | None = None) -> str:
          f"Zeilen sind rot hinterlegt und unzuverlässig. In einer Stichprobe "
          f"von 14 solchen Zeilen waren 2 richtig. Sie betreffen fast nur "
          f"spanische Büros, bei denen „liegt in Spanien\" ohnehin meist stimmt."),
+        ("Nach Region und Stadt filtern",
+         "REGION: im Blatt „Büros“ hat jede Region eine eigene Spalte, etwa "
+         "„ES: Katalonien“. Filter auf „größer als 0“ — oder die Spalte "
+         "„Hauptregion“, wenn nur die wichtigste zählt (bei Gleichstand "
+         "alphabetisch). Vorher stand hier eine einzige Spalte mit "
+         "„Andalusien (2), Balearen (1), Katalonien (1)“ darin: für Excel ist "
+         "das EIN Wert, das Filtermenü zeigte dutzende Kombinationen und "
+         "keine einzige Region. "
+         "STADT: im Blatt „Projekte“, Spalte „Ort“ — dort steht je Zeile genau "
+         "ein Ort, das filtert sauber. „Städte in ES“ im Blatt „Büros“ ist "
+         "zum Lesen da, nicht zum Filtern."),
         ("Wie gecrawlt wurde",
          "Zwei Stufen. Erst ein billiger Vorabtest über alle 10.212 Domains "
          "(Startseite, Projektübersichten, Sitemap — 2,6 Seiten je Domain), "
@@ -410,9 +496,8 @@ def bauen(d: dict, pfad: str | None = None) -> str:
          "Taylor steht als DE und sitzt in London. Die Stammdaten liegen im "
          "CRM, das hier nur gelesen wird — korrigieren muss sie jemand dort."),
         ("Grenzen",
-         f"Die Orte tragen kein Datum, wo kein Baujahr steht. {leer} gescannte "
-         f"Büros ohne spanisches Projekt und ohne Niederlassung fehlen hier "
-         f"bewusst. Eine Seite, die nirgends sagt, wo sie steht, ist für keine "
+         f"Die Orte tragen kein Datum, wo kein Baujahr steht. "
+         f"Eine Seite, die nirgends sagt, wo sie steht, ist für keine "
          f"Methode auffindbar — solche Projekte fehlen in „Projekte in ES\" und "
          f"stehen in „ohne erkennbaren Ort\"."),
         ("Erstellt", f"{dt.datetime.now():%d.%m.%Y %H:%M} · tools/spanien_excel.py"),
