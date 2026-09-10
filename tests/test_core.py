@@ -5800,19 +5800,53 @@ def test_regexe_enthalten_keine_steuerzeichen():
     `(\\x08In:|\\(Ed\\.\\)|\\x08Vol\\.|...)` in der Datei und traf deshalb NIE \u2014
     die Literaturregel lief ins Leere, ohne einen Fehler zu werfen. Ein Muster,
     das nichts findet, sieht aus wie ein Datenbestand ohne Treffer.
+
+    U+FEFF steht mit in der Liste, weil dieselbe Fehlerform ein zweites Mal
+    zugeschlagen hat, diesmal am Dateianfang: fuenf Dateien trugen ein BOM,
+    `ast.parse` scheiterte an jeder einzelnen, und keine Pruefung sah es. Der
+    Waechter gegen unsichtbare Zeichen war selbst blind fuer eins.
+
+    Geprueft werden auch `tools/`: die Datei mit dem kaputten `\\b` lag zwar in
+    `adwatch/`, aber das Skript, das sie geschrieben hat, lag daneben.
     """
     import io
     import pathlib
 
-    schlimm = {"\x08": "\\b", "\x0c": "\\f", "\x07": "\\a", "\x0b": "\\v"}
+    schlimm = {"\x08": "\\b", "\x0c": "\\f", "\x07": "\\a", "\x0b": "\\v",
+               "﻿": "BOM (U+FEFF)"}
     wurzel = pathlib.Path(__file__).resolve().parent.parent
     treffer = []
-    for datei in sorted((wurzel / "adwatch").rglob("*.py")):
-        roh = io.open(datei, encoding="utf-8").read()
-        for zeichen in schlimm:
-            if zeichen in roh:
-                treffer.append(f"{datei.name}: {schlimm[zeichen]}")
+    for ordner in ("adwatch", "tools"):
+        for datei in sorted((wurzel / ordner).rglob("*.py")):
+            roh = io.open(datei, encoding="utf-8").read()
+            for zeichen in schlimm:
+                if zeichen in roh:
+                    treffer.append(f"{datei.name}: {schlimm[zeichen]}")
     assert not treffer, "Steuerzeichen in Quelldateien: " + ", ".join(treffer)
+
+
+def test_alle_quelldateien_sind_parsebar():
+    """Jede Datei muss sich als Python lesen lassen, nicht nur ausfuehren.
+
+    Ein BOM stoert den Interpreter nicht, `ast.parse` aber schon. Alles, was den
+    Quelltext ANALYSIERT statt ihn auszufuehren -- Werkzeuge zur Suche nach
+    totem Code, Linter, dieser Test -- geht an solchen Dateien vorbei und meldet
+    dabei keinen Fehler, sondern einfach nichts. Fuenf Module waren so lange
+    unsichtbar.
+    """
+    import ast
+    import io
+    import pathlib
+
+    wurzel = pathlib.Path(__file__).resolve().parent.parent
+    kaputt = []
+    for ordner in ("adwatch", "tools", "tests"):
+        for datei in sorted((wurzel / ordner).rglob("*.py")):
+            try:
+                ast.parse(io.open(datei, encoding="utf-8").read())
+            except SyntaxError as e:
+                kaputt.append(f"{datei.name}: {e.msg}")
+    assert not kaputt, "nicht parsebar: " + ", ".join(kaputt)
 
 
 def test_anhang_wird_abgeschnitten():

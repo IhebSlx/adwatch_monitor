@@ -1,4 +1,4 @@
-﻿"""Meta Ad Library adapter — live via Apify (curious_coder/facebook-ads-library-scraper,
+"""Meta Ad Library adapter — live via Apify (curious_coder/facebook-ads-library-scraper,
 actor id XtaWFhbtfxyzqrFmd), with SearchAPI.io as an optional alternate backend.
 
 KEY IDEA (page-identity problem): this actor takes an arbitrary Facebook Ads Library
