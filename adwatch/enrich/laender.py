@@ -302,6 +302,16 @@ def ort_index() -> dict[str, dict[str, int]]:
                 # Kleinbuchstaben sieht aus wie ein Datenfehler.
                 if anzeige.get(name, (0, ""))[0] < n:
                     anzeige[name] = (n, place.strip())
+        # EIN LEERER INDEX WIRD NICHT GEMERKT. `plz_geo` hält 315.201 Zeilen;
+        # kommt hier nichts heraus, war die Datenbank beim ersten Aufruf eine
+        # andere — eine frisch angelegte, eine Wiederherstellung, ein Skript,
+        # das DB_URL umbiegt. Würde das gecacht, fände der Ortsabgleich für den
+        # Rest des Prozesses NICHTS, und „keine Orte gefunden" sieht genauso
+        # aus wie „keine Projekte in Spanien". Genau diese Verwechslung hat das
+        # Projekt schon zweimal Geld gekostet, also lieber bei jedem Aufruf neu
+        # versuchen als einmal falsch merken.
+        if not idx:
+            return {}
         _ORT_INDEX = dict(idx)
         _ANZEIGE.update({k: v[1] for k, v in anzeige.items()})
         return _ORT_INDEX

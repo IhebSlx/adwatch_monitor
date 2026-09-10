@@ -537,7 +537,7 @@ def test_ad_products_are_normalised_to_german_families():
     from adwatch.enrich.extract import PRODUCT_VOCAB as VOCAB_ENRICH
     assert VOCAB_ENRICH is PRODUCT_VOCAB
 
-def test_extract_separates_facts_from_assessment():
+def test_extract_separates_facts_from_assessment(monkeypatch):
     """The assessment is capped and kept as its own field; the fact fields stay
     extract-only (the prompt enforces that, the parser enforces the shape)."""
     from adwatch.enrich.extract import _clean_list, PRODUCT_VOCAB
@@ -564,7 +564,12 @@ def test_extract_separates_facts_from_assessment():
 
     import sys, types
     mod = types.ModuleType("anthropic"); mod.Anthropic = _Client
-    sys.modules["anthropic"] = mod
+    # setitem statt direkter Zuweisung: `sys.modules["anthropic"] = mod` hat den
+    # Stub fuer den REST DES LAUFS stehen lassen. Jeder spaetere Test in dieser
+    # Datei sah dann ein anthropic ohne APIStatusError -- gemerkt hat das
+    # niemand, bis ein neuer Test das echte Modul brauchte und mit
+    # AttributeError umfiel statt mit einer verstaendlichen Meldung.
+    monkeypatch.setitem(sys.modules, "anthropic", mod)
     ex.config.ANTHROPIC_API_KEY = "test-key"
 
     got = ex.extract_facts("x" * 200)
@@ -1803,3 +1808,149 @@ def test_projektort_steht_in_einer_engen_zone():
                   "Weitere Projekte Villa, Mallorca Mehr erfahren")
     assert "Ibiza" in z3
     assert "Mallorca" not in z3
+
+
+# ---------------------------------------------------------------------------
+# Vorabtest und Modellurteil -- die zwei Module, auf denen die Spanien-Zahl
+# steht und die bis zum Aufraeumen keinen einzigen Test hatten. Ein stiller
+# Fehler in ihnen sieht aus wie "diese Bueros bauen halt nicht in Spanien".
+# ---------------------------------------------------------------------------
+
+def test_vorabtest_ist_absichtlich_grosszuegig(monkeypatch):
+    """Stufe 1 darf lieber zu oft anspringen als einmal zu wenig.
+
+    Sie entscheidet, welche Domain ueberhaupt tief gelesen wird. Was hier
+    durchfaellt, wird nie wieder angesehen -- ein uebersehenes Buero ist
+    endgueltig weg, ein Fehlalarm kostet ein paar Seiten. Gemessene
+    Trefferquote auf den bestaetigten Bueros: 97 %.
+    """
+    from adwatch.enrich.spanienverdacht import gruende, verdaechtig
+
+    # Jedes einzelne Signal muss fuer sich allein reichen
+    assert "Spanien-Wort im Text" in gruende("Wohnhaus in Mallorca")
+    assert "Vorwahl +34" in gruende("Tel. +34 971 123456")
+    assert "spanische PLZ mit Ort" in gruende("Sitz: 08006 Barcelona")
+    assert ".es-Verweis" in gruende("", html='<a href="https://estudio.es/x">')
+    assert "spanische Fachwörter" in gruende("Reforma de una vivienda")
+    assert any(g.startswith("Ort in der Adresse")
+               for g in gruende("", url="https://x.de/projekte/ibiza-haus"))
+
+    # Und das Rauschen ist gewollt: "Ronda" und "Maria" sind echte spanische
+    # Gemeinden UND gewoehnliche Woerter. Stufe 1 meldet sie, Stufe 2 wirft
+    # sie raus. Andersherum -- hier schon filtern -- waere der teure Fehler.
+    #
+    # Der Ortsabgleich braucht den Index aus plz_geo. Der wird prozessweit
+    # einmal gebaut, und in einem Testlauf hat ihn womoeglich schon eine leere
+    # Wegwerf-Datenbank gefuellt -- deshalb hier ein bekannter Index statt
+    # dessen, was zufaellig im Cache liegt.
+    from adwatch.enrich import laender
+    monkeypatch.setattr(laender, "_ORT_INDEX", {"ronda": {"ES": 12}})
+    assert verdaechtig("Haus Ronda am Hang")
+
+    # Eine Seite ohne jeden Bezug loest nichts aus, sonst waere der ganze
+    # Vorabtest wertlos und jede der 10.212 Domains wuerde tief gecrawlt.
+    assert gruende("Umbau eines Bauernhauses im Allgaeu, Fertigstellung 2019") == []
+    assert not verdaechtig("Neubau einer Kindertagesstaette in Rostock")
+
+
+def test_vorabtest_nimmt_die_erste_fundstelle_und_hoert_auf(monkeypatch):
+    """Die Reihenfolge Startseite -> Uebersichten -> Sitemap ist der Preis.
+
+    Ein Buero, dessen Startseite schon "Mallorca" sagt, darf genau EINE Seite
+    kosten. Wuerde die Funktion weitersuchen, waere aus 2,6 Seiten je Domain
+    schnell ein Vielfaches -- bei 10.212 Domains ist das der Unterschied
+    zwischen einer Nacht und einer Woche.
+    """
+    from adwatch.enrich import tiefenlauf, vorlauf
+    from adwatch.identity import website_source as ws
+
+    geholt = []
+    monkeypatch.setattr(tiefenlauf, "_startseite", lambda d: {
+        "home_url": f"https://{d}/", "home_html": "<p>Villa in Mallorca</p>"})
+    monkeypatch.setattr(ws, "_fetch_url", lambda u, timeout=0: geholt.append(u) or None)
+    monkeypatch.setattr(tiefenlauf, "_sitemap_alles",
+                        lambda d, grenze=0: geholt.append("sitemap") or [])
+
+    r = vorlauf.eine_domain("beispiel.de")
+    assert r["verdacht"] is True
+    assert r["seiten"] == 1
+    assert geholt == [], "nach dem ersten Treffer darf nichts mehr geholt werden"
+
+
+def test_vorabtest_meldet_unerreichbar_statt_unverdaechtig(monkeypatch):
+    """Eine tote Website ist KEIN "baut nicht in Spanien".
+
+    Beides als `verdacht: False` zu fuehren, waere genau die Sorte stiller
+    Fehler, die dieses Projekt zweimal Geld gekostet hat: ein Ausfall saehe
+    aus wie ein Befund.
+    """
+    from adwatch.enrich import tiefenlauf, vorlauf
+
+    monkeypatch.setattr(tiefenlauf, "_startseite", lambda d: None)
+    r = vorlauf.eine_domain("tot.de")
+    assert r["erreichbar"] is False
+    assert r["verdacht"] is False and r["seiten"] == 0
+
+
+def test_modellurteil_gibt_bei_jedem_fehler_einen_fehler_zurueck():
+    """Nie ein leeres Ergebnis, immer ein `fehler`-Schluessel.
+
+    Der Fall, der das erzwungen hat: 9.092 Aufrufe wurden mit HTTP 400
+    abgelehnt, weil das Guthaben leer war. Haette beurteilen() dabei ein
+    leeres Urteil geliefert, waere der Lauf als "0 Fehler, nichts gefunden"
+    durchgegangen -- und 9.092 Seiten waeren still auf die Regel
+    zurueckgefallen, die in der Stichprobe 2 von 14 richtig hatte.
+    """
+    from adwatch.enrich import spanienverdacht
+
+    class Kaputt:
+        class messages:
+            @staticmethod
+            def create(**k):
+                raise ConnectionError("Verbindung weg")
+
+    d = spanienverdacht.beurteilen("Haus", "https://x.de/h", "Text", client=Kaputt())
+    assert "fehler" in d and "ConnectionError" in d["fehler"]
+    assert d.get("in_spanien") is None, "kein stillschweigendes Nein"
+
+    # Antwort ohne verwertbares JSON: ebenfalls ein Fehler, mit dem Rohtext
+    # daneben, damit man sieht WAS das Modell gesagt hat.
+    class Schwatzhaft:
+        class messages:
+            @staticmethod
+            def create(**k):
+                class A:
+                    content = [type("B", (), {"type": "text",
+                                              "text": "Klar doch, das liegt in Spanien!"})()]
+                    usage = type("U", (), {"input_tokens": 10, "output_tokens": 9})()
+                return A()
+
+    d2 = spanienverdacht.beurteilen("Haus", "https://x.de/h", "Text", client=Schwatzhaft())
+    assert d2["fehler"] == "kein JSON" and "Klar doch" in d2["roh"]
+
+
+def test_modellurteil_liest_json_mit_code_zaun_und_rechnet_die_kosten():
+    """Haiku packt seine Antwort gern in ```json ... ``` -- das muss weg,
+    sonst scheitert jede einzelne Antwort am Parser.
+
+    Die Kosten stehen mit im Ergebnis, weil ein Lauf ueber 10.212 Domains
+    sonst erst auf der Rechnung sichtbar wird.
+    """
+    from adwatch.enrich import spanienverdacht
+
+    class Ordentlich:
+        class messages:
+            @staticmethod
+            def create(**k):
+                class A:
+                    content = [type("B", (), {"type": "text", "text":
+                        '```json\n{"ist_projekt": true, "in_spanien": true, '
+                        '"ort": "Palma", "baujahr": 2019, "sicherheit": "hoch"}\n```'})()]
+                    usage = type("U", (), {"input_tokens": 2000, "output_tokens": 100})()
+                return A()
+
+    d = spanienverdacht.beurteilen("Villa", "https://x.de/v", "Text", client=Ordentlich())
+    assert "fehler" not in d
+    assert d["in_spanien"] is True and d["ort"] == "Palma" and d["baujahr"] == 2019
+    # 2000/1e6*1.0 + 100/1e6*5.0
+    assert d["kosten"] == pytest.approx(0.0025)
