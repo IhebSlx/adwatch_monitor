@@ -274,6 +274,32 @@ def _link(text, url: str | None) -> str:
     return f'<a href="{href}" color="{_LINK_HEX}"><u>{safe}</u></a>'
 
 
+def fusszeile(rand_mm: float, text: str):
+    """Seitenfuß: links die Beschriftung, rechts die Seitenzahl.
+
+    Stand wortgleich in `tools/spanien_bericht.py` und `tools/spanien_bueros.py`,
+    unterschieden nur durch den Rand und die Beschriftung — beides jetzt
+    Parameter. Der Seitenrand MUSS mitgegeben werden: nimmt die Fußzeile einen
+    anderen als das Dokument, steht sie sichtbar versetzt unter dem Satzspiegel.
+
+    Bewusst NICHT geteilt wurden die Absatzstile der beiden Berichte. Die sehen
+    gleich aus, unterscheiden sich aber in fast jedem Wert (Titel 22 vs. 21,
+    Rand 18 vs. 16 mm, Durchschuss 14 vs. 13,5) und in den Stilsätzen selbst:
+    der eine braucht Tabellenzellen, der andere Karten. Eine gemeinsame Fabrik
+    dafür hätte ein Dutzend Parameter — also genau die Werte, die jetzt
+    lesbar untereinander stehen, nur schlechter auffindbar. Die Farben teilen
+    sich beide ohnehin schon: sie importieren INK, MUTED und ACCENT von hier.
+    """
+    def zeichnen(canvas, dokument):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(MUTED)
+        canvas.drawRightString(A4[0] - rand_mm * mm, 11 * mm, f"Seite {dokument.page}")
+        canvas.drawString(rand_mm * mm, 11 * mm, text)
+        canvas.restoreState()
+    return zeichnen
+
+
 def _ad_library_url(page_id: str | None, country: str | None = "DE") -> str | None:
     """Deep link to a page's ACTIVE ads in the Meta Ad Library — click to see the
     exact ads behind the numbers in this report."""

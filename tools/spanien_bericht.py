@@ -41,7 +41,7 @@ from sqlalchemy import text as _sql                                # noqa: E402
 from adwatch import config, taetigkeit                             # noqa: E402
 from adwatch.db import SessionLocal                                # noqa: E402
 from adwatch.report import (                                       # noqa: E402
-    ACCENT, ACCENT_SOFT, BG, INK, LINE, MUTED, _de_datetime, _esc,
+    ACCENT, ACCENT_SOFT, BG, INK, LINE, MUTED, _de_datetime, _esc, fusszeile,
 )
 
 LAND = "ES"
@@ -681,13 +681,7 @@ def bauen(d: dict, pfad: str | None = None) -> str:
         "Website-Recherche über 10.212 Bürodomains. Rückfragen und jede einzelne Zahl "
         "nachvollziehbar über Iheb Marouani.", note))
 
-    def fuss(canvas, dokument):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7.5)
-        canvas.setFillColor(MUTED)
-        canvas.drawRightString(A4[0] - 18 * mm, 11 * mm, f"Seite {dokument.page}")
-        canvas.drawString(18 * mm, 11 * mm, f"Solarlux · Spanien · {heute:%d.%m.%Y}")
-        canvas.restoreState()
+    fuss = fusszeile(18, f"Solarlux · Spanien · {heute:%d.%m.%Y}")
 
     doc.build(S, onFirstPage=fuss, onLaterPages=fuss)
     return pfad

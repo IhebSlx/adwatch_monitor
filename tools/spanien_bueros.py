@@ -53,7 +53,7 @@ from adwatch import config, taetigkeit                                # noqa: E4
 from adwatch.db import SessionLocal                                   # noqa: E402
 from adwatch.enrich.laender import LAND_VORWAHL                       # noqa: E402
 from adwatch.report import (                                          # noqa: E402
-    ACCENT, ACCENT_SOFT, BG, INK, LINE, MUTED, _de_datetime, _esc, _link,
+    ACCENT, ACCENT_SOFT, BG, INK, LINE, MUTED, _de_datetime, _esc, fusszeile, _link,
 )
 
 LAND = "ES"
@@ -457,14 +457,7 @@ def bauen(daten: dict, pfad: str | None = None) -> str:
             nr += 1
             S.append(karte(z, nr))
 
-    def fuss(canvas, dokument):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7.5)
-        canvas.setFillColor(MUTED)
-        canvas.drawRightString(A4[0] - 16 * mm, 11 * mm, f"Seite {dokument.page}")
-        canvas.drawString(16 * mm, 11 * mm,
-                          f"Solarlux · Architekturbüros Spanien · {heute:%d.%m.%Y}")
-        canvas.restoreState()
+    fuss = fusszeile(16, f"Solarlux · Architekturbüros Spanien · {heute:%d.%m.%Y}")
 
     doc.build(S, onFirstPage=fuss, onLaterPages=fuss)
     return pfad
