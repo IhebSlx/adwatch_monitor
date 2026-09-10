@@ -2138,3 +2138,88 @@ def test_portale_sind_keine_bueros():
     # Kein Treffer ueber eine blosse Zeichenkette: die Domain muss enden.
     assert not _ist_portal("https://archdaily.com.mx/projects/x")
     assert not _ist_portal("https://meine-baunetz.de/x")
+
+
+# ---------------------------------------------------------------------------
+# Das Blaettern ueber Zeitfenster -- der Teil, den crm_emails und crm_leads
+# wirklich teilen. Beide holen ein Fenster, halbieren bei erreichtem Deckel
+# und protokollieren, wenn schon ein einzelner Tag voll ist.
+# ---------------------------------------------------------------------------
+
+def test_fensterlauf_haelftet_bei_deckel_und_holt_alles(monkeypatch):
+    """Ein voller Abruf ist von einem gekappten nicht zu unterscheiden.
+
+    Der Flow liefert hoechstens PAGE_CAP Zeilen und sagt NICHT, ob mehr da
+    waeren. Bei Gleichstand muss deshalb IMMER geteilt werden -- eine Abfrage
+    zu viel ist billig, ein stilles Loch in den Daten nicht.
+    """
+    import datetime as dt
+    from adwatch import crm_leads
+
+    # Tag 3 ist ueberfuellt, alle anderen sind normal.
+    def falscher_fetch(start, end):
+        tage = (end - start).days
+        if start <= dt.date(2026, 1, 3) < end and tage > 1:
+            return ["x"] * crm_leads.PAGE_CAP
+        if start == dt.date(2026, 1, 3):
+            return ["voll"] * 3
+        return ["z"] * tage
+
+    monkeypatch.setattr(crm_leads, "_fetch", falscher_fetch)
+    # Die Pause sitzt jetzt in crm_fenster, nicht mehr in crm_leads.
+    from adwatch import crm_fenster
+    monkeypatch.setattr(crm_fenster.time, "sleep", lambda s: None)
+    out = []
+    crm_leads._walk(dt.date(2026, 1, 1), dt.date(2026, 1, 8), out)
+    # Ohne Halbierung waeren es PAGE_CAP Platzhalter; mit Halbierung kommen
+    # die echten Zeilen jedes Teilfensters durch.
+    assert "voll" in out
+    assert len(out) < crm_leads.PAGE_CAP
+
+
+def test_fensterlauf_meldet_einen_vollen_einzeltag_statt_ihn_zu_schlucken(monkeypatch, caplog):
+    """Bei einem Tag ist Schluss mit Teilen -- und dann muss es LAUT werden.
+
+    Ein an einem einzigen Tag gekapptes Ergebnis sieht vollstaendig aus. Genau
+    diese Sorte stiller Verlust hat in diesem Projekt schon 36 Domains ihre
+    Daten gekostet, ohne dass irgendwo ein Fehler stand.
+    """
+    import datetime as dt
+    import logging
+    from adwatch import crm_leads
+
+    monkeypatch.setattr(crm_leads, "_fetch", lambda a, b: ["x"] * crm_leads.PAGE_CAP)
+    # Die Pause sitzt jetzt in crm_fenster, nicht mehr in crm_leads.
+    from adwatch import crm_fenster
+    monkeypatch.setattr(crm_fenster.time, "sleep", lambda s: None)
+    out = []
+    with caplog.at_level(logging.WARNING):
+        crm_leads._walk(dt.date(2026, 1, 1), dt.date(2026, 1, 2), out)
+    assert len(out) == crm_leads.PAGE_CAP          # das Geholte wird behalten
+    assert any("Deckel" in r.message for r in caplog.records)
+
+
+def test_emails_fragen_nie_mehr_als_eine_woche_am_stueck(monkeypatch):
+    """Nicht die Zeilenzahl war das Problem, sondern die ANTWORTGROESSE.
+
+    Der erste Entwurf fragte ein ganzes Jahr an und halbierte erst beim
+    Deckel. Das scheiterte vollstaendig -- HTTP 504, danach abgerissene
+    Verbindungen -- weil E-Mail-Ruempfe HTML sind und ein Jahr Hunderte
+    Megabyte in EINER Antwort waeren. Deshalb wird von klein nach gross
+    gefragt, nie groesser als MAX_SPAN_DAYS.
+    """
+    import datetime as dt
+    from adwatch import crm_emails
+
+    fenster = []
+    monkeypatch.setattr(crm_emails, "_fetch",
+                        lambda a, b: fenster.append((a, b)) or [])
+    out = []
+    crm_emails._walk(dt.date(2026, 1, 1), dt.date(2026, 3, 1), out)
+    assert fenster, "es muss ueberhaupt gefragt werden"
+    assert max((b - a).days for a, b in fenster) <= crm_emails.MAX_SPAN_DAYS
+    # luecken- und ueberlappungsfrei aneinander
+    assert fenster[0][0] == dt.date(2026, 1, 1)
+    assert fenster[-1][1] == dt.date(2026, 3, 1)
+    for (_, ende), (start, _) in zip(fenster, fenster[1:]):
+        assert ende == start

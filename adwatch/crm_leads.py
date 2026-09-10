@@ -29,6 +29,7 @@ import time
 from sqlalchemy import func, select
 
 from . import flows
+from . import crm_fenster
 from .db import SessionLocal
 from .models import Company, CrmLead
 
@@ -79,23 +80,12 @@ def _fetch(start: dt.date, end: dt.date) -> list[dict]:
 def _walk(start: dt.date, end: dt.date, out: list, depth: int = 0) -> None:
     """Fenster holen; am Deckel halbieren, bis es passt.
 
-    Ein Deckeltreffer bei einem EINZELNEN Tag wird protokolliert statt still
-    abgeschnitten. Eine unbemerkte Kappung wäre hier besonders tückisch, weil
-    das Ergebnis vollständig AUSSIEHT."""
-    got = _fetch(start, end)
-    if len(got) < PAGE_CAP:
-        out.extend(got)
-        return
-    if (end - start).days <= 1:
-        log.warning("Leads: Deckel schon an einem Tag (%s), %d Zeilen — es fehlen welche",
-                    start, len(got))
-        out.extend(got)
-        return
-    mitte = start + (end - start) / 2
-    time.sleep(_PAUSE_S)
-    _walk(start, mitte, out, depth + 1)
-    time.sleep(_PAUSE_S)
-    _walk(mitte, end, out, depth + 1)
+    Mechanik in crm_fenster.blaettern, geteilt mit crm_emails. Leads haben
+    keine Spannen-Grenze — ein Lead-Datensatz ist ein paar hundert Byte, nicht
+    ein HTML-Rumpf —, dafür eine Höflichkeitspause zwischen den Teilanfragen.
+    """
+    crm_fenster.blaettern(_fetch, start, end, out, deckel=PAGE_CAP,
+                          pause=_PAUSE_S, was="Leads")
 
 
 def _company_resolver(s):

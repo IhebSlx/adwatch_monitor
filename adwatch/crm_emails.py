@@ -31,6 +31,7 @@ import time
 from sqlalchemy import func, select
 
 from . import flows
+from . import crm_fenster
 from .db import SessionLocal
 from .models import Company, CrmEmail, CrmOpportunity
 
@@ -93,40 +94,13 @@ def _fetch(start: dt.date, end: dt.date) -> list[dict]:
 def _walk(start: dt.date, end: dt.date, out: list[dict], depth: int = 0) -> None:
     """Fenster holen; bei erreichtem Deckel halbieren und beide Hälften erneut.
 
-    Der Deckel ist nicht von echten 5.000 Zeilen zu unterscheiden, also wird bei
-    Gleichstand IMMER geteilt. Lieber eine Abfrage zu viel als ein stilles Loch.
-
-    WICHTIG — von KLEIN nach groß, nicht umgekehrt: der erste Entwurf fragte ein
-    ganzes Jahr an und halbierte erst bei Deckel-Treffer. Das scheiterte
-    vollständig (HTTP 504, danach abgerissene Verbindungen), weil nicht die
-    ZEILENZAHL das Problem ist, sondern die ANTWORTGRÖSSE — E-Mail-Rümpfe sind
-    HTML, ein Jahr wären Hunderte Megabyte in einer Antwort. Ein Fenster wird
-    deshalb nie größer als MAX_SPAN_DAYS angefragt; die gemessene Probewoche
-    (2.834 Zeilen, rund 23 MB) lief problemlos.
+    Die Mechanik steht in crm_fenster.blaettern und wird mit crm_leads geteilt;
+    hier stehen nur noch die Werte, die für E-Mails gelten. MAX_SPAN_DAYS ist
+    der wichtigste davon: E-Mail-Rümpfe sind HTML, und ein größeres Fenster
+    scheiterte an der ANTWORTGRÖSSE, nicht an der Zeilenzahl.
     """
-    span = (end - start).days
-    if span > MAX_SPAN_DAYS:
-        cur = start
-        while cur < end:
-            nxt = min(cur + dt.timedelta(days=MAX_SPAN_DAYS), end)
-            _walk(cur, nxt, out, depth + 1)
-            cur = nxt
-        return
-
-    got = _fetch(start, end)
-    if len(got) < PAGE_CAP:
-        out.extend(got)
-        return
-    if span <= 1:
-        # Selbst ein Tag ist voll — hier ist ohne Sortierung/Skiptoken nichts
-        # mehr zu holen. Das wird LAUT vermerkt, nicht verschwiegen.
-        log.warning("E-Mail-Abruf: %s hat >= %d Zeilen an EINEM Tag — Rest nicht "
-                    "abrufbar (Flow kappt, keine Sortierung erlaubt)", start, PAGE_CAP)
-        out.extend(got)
-        return
-    mid = start + dt.timedelta(days=span // 2)
-    _walk(start, mid, out, depth + 1)
-    _walk(mid, end, out, depth + 1)
+    crm_fenster.blaettern(_fetch, start, end, out, deckel=PAGE_CAP,
+                          max_spanne=MAX_SPAN_DAYS, was="E-Mail-Abruf")
 
 
 def _company_resolver(s):
