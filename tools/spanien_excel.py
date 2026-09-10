@@ -521,10 +521,10 @@ def bauen(d: dict, pfad: str | None = None) -> str:
          "Taylor steht als DE und sitzt in London. Die Stammdaten liegen im "
          "CRM, das hier nur gelesen wird — korrigieren muss sie jemand dort."),
         ("Grenzen",
-         f"Die Orte tragen kein Datum, wo kein Baujahr steht. "
-         f"Eine Seite, die nirgends sagt, wo sie steht, ist für keine "
-         f"Methode auffindbar — solche Projekte fehlen in „Projekte in ES\" und "
-         f"stehen in „ohne erkennbaren Ort\"."),
+         "Die Orte tragen kein Datum, wo kein Baujahr steht. "
+         "Eine Seite, die nirgends sagt, wo sie steht, ist für keine "
+         "Methode auffindbar — solche Projekte fehlen in „Projekte in ES“ und "
+         "stehen in „ohne erkennbaren Ort“."),
         ("Erstellt", f"{dt.datetime.now():%d.%m.%Y %H:%M} · tools/spanien_excel.py"),
     ]
     for i2, (k, v) in enumerate(texte, start=1):

@@ -36,6 +36,7 @@ from sqlalchemy import select
 
 from . import markets
 from .db import SessionLocal
+from .enrich.domains import normalize_domain
 from .models import Company
 
 log = logging.getLogger("adwatch.crm_import")
@@ -583,17 +584,12 @@ def backfill_websites(path: str | Path) -> dict:
     if "website" not in ix:
         return {"filled": 0, "reason": "export has no website column"}
 
-    def domain(url: str) -> str | None:
-        u = (url or "").strip().lower()
-        if not u or "." not in u:
-            return None
-        for p in ("https://", "http://"):
-            if u.startswith(p):
-                u = u[len(p):]
-        u = u.split("/")[0].split("?")[0].split(":")[0]
-        if u.startswith("www."):
-            u = u[4:]
-        return u or None
+    # Eine zweite, laxere Domain-Regel stand hier: sie liess Werte wie
+    # "quelle", "groupe balas.com" und Domains mit Nullbreite-Leerzeichen
+    # durch, die der Rest der Anwendung seit je verwirft. Gemessen an
+    # 23.826 echten Werten unterscheiden sich die beiden in 60 Faellen,
+    # und in jedem einzelnen liegt der gemeinsame Normalisierer richtig.
+    domain = normalize_domain
 
     filled = stamped = 0
     with SessionLocal() as s:

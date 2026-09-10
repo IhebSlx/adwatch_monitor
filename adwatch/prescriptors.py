@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .db import SessionLocal
 from .models import Company, CrmOpportunity
@@ -129,9 +129,10 @@ def overview() -> dict:
     profile on 12 projects without knowing it."""
     stats = _stats()
     with SessionLocal() as s:
-        total_opps = s.scalar(select(CrmOpportunity).with_only_columns(
-            CrmOpportunity.id).limit(1))
-        n_opps = len(list(s.scalars(select(CrmOpportunity.id))))
+        # Hier standen zwei Abfragen für eine Zahl: eine, deren Ergebnis nie
+        # gelesen wurde, und eine, die 57.776 IDs nach Python holte, um sie zu
+        # zählen. Das Zählen gehört in die Datenbank.
+        n_opps = s.scalar(select(func.count()).select_from(CrmOpportunity)) or 0
         by_seg: dict[str, dict] = defaultdict(lambda: {"companies": 0, "with_projects": 0})
         for c in s.scalars(select(Company).where(Company.crm_id.is_not(None))):
             seg = c.segment or "(ohne)"

@@ -26,6 +26,24 @@ from ..models import Ad, CollectionRun, Company, CompanyPage, WeeklyCompanyMetri
 from .meta_source import ApifyQuotaError, MetaAdSource
 
 
+def _melder(progress):
+    """Fortschrittsmeldungen an die Oberfläche — Fehler dabei sind egal.
+
+    Stand zweimal wortgleich in dieser Datei, einmal je Lauf. Die
+    verschluckte Ausnahme ist Absicht und der eigentliche Grund für die
+    Funktion: eine Rückmeldung an die Oberfläche darf einen laufenden Abruf
+    nicht abbrechen. Zwei Kopien derselben Regel sind zwei Stellen, an denen
+    sie beim nächsten Mal nur zur Hälfte geändert wird.
+    """
+    def melden(evt):
+        if progress:
+            try:
+                progress(evt)
+            except Exception:  # noqa: BLE001 — eine Rückmeldung darf nie den Lauf killen
+                pass
+    return melden
+
+
 def monday_of(d: dt.date) -> dt.date:
     return d - dt.timedelta(days=d.weekday())
 
@@ -144,12 +162,7 @@ def run_once(progress=None, company_id: int | None = None) -> dict:
       {"phase":"sweep_start"} / {"phase":"sweep_done","linked":n,"attributed":n}
       {"phase":"end","summary":{...}}
     """
-    def emit(evt):
-        if progress:
-            try:
-                progress(evt)
-            except Exception:  # noqa: BLE001 — a UI callback must never break a run
-                pass
+    emit = _melder(progress)
 
     init_db()
     seed_companies_if_empty()
@@ -350,12 +363,7 @@ def run_once_google(progress=None, company_id: int | None = None) -> dict:
     from ..identity.resolver import resolve_and_record_google
     from .google_source import GoogleAdSource
 
-    def emit(evt):
-        if progress:
-            try:
-                progress(evt)
-            except Exception:  # noqa: BLE001
-                pass
+    emit = _melder(progress)
 
     init_db()
     source = GoogleAdSource()
