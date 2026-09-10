@@ -31,7 +31,6 @@ class PageCandidate:
     name: str
     category: str | None = None
     verified: bool | None = None
-    likes: int | None = None
     ig_handle: str | None = None
     ad_library_url: str | None = None
     has_any_ads: bool | None = None

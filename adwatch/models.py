@@ -345,7 +345,6 @@ class Company(Base):
     candidates: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{page_id,name,ad_count}] when ambiguous
     page_category: Mapped[str | None] = mapped_column(String(200), nullable=True)
     page_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    page_likes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     confirmed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

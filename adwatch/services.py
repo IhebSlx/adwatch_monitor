@@ -43,18 +43,54 @@ def list_companies(include_consumers: bool = False,
     asked for. Analysis-side callers (ICP, RFM, Explorer) query Company directly
     and are unaffected.
     """
+    return _firmen(None, include_consumers, monitored_only)
+
+
+def get_company(company_id: int, include_consumers: bool = False,
+                monitored_only: bool = True) -> dict | None:
+    """Eine Firma in derselben Form wie `list_companies`, oder None.
+
+    Drei Routen holten dafür die ganze Liste und suchten darin eine ID heraus.
+    Die Filter bleiben dieselben: „nicht überwacht" und „Endkunde" heißen an
+    diesen Routen weiterhin 404 — sonst wird aus einem Aufräumen stillschweigend
+    eine Rechteänderung.
+    """
+    treffer = _firmen(company_id, include_consumers, monitored_only)
+    return treffer[0] if treffer else None
+
+
+def _firmen(company_id: int | None, include_consumers: bool,
+            monitored_only: bool) -> list[dict]:
+    """Der gemeinsame Kern — ZWEI Abfragen, unabhängig von der Zeilenzahl.
+
+    Vorher lief je Firma eine eigene Seitenabfrage: bei rund 3.000 überwachten
+    Firmen also 3.001 Abfragen für einen Dashboard-Aufruf. Jetzt kommen die
+    Seiten in einem Zug und werden im Speicher zugeordnet. Die Sortierung
+    (role, linked_at) bleibt erhalten, weil sie bestimmt, welche Seite als
+    Hauptseite gilt.
+    """
     with SessionLocal() as s:
         stmt = select(Company).order_by(Company.name)
         if not include_consumers:
             stmt = scope.apply(stmt)
         if monitored_only:
             stmt = stmt.where(Company.monitored.is_(True))
+        if company_id is not None:
+            stmt = stmt.where(Company.id == company_id)
         rows = s.scalars(stmt).all()
+
+        seiten: dict[int, list] = {}
+        if rows:
+            seiten_stmt = (select(CompanyPage)
+                           .where(CompanyPage.company_id.in_([c.id for c in rows]),
+                                  CompanyPage.active)
+                           .order_by(CompanyPage.role, CompanyPage.linked_at))
+            for p in s.scalars(seiten_stmt):
+                seiten.setdefault(p.company_id, []).append(p)
+
         out = []
         for c in rows:
-            pages = s.scalars(select(CompanyPage)
-                              .where(CompanyPage.company_id == c.id, CompanyPage.active)
-                              .order_by(CompanyPage.role, CompanyPage.linked_at)).all()
+            pages = seiten.get(c.id, [])
             out.append({
                 "id": c.id, "name": c.name,
                 "website_domain": c.website_domain,
@@ -184,12 +220,22 @@ def _merged_weekly_series(s, company_id: int) -> list[dict]:
     """Every week for one company, oldest first, merged across sources, with
     score recomputed on the combined totals (score is a function of total ads
     + momentum, so it must be computed AFTER merging, not per-source)."""
-    from .insights.score import company_score
     rows = s.scalars(
         select(WeeklyCompanyMetric)
         .where(WeeklyCompanyMetric.company_id == company_id)
         .order_by(WeeklyCompanyMetric.week_start)
     ).all()
+    return _serie(rows)
+
+
+def _serie(rows) -> list[dict]:
+    """Dieselbe Rechnung, aber auf bereits geladenen Zeilen.
+
+    Getrennt, damit `latest_metrics` die Wochen für ALLE Firmen in einer
+    Abfrage holen kann statt einer je Firma. Vorher waren das bei 731
+    qualifizierenden Firmen 1.462 Abfragen für einen Dashboard-Aufruf.
+    """
+    from .insights.score import company_score
     by_week: dict = {}
     for r in rows:
         by_week.setdefault(r.week_start, []).append(r)
@@ -241,14 +287,27 @@ def latest_metrics(company_ids: list[int] | None = None,
         if not include_consumers:
             stmt = scope.apply(stmt)
         companies = s.scalars(stmt).all()
+
+        # Zwei Abfragen für alle Firmen statt zwei je Firma. Bei 731 Firmen
+        # waren das 1.462 Abfragen für einen einzigen Dashboard-Aufruf.
+        ids = [c.id for c in companies]
+        wochen: dict[int, list] = {}
+        mit_seite: set[int] = set()
+        if ids:
+            for r in s.scalars(select(WeeklyCompanyMetric)
+                               .where(WeeklyCompanyMetric.company_id.in_(ids))
+                               .order_by(WeeklyCompanyMetric.week_start)):
+                wochen.setdefault(r.company_id, []).append(r)
+            mit_seite = set(s.scalars(
+                select(CompanyPage.company_id).distinct()
+                .where(CompanyPage.company_id.in_(ids), CompanyPage.active)))
+
         out = []
         for c in companies:
-            weeks = _merged_weekly_series(s, c.id)
+            weeks = _serie(wochen.get(c.id, []))
             latest = weeks[-1] if weeks else None
             prev = weeks[-2] if len(weeks) > 1 else None
-            n_pages = s.scalar(select(CompanyPage.id)
-                               .where(CompanyPage.company_id == c.id, CompanyPage.active)
-                               .limit(1))
+            hat_seite = c.id in mit_seite
             out.append({
                 "company_id": c.id,
                 "company": c.name,
@@ -267,7 +326,10 @@ def latest_metrics(company_ids: list[int] | None = None,
                 "revenue_y3": c.revenue_y3,
                 "revenue_y4": c.revenue_y4,
                 "imported_at": c.imported_at.isoformat() if c.imported_at else None,
-                "has_pages": n_pages is not None,
+                # War `n_pages is not None` auf einer ID-Abfrage. Jetzt ein
+                # echtes Ja/Nein — `False is not None` wäre True gewesen und
+                # hätte jeder Firma eine Seite angedichtet.
+                "has_pages": hat_seite,
                 "has_data": latest is not None,
                 "week_start": latest["week_start"].isoformat() if latest else None,
                 "total_active_ads": latest["total_active_ads"] if latest else None,

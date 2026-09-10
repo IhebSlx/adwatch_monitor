@@ -374,8 +374,7 @@ def start_fetch(payload: FetchIn = FetchIn()):
     if "google" in sources and not config.GOOGLE_ADS_ACTOR_ID:
         raise HTTPException(400, "Google Ads fetching needs GOOGLE_ADS_ACTOR_ID in .env")
     if payload.company_id is not None:
-        companies = services.list_companies()
-        if not any(c["id"] == payload.company_id for c in companies):
+        if services.get_company(payload.company_id) is None:
             raise HTTPException(404, "Company not found")
     if not jobs.try_acquire("manual"):
         raise HTTPException(409, "A fetch (or scoped job) is already running.")
@@ -531,8 +530,7 @@ def unlink_page(page_row_id: int):
 
 @app.post("/api/companies/{cid}/search")
 def search_pages(cid: int, payload: SearchIn):
-    companies = services.list_companies()
-    c = next((x for x in companies if x["id"] == cid), None)
+    c = services.get_company(cid)
     website_domain = c["website_domain"] if c else None
     try:
         return resolver.find_candidates(payload.term, website_domain=website_domain)
@@ -542,8 +540,7 @@ def search_pages(cid: int, payload: SearchIn):
 
 @app.get("/api/companies/{cid}/search-term")
 def default_search_term(cid: int):
-    companies = services.list_companies()
-    c = next((x for x in companies if x["id"] == cid), None)
+    c = services.get_company(cid)
     if not c:
         raise HTTPException(404, "Company not found")
     return {"term": search_term(c["name"])}

@@ -5,8 +5,6 @@
 
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
-  const debounce = (fn, ms = 200) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
-
   // ---------------------------------------------------------------- toasts
   // In-app notifications instead of browser alert() popups. Shadowing `alert`
   // inside this IIFE routes every existing alert(...) call here unchanged.
@@ -198,12 +196,6 @@
       ? ` <span class="candidate-flag flag-warn" title="Meta-Seite bestätigt, aber die numerische Page-ID für den Ad lookup fehlt noch — der Ad lookup ermittelt sie, oder per ✎ manuell eintragen.">⚠</span>`
       : "";
     return `<a class="link" href="${esc(href)}" target="_blank"${titleAttr}>${esc(label)}</a>${platform}${needsId} ${editBtn}`;
-  }
-
-  function spendCell(m) {
-    if (!m.has_data) return "—";
-    if (m.total_active_ads === 0) return "€0";
-    return `${eur(m.spend_low)} – ${eur(m.spend_high)}`;
   }
 
   // Checkbox multi-select dropdown: a button ("Segment (2)") that opens a
