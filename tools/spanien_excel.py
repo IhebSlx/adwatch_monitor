@@ -103,18 +103,25 @@ def erheben() -> dict:
         kontakte = s.execute(_sql("""
             SELECT domain, url, email, name, spanien_bezug FROM arch_web_contacts
             ORDER BY domain, spanien_bezug DESC""")).all()
-        firmen = {}
+        firmen, kv = {}, {}
         for r in s.execute(_sql("""
                 SELECT website_domain, name, street, postal_code, city, country,
                        phone, relation_level, relation_why, decision_role,
-                       decision_role_evidence, sap_number, COALESCE(arch_projects,0)
+                       decision_role_evidence, sap_number, COALESCE(arch_projects,0),
+                       kv
                 FROM companies WHERE website_domain <> ''""")):
             dom = (r[0] or "").strip().lower()
             alt = firmen.get(dom)
             if alt is None or (r[7] or 0) > (alt[7] or 0):
                 firmen[dom] = r
+            # Der KV wird getrennt gesammelt: unter einer Domain liegen oft
+            # mehrere CRM-Sätze, und der mit der höchsten Beziehungsstufe ist
+            # nicht zwangsläufig der, bei dem ein Kundenverantwortlicher
+            # eingetragen ist.
+            if (r[13] or "").strip() and dom not in kv:
+                kv[dom] = r[13].strip()
     return {"scans": scans, "projekte": projekte, "kontakte": kontakte,
-            "firmen": firmen}
+            "firmen": firmen, "kv": kv}
 
 
 def _punkte(es, anteil, stufe, niederlassung, balearen, jung) -> tuple[int, str]:
@@ -231,7 +238,7 @@ def bauen(d: dict, pfad: str | None = None) -> str:
         ("Hauptregion", 18),
     ] + [(f"ES: {x}", 13) for x in reg_spalten] + [
         ("Städte in ES", 34), ("Gebäudearten", 26),
-        ("Beziehung", 10), ("Beziehung heißt", 24), ("Punkte", 8),
+        ("Beziehung", 10), ("Beziehung heißt", 24), ("KV", 22), ("Punkte", 8),
         ("Punkte woraus", 44), ("Rolle", 15), ("Telefon", 16),
         ("Kontaktseite", 26), ("Ortsangaben geprüft", 15),
         ("ohne erkennbaren Ort", 13), ("Seiten gelesen", 11),
@@ -292,7 +299,7 @@ def bauen(d: dict, pfad: str | None = None) -> str:
         ] + [reg.get(x, 0) or "" for x in reg_spalten] + [
             ", ".join(staedte[:12]) + (f" … +{len(staedte)-12}" if len(staedte) > 12 else ""),
             ", ".join(f"{a} ({n})" for a, n in arten.most_common(4)),
-            stufe, STUFENTEXT.get(stufe, ""), pkt, warum,
+            stufe, STUFENTEXT.get(stufe, ""), d["kv"].get(dom, ""), pkt, warum,
             f[9] or "", f[6] or "", kontakt,
             f"{gepr} von {len(urls)}" if urls else "",
             max((sc[3] or 0) - mit_ort, 0), sc[1] or 0, _vollstaendig(sc), sc[6],
@@ -426,6 +433,7 @@ def bauen(d: dict, pfad: str | None = None) -> str:
     wm = wb.create_sheet("Methodik")
     wm.column_dimensions["A"].width = 30
     wm.column_dimensions["B"].width = 112
+    mit_kv = sum(1 for _, w in zeilen if w[i["KV"]])
     n_ki = sum(1 for p in d["projekte"] if p[9] == "Haiku")
     n_gel = sum(1 for p in d["projekte"] if p[9] == "gelesen")
     n_reg = sum(1 for p in d["projekte"] if (p[9] or "Regel") == "Regel")
@@ -446,6 +454,15 @@ def bauen(d: dict, pfad: str | None = None) -> str:
          f"Zeilen sind rot hinterlegt und unzuverlässig. In einer Stichprobe "
          f"von 14 solchen Zeilen waren 2 richtig. Sie betreffen fast nur "
          f"spanische Büros, bei denen „liegt in Spanien\" ohnehin meist stimmt."),
+        ("KV",
+         f"Der Kundenverantwortliche aus dem CRM-Feld `kv`, unverändert "
+         f"übernommen. Gefüllt bei {mit_kv} der {len(zeilen)} Büros — und "
+         f"zwar ausschließlich bei Büros mit Hauptsitz in Spanien. Für die "
+         f"europäischen Büros ist die Spalte leer, weil im CRM dort kein KV "
+         f"steht: kein Übertragungsfehler, sondern der Befund. Im ganzen CRM "
+         f"tragen 3.612 deutsche Firmen einen KV, nur keine aus dieser Liste. "
+         f"INTERN — Name einer Kollegin oder eines Kollegen; vor dem "
+         f"Weitergeben nach außen löschen."),
         ("Nach Region und Stadt filtern",
          "REGION: im Blatt „Büros“ hat jede Region eine eigene Spalte, etwa "
          "„ES: Katalonien“. Filter auf „größer als 0“ — oder die Spalte "
