@@ -5964,3 +5964,50 @@ def test_archivseiten_sind_keine_projekte():
     assert _art("https://x.com/en/project-category/museums") == "sonstige"
     assert _art("https://x.com/projekte/haus-am-see") == "projekt"
 
+
+
+def test_portale_sind_keine_bueros():
+    """Fremde Projekte auf Portalen und in Zeitschriften zaehlen nicht.
+
+    Zwei echte Faelle aus dem Bestand, beide unter den ersten acht Treffern:
+    aju.at leitet auf archilovers.com um -- im CRM steht die eigene Domain,
+    gelesen wurden 23 Projekte fremder Architekten. Und architektur-aktuell.at
+    ist eine Zeitschrift; ihre "Projekte" sind Artikel ueber das Reina Sofia
+    und das Bernabeu.
+
+    Geprueft wird der Host der PROJEKT-URL, nicht die CRM-Domain -- sonst
+    faellt der Umleitungsfall durch. Die uebrigen abweichenden Hosts im
+    Bestand sind echte Umbenennungen und muessen drin bleiben.
+    """
+    from tools.spanien_excel import _ist_portal
+
+    assert _ist_portal("https://www.archilovers.com/projects/61473/x.html")
+    assert _ist_portal("archilovers.com")
+    assert _ist_portal("https://www.architektur-aktuell.at/projekte/reina-sofia")
+
+    assert not _ist_portal("https://esteva.eu/proyectos/casa")   # Umbenennung
+    assert not _ist_portal("https://oma.com/projects/x")         # Umbenennung
+    assert not _ist_portal("aju.at")                             # eigene Domain
+    # Kein Treffer ueber eine blosse Zeichenkette: die Domain muss enden.
+    assert not _ist_portal("https://archdaily.com.mx/projects/x")
+    assert not _ist_portal("https://meine-baunetz.de/x")
+
+
+def test_excel_hat_die_bestellten_spalten():
+    """Was Iheb aufgezaehlt hat, muss als Spalte existieren -- namentlich.
+
+    Die Liste stand so in seiner Nachricht: Link und Adresse je Projekt,
+    Ansprechpartner, Projekte gesamt, davon in Spanien, Hauptsitz,
+    Niederlassung. Dazu Baujahr und Gebaeudeart. Ein Test darauf, weil eine
+    fehlende Spalte in einer 30-spaltigen Datei niemandem auffaellt.
+    """
+    import inspect
+
+    from tools import spanien_excel
+
+    quelle = inspect.getsource(spanien_excel.bauen)
+    for spalte in ("Hauptsitz Straße", "Hauptsitz PLZ", "Hauptsitz Ort",
+                   "Hauptsitz Land", "Niederlassung in ES", "Projekte gesamt",
+                   "Projekte in ES", "Anteil ES", "Link", "Ort", "Region",
+                   "Baujahr", "Gebäudeart", "Quelle"):
+        assert f'("{spalte}"' in quelle, f"Spalte fehlt: {spalte}"
