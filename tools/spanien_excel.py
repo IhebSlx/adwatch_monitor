@@ -108,7 +108,7 @@ def erheben() -> dict:
                 SELECT website_domain, name, street, postal_code, city, country,
                        phone, relation_level, relation_why, decision_role,
                        decision_role_evidence, sap_number, COALESCE(arch_projects,0),
-                       kv
+                       COALESCE(NULLIF(TRIM(crm_owner),''), kv)
                 FROM companies WHERE website_domain <> ''""")):
             dom = (r[0] or "").strip().lower()
             alt = firmen.get(dom)
@@ -118,6 +118,12 @@ def erheben() -> dict:
             # mehrere CRM-Sätze, und der mit der höchsten Beziehungsstufe ist
             # nicht zwangsläufig der, bei dem ein Kundenverantwortlicher
             # eingetragen ist.
+            #
+            # Genommen wird `crm_owner` (der Besitzer des CRM-Datensatzes, also
+            # der KV im Formularkopf) und nur ersatzweise `kv` aus einem alten
+            # Excel-Import. Andersherum stand hier 66 mal „Gimenez, Juan" und
+            # 126 mal nichts — weil `kv` nur füllt, wer einen Export hochlädt.
+            # Wo beide Werte existieren, sind sie identisch: 0 Abweichungen.
             if (r[13] or "").strip() and dom not in kv:
                 kv[dom] = r[13].strip()
     return {"scans": scans, "projekte": projekte, "kontakte": kontakte,
@@ -455,12 +461,14 @@ def bauen(d: dict, pfad: str | None = None) -> str:
          f"von 14 solchen Zeilen waren 2 richtig. Sie betreffen fast nur "
          f"spanische Büros, bei denen „liegt in Spanien\" ohnehin meist stimmt."),
         ("KV",
-         f"Der Kundenverantwortliche aus dem CRM-Feld `kv`, unverändert "
-         f"übernommen. Gefüllt bei {mit_kv} der {len(zeilen)} Büros — und "
-         f"zwar ausschließlich bei Büros mit Hauptsitz in Spanien. Für die "
-         f"europäischen Büros ist die Spalte leer, weil im CRM dort kein KV "
-         f"steht: kein Übertragungsfehler, sondern der Befund. Im ganzen CRM "
-         f"tragen 3.612 deutsche Firmen einen KV, nur keine aus dieser Liste. "
+         f"Der Kundenverantwortliche, wie er im CRM oben rechts steht — der "
+         f"Besitzer des Datensatzes (`ownerid`), live abgefragt. Gefüllt bei "
+         f"{mit_kv} der {len(zeilen)} Büros. "
+         f"In der ersten Fassung dieser Datei stand er nur bei 66, alle "
+         f"„Gimenez, Juan“: gelesen wurde damals das Feld `kv`, und das füllt "
+         f"sich nur, wenn jemand einen Excel-Export hochlädt — für Spanien war "
+         f"das passiert, für den Rest nie. Wo beide Quellen einen Wert haben, "
+         f"stimmen sie überein (0 Abweichungen bei 66 Vergleichen). "
          f"INTERN — Name einer Kollegin oder eines Kollegen; vor dem "
          f"Weitergeben nach außen löschen."),
         ("Nach Region und Stadt filtern",

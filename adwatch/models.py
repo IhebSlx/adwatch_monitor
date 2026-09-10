@@ -65,7 +65,14 @@ class Company(Base):
     sl_customer_class: Mapped[str | None] = mapped_column(String(60), nullable=True,
                                                           index=True)
     sap_number: Mapped[str | None] = mapped_column(String(40), nullable=True)   # SAP Nummer
-    kv: Mapped[str | None] = mapped_column(String(120), nullable=True)          # KV (account owner)
+    kv: Mapped[str | None] = mapped_column(String(120), nullable=True)          # KV aus einem Excel-Import
+    # Der KV, wie er im CRM oben rechts steht: der Besitzer des Datensatzes
+    # (`ownerid`). `kv` daneben kommt AUSSCHLIESSLICH aus hochgeladenen
+    # Excel-Exporten und ist deshalb genau dort leer, wo nie einer hochgeladen
+    # wurde — bei Chapman Taylor stand im CRM „Dieker, Berthold" und bei uns
+    # nichts. Zwei Spalten statt einer, weil die alte Quelle nicht überschrieben
+    # werden soll: ein Import kann einen Stand von gestern enthalten.
+    crm_owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
     segment: Mapped[str | None] = mapped_column(String(120), nullable=True)     # Kundensegment
     sub_segment: Mapped[str | None] = mapped_column(String(120), nullable=True)  # Kundenuntersegment
     sales_channel: Mapped[str | None] = mapped_column(String(120), nullable=True)  # Vertriebsweg

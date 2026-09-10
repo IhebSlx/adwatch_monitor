@@ -94,7 +94,8 @@ def _migrate(engine) -> None:
         # table (see models.Company docstring). Additive only; nullable.
         if cols:
             for name, ddl in [
-                ("sap_number", "VARCHAR(40)"), ("kv", "VARCHAR(120)"), ("segment", "VARCHAR(120)"),
+                ("sap_number", "VARCHAR(40)"), ("kv", "VARCHAR(120)"),
+                ("crm_owner", "VARCHAR(120)"), ("segment", "VARCHAR(120)"),
                 ("sub_segment", "VARCHAR(120)"), ("sales_channel", "VARCHAR(120)"),
                 ("street", "VARCHAR(300)"), ("postal_code", "VARCHAR(20)"), ("city", "VARCHAR(200)"),
                 ("phone", "VARCHAR(80)"), ("email", "VARCHAR(300)"), ("fax", "VARCHAR(80)"),
