@@ -60,8 +60,6 @@ def is_busy() -> bool:
     return _busy_owner is not None
 
 
-def busy_owner() -> str | None:
-    return _busy_owner
 
 # Rough constants for the pre-flight estimate — labelled as estimates in the
 # UI, not promises. Apify pricing is real and confirmed (checked live against

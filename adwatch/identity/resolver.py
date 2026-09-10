@@ -152,7 +152,12 @@ def unlink_main(company_id: int) -> None:
 
 
 def clear_resolution(company_id: int) -> None:
-    """Forget everything we know about a company's pages (back to pending)."""
+    """Forget everything we know about a company's pages (back to pending).
+
+    No caller on purpose: this is the manual undo for a wrong page link, run
+    from a shell when a company got attached to somebody else's Facebook page.
+    Wiring it to a button would put a destructive reset one misclick away.
+    """
     with SessionLocal() as s:
         c = s.get(Company, company_id)
         if not c:
@@ -194,16 +199,6 @@ def unlock_identity(company_id: int) -> None:
         s.commit()
 
 
-def list_pages(company_id: int) -> list[dict]:
-    with SessionLocal() as s:
-        rows = s.scalars(select(CompanyPage)
-                         .where(CompanyPage.company_id == company_id, CompanyPage.active)
-                         .order_by(CompanyPage.role, CompanyPage.linked_at)).all()
-        return [{
-            "id": p.id, "page_id": p.page_id, "page_name": p.page_name,
-            "role": p.role, "status": p.status, "evidence": p.evidence,
-            "linked_at": p.linked_at.isoformat(timespec="minutes") if p.linked_at else None,
-        } for p in rows]
 
 
 # ---------------------------------------------------------------------------

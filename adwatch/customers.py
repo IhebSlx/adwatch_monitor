@@ -22,7 +22,7 @@ import re
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from . import config, markets, scope
+from . import markets, scope
 from .db import SessionLocal
 from .models import Company
 
@@ -722,9 +722,6 @@ def _aktive_laender(s) -> list[str]:
     return [land for land, _ in zaehler.most_common()]
 
 
-def count_companies() -> int:
-    with SessionLocal() as s:
-        return s.scalar(select(func.count()).select_from(Company)) or 0
 
 
 # ---------------------------------------------------------------------------

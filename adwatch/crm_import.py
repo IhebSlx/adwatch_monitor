@@ -35,7 +35,6 @@ from pathlib import Path
 from sqlalchemy import select
 
 from . import markets
-from .crm_accounts import LOCAL_OWNED
 from .db import SessionLocal
 from .models import Company
 
@@ -754,6 +753,11 @@ def import_opportunity_addresses(path: str | Path) -> dict:
     `totalamount` is deliberately NOT imported: it is populated on 17 of 151.862
     rows in the CRM, so the empty column here was already correct and filling it
     would only create a number that looks meaningful and is not.
+
+    NOTHING CALLS THIS, BY DESIGN. It is run by hand against a fresh Dataverse
+    export; the result lives in `crm_opportunities` (57.776 rows, in use). A
+    dead-code scan flags it and is wrong — deleting it would strand the table
+    with no way to refill it.
     """
     import json as _json
     from .models import CrmOpportunity
@@ -799,6 +803,9 @@ def import_opportunity_products(path: str | Path) -> dict:
 
     Sub-family folding (Highline -> Glas-Faltwand etc.) is applied here too, so
     both tables speak the same 21 families.
+
+    Hand-run loader like import_opportunity_addresses above — no caller, but
+    `crm_opportunity_products` holds 145.865 rows that came from here.
     """
     import json as _json
     from .dataquality import _FAMILY_PARENT

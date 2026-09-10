@@ -317,11 +317,6 @@ def _page_link_map(company_ids) -> dict:
             for cid, pid, ctry, web in rows}
 
 
-def _company_link(name: str, info: dict | None) -> str:
-    """Company name linked to its Ad Library page (preferred) or its website."""
-    info = info or {}
-    url = _ad_library_url(info.get("page_id"), info.get("country")) or _web_url(info.get("website"))
-    return _link(name, url)
 
 
 def _ads_cta(info: dict | None) -> str:

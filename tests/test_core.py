@@ -1478,7 +1478,14 @@ def test_report_events_record_creation_and_delivery(temp_db, monkeypatch, tmp_pa
 
     def _boom(*a, **k):
         raise OSError("network is down")
-    monkeypatch.setattr(emailer_mod.requests, "post", _boom)
+    # Gepatcht wird der Transport, den der Mailer WIRKLICH benutzt: flows.post
+    # ruft requests.post. Vorher stand hier `emailer_mod.requests` -- das traf
+    # zufaellig dasselbe Modulobjekt und funktionierte deshalb, haengte den Test
+    # aber an einen Import, den emailer.py seit dem Umstieg auf flows.post gar
+    # nicht mehr braucht. Ein Test, der ueber eine fremde Namensraum-Referenz
+    # patcht, haelt einen toten Import am Leben und sagt niemandem warum.
+    from adwatch import flows as flows_mod
+    monkeypatch.setattr(flows_mod.requests, "post", _boom)
     with pytest.raises(RuntimeError):
         emailer_mod.send_report_email(str(pdf), recipient=["a@x.de", "b@x.de"],
                                       subject="Bericht", source="pipeline")

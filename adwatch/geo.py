@@ -66,7 +66,13 @@ def import_geonames(folder: str | Path) -> dict:
 
     Mehrere GeoNames-Zeilen je PLZ (Ortsteile) werden zum Mittelwert
     zusammengezogen — der Zentroid IST die gewollte Aussage. Idempotent:
-    vorhandene (Land, PLZ)-Paare werden ersetzt, nicht dupliziert."""
+    vorhandene (Land, PLZ)-Paare werden ersetzt, nicht dupliziert.
+
+    RUFT NIEMAND AUF, UND DAS IST RICHTIG SO. Von Hand angestoßen, wenn ein
+    Land dazukommt; danach steht das Ergebnis in `plz_geo` (315.201 Zeilen, in
+    täglicher Benutzung). Eine Suche nach totem Code findet die Funktion und
+    liegt falsch: mit ihr verschwände die einzige Möglichkeit, die Tabelle neu
+    aufzubauen oder um ein Land zu erweitern."""
     folder = Path(folder)
     agg: dict[tuple[str, str], list] = defaultdict(lambda: [0.0, 0.0, 0, None])
     files = sorted(folder.glob("*.zip"))

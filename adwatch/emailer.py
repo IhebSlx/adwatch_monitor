@@ -14,7 +14,6 @@ import logging
 import os
 import time
 
-import requests
 
 from . import config
 

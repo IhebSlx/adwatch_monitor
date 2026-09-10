@@ -27,7 +27,7 @@ from sqlalchemy import text as _sql          # noqa: E402
 
 from adwatch import config                   # noqa: E402
 from adwatch.db import SessionLocal          # noqa: E402
-from adwatch.enrich import laender, regionen, tiefenlauf as TL   # noqa: E402
+from adwatch.enrich import laender, tiefenlauf as TL   # noqa: E402
 from adwatch.identity import website_source as ws                # noqa: E402
 
 

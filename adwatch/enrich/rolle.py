@@ -28,10 +28,7 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import or_, select
 
-from ..db import SessionLocal
-from ..models import Company
 
 logger = logging.getLogger("adwatch.rolle")
 
@@ -113,42 +110,3 @@ def rolle_aus_text(roh: str) -> tuple[str | None, list[str]]:
     if entwirft:
         return EMPFIEHLT, entwirft[:6]
     return None, []
-
-
-def aus_gespeichertem_text(apply: bool = False, nur_leere: bool = True) -> dict:
-    """Die Rolle aus dem bereits gespeicherten Website-Text ableiten.
-
-    Kein neuer Crawl: `company_enrichment.fields` trägt die Beschreibung und
-    die Selbstauskünfte, die beim Anreichern gelesen wurden. Wo das nicht
-    reicht, bleibt die Rolle offen, bis der nächste Crawl den Volltext bringt.
-    """
-    from ..models import CompanyEnrichment
-
-    getroffen = {VERGIBT: 0, EMPFIEHLT: 0, "offen": 0}
-    beispiele: list[dict] = []
-    with SessionLocal() as s:
-        stmt = (select(Company, CompanyEnrichment)
-                .join(CompanyEnrichment, CompanyEnrichment.company_id == Company.id)
-                .where(Company.segment == "Architekten"))
-        if nur_leere:
-            stmt = stmt.where(or_(Company.decision_role.is_(None),
-                                  Company.decision_role == ""))
-        for firma, anr in s.execute(stmt).all():
-            felder = anr.fields or {}
-            text = " ".join(str(felder.get(k) or "") for k in
-                            ("description", "description_de", "assessment",
-                             "assessment_de", "service_area", "reference_scale"))
-            rolle, belege = rolle_aus_text(text)
-            if rolle is None:
-                getroffen["offen"] += 1
-                continue
-            getroffen[rolle] += 1
-            if len(beispiele) < 12:
-                beispiele.append({"name": firma.name, "rolle": rolle,
-                                  "belege": belege})
-            if apply:
-                firma.decision_role = rolle
-                firma.decision_role_evidence = ", ".join(belege)[:300]
-        if apply:
-            s.commit()
-    return {"applied": apply, **getroffen, "beispiele": beispiele}

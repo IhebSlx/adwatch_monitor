@@ -10,7 +10,6 @@ from __future__ import annotations
 import datetime as dt
 
 import requests
-from sqlalchemy import select
 
 from . import config
 from .db import SessionLocal

@@ -83,10 +83,3 @@ def is_in_scope(segment: str | None, is_competitor: bool | None = False) -> bool
     if is_competitor:
         return False
     return segment is None or segment not in EXCLUDED_SEGMENTS
-
-
-def excluded_ids(session) -> set[int]:
-    """Ids to drop from anything keyed by company id (metrics, rankings)."""
-    from sqlalchemy import select
-    return set(session.scalars(
-        select(Company.id).where(Company.segment.in_(EXCLUDED_SEGMENTS))))

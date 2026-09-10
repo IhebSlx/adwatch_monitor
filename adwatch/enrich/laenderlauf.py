@@ -36,7 +36,7 @@ from sqlalchemy import func, select, text as _sql
 
 from ..db import SessionLocal
 from ..models import Company
-from . import fetchpage, laender, render, rolle
+from . import laender, render, rolle
 
 logger = logging.getLogger("adwatch.laenderlauf")
 

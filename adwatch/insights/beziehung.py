@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import select, text
 
 from ..db import SessionLocal
 from ..models import Company, CrmEmail, CrmLead, CrmOpportunity
@@ -116,38 +116,3 @@ def berechnen(nur_architekten: bool = True, apply: bool = False) -> dict:
             "verteilung": {f"{k} — {STUFEN[k]}": v
                            for k, v in sorted(verteilung.items(), reverse=True)},
             "warm": sum(v for k, v in verteilung.items() if k >= 3)}
-
-
-def rangliste(land: str | None = None, min_stufe: int = 4,
-              limit: int = 100) -> dict:
-    """Die wärmsten Büros — wahlweise gefiltert auf ein Tätigkeitsland.
-
-    `land` prüft gegen `active_countries` (Stufe „sicher"), also gegen das, WO
-    das Büro baut — nicht gegen seine Postadresse. Genau darum geht es: ein
-    Düsseldorfer Büro mit Projekten auf Mallorca ist für Spanien relevant, ein
-    spanisches Büro ohne Website ist es nicht.
-    """
-    with SessionLocal() as s:
-        stmt = (select(Company)
-                .where(Company.segment == "Architekten",
-                       Company.duplicate_of.is_(None),
-                       func.coalesce(Company.relation_level, 0) >= min_stufe)
-                .order_by(Company.relation_level.desc(),
-                          func.coalesce(Company.arch_won_value, 0).desc())
-                .limit(min(limit, 500)))
-        zeilen = []
-        for c in s.scalars(stmt):
-            aktiv = c.active_countries or []
-            if land and land.upper() not in [a.upper() for a in aktiv]:
-                continue
-            zeilen.append({
-                "id": c.id, "name": c.name, "city": c.city, "country": c.country,
-                "website": c.website_domain,
-                "stufe": c.relation_level, "warum": c.relation_why,
-                "objekte": c.arch_projects or 0, "gewonnen": c.arch_won or 0,
-                "gewonnener_wert": round(c.arch_won_value or 0, 2),
-                "aktiv_in": aktiv,
-                "belege": (c.active_countries_evidence or {}).get(land.upper()) if land else None,
-            })
-    return {"rows": zeilen, "returned": len(zeilen),
-            "filter": {"land": land, "min_stufe": min_stufe}}

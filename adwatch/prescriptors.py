@@ -26,7 +26,6 @@ outcome, which is exactly what a profile needs.
 """
 from __future__ import annotations
 
-import datetime as dt
 import logging
 from collections import defaultdict
 

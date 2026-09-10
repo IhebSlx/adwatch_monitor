@@ -17,7 +17,6 @@ Zuerst die Beziehungsstufe, dann der gewonnene Wert. Ganz oben stehen also
 Büros, mit denen Solarlux schon gebaut hat UND die im Zielland tätig sind —
 und genau die stehen fast nie im Zielland selbst.
 """
-import io
 import json
 import os
 import sys

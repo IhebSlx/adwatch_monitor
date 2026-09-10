@@ -301,7 +301,6 @@ def coverage(start: dt.date, end: dt.date, thin_factor: float = 0.3) -> dict:
 def features(company_ids: list[int] | None = None,
              until: dt.date | None = None) -> dict[int, dict]:
     """Korrespondenz-Merkmale je Firma, strikt vor `until`."""
-    from sqlalchemy import and_ as _and
 
     with SessionLocal() as s:
         stmt = select(CrmEmail.company_id, CrmEmail.direction, CrmEmail.created_on,
